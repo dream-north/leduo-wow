@@ -1,0 +1,35 @@
+appId: com.leduowow.app
+productName: 乐多汪汪
+afterPack: build/afterPack.js
+directories:
+  buildResources: build
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.eslintignore,.eslintrc.*,.prettierrc.*,tsconfig*.json}'
+  - '!{dev-app-update.yml,CHANGELOG.md,README.md}'
+extraResources:
+  - from: build/tray-icon.png
+    to: build/tray-icon.png
+  - from: build/tray-icon@2x.png
+    to: build/tray-icon@2x.png
+  - from: build/tray-icon@3x.png
+    to: build/tray-icon@3x.png
+  - from: src/native-keyboard-listener/SwiftKeyboardListener/build/SwiftKeyboardListener
+    to: SwiftKeyboardListener
+mac:
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  hardenedRuntime: true
+  extendInfo:
+    NSMicrophoneUsageDescription: "乐多汪汪需要使用麦克风进行语音识别"
+    NSScreenCaptureUsageDescription: "乐多汪汪需要屏幕录制权限来截取屏幕内容，辅助语音识别文本的润色"
+  notarize: false
+  target:
+    - dmg
+    - zip
+dmg:
+  artifactName: leduo-wow-${version}.${ext}
+  title: "Leduo Wow ${version}"

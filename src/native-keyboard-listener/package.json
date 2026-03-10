@@ -1,0 +1,12 @@
+{
+  "name": "native-keyboard-listener",
+  "version": "1.0.0",
+  "description": "Native keyboard listener for Electron with left/right modifier key support",
+  "main": "index.js",
+  "scripts": {
+    "build": "cd SwiftKeyboardListener && chmod +x build.sh && ./build.sh"
+  },
+  "keywords": ["keyboard", "shortcut", "native", "electron"],
+  "author": "",
+  "license": "MIT"
+}
