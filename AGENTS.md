@@ -51,7 +51,12 @@ npm run lint
 - 麦克风权限：Overlay 窗口内进行录音所必需
 - 屏幕录制权限：开启截图上下文时所必需
 
-启动流程中会先检查辅助功能权限；未授权时会提示打开系统设置，并直接退出，等待用户重新启动。
+当前实现会在设置窗口顶层做权限闸门：
+
+- 麦克风权限和辅助功能权限是必需项
+- 屏幕录制权限是可选项
+- 缺少必需权限时显示 onboarding，而不是退出 App
+- 辅助功能权限授予后会在应用内热刷新快捷键后端，不要求用户重启 App
 
 ## 进程与窗口结构
 
@@ -65,7 +70,7 @@ npm run lint
 - 权限检查
 - 创建设置窗口与 Overlay 窗口
 - 初始化 `Pipeline`
-- 初始化 `ShortcutManager`
+- 初始化 `ShortcutService`
 - 注册 IPC
 - 创建托盘与控制 Dock 图标显示
 
@@ -84,6 +89,12 @@ npm run lint
 - 输入方式、麦克风、音量阈值
 - 截图能力、截图保存目录、排除应用
 - Launch at Login、Dock 图标、历史记录上限
+
+设置窗口顶层包含强阻断 onboarding：
+
+- 未授予麦克风或辅助功能权限时，先进入 onboarding
+- 授权完成后再进入主设置页
+- 如果运行中权限被撤销，重新聚焦窗口时会再次进入 onboarding
 
 ### Overlay 窗口
 
@@ -212,23 +223,30 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 - 如果存在中文、非 ASCII 或长文本，会自动回退到剪贴板方案
 - 优先使用 `@jitsi/robotjs`，不可用时回退到 `osascript`
 
-### ShortcutManager
+### ShortcutService
 
 文件：`src/main/shortcut.ts`
 
 职责：
 
-- 启动 Swift 原生键盘监听器
-- 注册两个独立快捷键：
-  - `transcriptionShortcut`
-  - `assistantShortcut`
-- 区分左右修饰键
-- 录制快捷键期间暂停匹配，但保持键盘事件继续转发到设置页
+- 统一管理快捷键配置、权限状态与后端切换
+- 当前有两类后端：
+  - `MacNativeShortcutBackend`：Swift 原生监听器，支持左右修饰键和 modifier-only 快捷键
+  - `GlobalShortcutFallbackBackend`：Electron `globalShortcut`，作为无辅助功能权限时的兼容兜底
+- 在辅助功能权限变化时热切换 native / fallback backend
+- 为 renderer 提供统一的快捷键状态模型
+- 处理全局热键触发与录音中的 `Esc` 取消
 
 默认快捷键：
 
 - 转写：`RightCommand`
 - 助手：`RightOption`
+
+兼容规则：
+
+- 左右修饰键识别和 modifier-only 快捷键属于 native backend 能力
+- 通用组合键是跨平台最小保证能力
+- 无辅助功能权限时，如果快捷键不属于 fallback 可支持的组合，则仅显示“已配置但当前不可全局触发”
 
 ### 配置与历史存储
 
@@ -354,7 +372,9 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 ## 修改代码时的注意点
 
 - 这是 macOS-only 应用，很多能力依赖系统权限与 AppleScript / CGEvent
-- 快捷键系统不要退化成 Electron `globalShortcut`，当前实现依赖 Swift 监听器来区分左右修饰键
+- 快捷键系统必须通过统一 backend 抽象接入，不要让业务代码直接依赖某个平台原生监听器
+- “快捷键录制”和“全局快捷键触发”是两个独立能力；录制逻辑不得依赖 native backend
+- 不要把 Electron `globalShortcut` 当成唯一实现；它只是 fallback backend
 - Overlay 录音在 renderer 进程，ASR 编排在 main 进程，修改时不要混淆职责边界
 - `assistant` 与 `transcription` 两套配置是并存的，改动时要检查两条链路
 - 旧配置迁移逻辑已存在，新增配置项时要同步更新：
@@ -365,6 +385,15 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
   - 设置页 UI
 - 历史记录更新依赖 `IPC.HISTORY_UPDATED` 广播
 - Dock 图标显示是有节流和锁状态通知的，不要直接随意改 `app.dock.show/hide`
+
+## 跨平台约束
+
+虽然当前产品仍以 macOS 为主，但快捷键系统需要为 Windows 预留抽象层：
+
+- 配置层继续保存统一的快捷键字符串，不写死 macOS-only 语义到业务层
+- 平台差异下沉到 backend capability，而不是 UI 或 Pipeline
+- Windows 第一阶段只要求支持通用全局组合键
+- 如果未来 Windows 也要支持左右修饰键，再单独新增 Windows native backend；不要污染 fallback 语义
 
 ## 替代关系
 

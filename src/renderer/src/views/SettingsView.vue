@@ -2,7 +2,13 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import { BUILTIN_PRESETS, ASR_DEFAULT_BASE_URL, POLISH_DEFAULT_BASE_URL, ASSISTANT_DEFAULT_PROMPT } from '../../../shared/types'
-import type { PolishPreset, TranscriptionRecord, VoiceMode } from '../../../shared/types'
+import type {
+  PolishPreset,
+  ShortcutModeStatus,
+  ShortcutServiceStatus,
+  TranscriptionRecord,
+  VoiceMode
+} from '../../../shared/types'
 
 const store = useSettingsStore()
 const activeTab = ref(sessionStorage.getItem('settings-active-tab') || 'general')
@@ -65,9 +71,8 @@ async function resetPolishBaseUrl(): Promise<void> {
 const recordingShortcut = ref<'transcription' | 'assistant' | false>(false)
 const shortcutDisplay = ref<string[]>([])
 const pendingShortcut = ref('')  // Captured shortcut waiting to be saved
-let keyboardEventCleanup: (() => void) | null = null
-let shortcutKeyHandler: ((e: any) => void) | null = null
-let shortcutKeyUpHandler: ((e: any) => void) | null = null
+let shortcutKeyHandler: ((e: KeyboardEvent) => void) | null = null
+let shortcutKeyUpHandler: ((e: KeyboardEvent) => void) | null = null
 let capturedKeys: string[] = []  // Accumulated keys during shortcut recording
 
 // Map e.code to a readable key name for Electron's globalShortcut
@@ -102,208 +107,186 @@ function keyFromCode(code: string, fallbackKey: string): string {
 // Track modifier key sides for keyup detection
 const modifierKeySides = new Map<string, 'Left' | 'Right'>()
 
-async function startRecordShortcut(mode: VoiceMode): Promise<void> {
-  // 检查辅助功能权限
-  if (!permissions.value.accessibility) {
-    const granted = await window.electronAPI.requestPermission('accessibility')
-    if (granted) {
-      permissions.value.accessibility = true
-      showSaveMessage('权限已授予，请重新点击录制快捷键')
-    } else {
-      showSaveMessage('需要辅助功能权限才能录制快捷键')
+function isModifierCode(code: string): boolean {
+  return code === 'ControlLeft' || code === 'ControlRight' ||
+         code === 'AltLeft' || code === 'AltRight' ||
+         code === 'MetaLeft' || code === 'MetaRight' ||
+         code === 'ShiftLeft' || code === 'ShiftRight'
+}
+
+function isValidShortcutText(shortcut: string): boolean {
+  const parts = shortcut.split('+').filter(Boolean)
+  return parts.some((part) => part.includes('Command') || part.includes('Control') || part.includes('Option') || part === 'Ctrl' || part === 'Alt' || part === 'Shift' || part === 'Meta')
+}
+
+function resetRecordingState(): void {
+  modifierKeySides.clear()
+  capturedKeys = []
+  recordingShortcut.value = false
+  pendingShortcut.value = ''
+  shortcutDisplay.value = []
+}
+
+function handleShortcutKeyDown(e: KeyboardEvent): void {
+  if (!recordingShortcut.value) return
+
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.repeat) return
+
+  if (e.code === 'Escape' && capturedKeys.length === 0) {
+    void cancelShortcut()
+    return
+  }
+
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
+    modifierKeySides.set('Control', e.code === 'ControlLeft' ? 'Left' : 'Right')
+  }
+  if (e.code === 'AltLeft' || e.code === 'AltRight') {
+    modifierKeySides.set('Alt', e.code === 'AltLeft' ? 'Left' : 'Right')
+  }
+  if (e.code === 'MetaLeft' || e.code === 'MetaRight') {
+    modifierKeySides.set('Meta', e.code === 'MetaLeft' ? 'Left' : 'Right')
+  }
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    modifierKeySides.set('Shift', e.code === 'ShiftLeft' ? 'Left' : 'Right')
+  }
+
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
+    capturedKeys.push(e.code === 'ControlLeft' ? 'LeftControl' : 'RightControl')
+  } else if (e.ctrlKey) {
+    const side = modifierKeySides.get('Control')
+    capturedKeys.push(side ? (side === 'Left' ? 'LeftControl' : 'RightControl') : 'Ctrl')
+  }
+
+  if (e.code === 'AltLeft' || e.code === 'AltRight') {
+    capturedKeys.push(e.code === 'AltLeft' ? 'LeftOption' : 'RightOption')
+  } else if (e.altKey) {
+    const side = modifierKeySides.get('Alt')
+    capturedKeys.push(side ? (side === 'Left' ? 'LeftOption' : 'RightOption') : 'Alt')
+  }
+
+  if (e.code === 'MetaLeft' || e.code === 'MetaRight') {
+    capturedKeys.push(e.code === 'MetaLeft' ? 'LeftCommand' : 'RightCommand')
+  } else if (e.metaKey) {
+    const side = modifierKeySides.get('Meta')
+    capturedKeys.push(side ? (side === 'Left' ? 'LeftCommand' : 'RightCommand') : 'Command')
+  }
+
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    capturedKeys.push(e.code === 'ShiftLeft' ? 'LeftShift' : 'RightShift')
+  } else if (e.shiftKey) {
+    const side = modifierKeySides.get('Shift')
+    capturedKeys.push(side ? (side === 'Left' ? 'LeftShift' : 'RightShift') : 'Shift')
+  }
+
+  if (!isModifierCode(e.code)) {
+    const normalizedKey = keyFromCode(e.code, e.key)
+    capturedKeys.push(normalizedKey)
+
+    const uniqueKeys = [...new Set(capturedKeys)]
+    pendingShortcut.value = uniqueKeys.join('+')
+    shortcutDisplay.value = uniqueKeys
+    stopShortcutListeners()
+  } else {
+    const uniqueKeys = [...new Set(capturedKeys)]
+    shortcutDisplay.value = uniqueKeys
+    pendingShortcut.value = uniqueKeys.join('+')
+  }
+}
+
+function handleShortcutKeyUp(e: KeyboardEvent): void {
+  if (!recordingShortcut.value) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  if (isModifierCode(e.code)) {
+    const uniqueKeys = [...new Set(capturedKeys)]
+    if (uniqueKeys.length > 0) {
+      pendingShortcut.value = uniqueKeys.join('+')
+      shortcutDisplay.value = uniqueKeys
+      stopShortcutListeners()
     }
     return
   }
 
-  // Clear modifier key sides and captured keys
-  modifierKeySides.clear()
-  capturedKeys = []
+  if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) {
+    const normalizedKey = keyFromCode(e.code, e.key)
+    capturedKeys.push(normalizedKey)
 
-  // Start shortcut recording - keeps Swift running but clears shortcut
-  await window.electronAPI.startShortcutRecord(mode)
-
-  recordingShortcut.value = mode
-  shortcutDisplay.value = []
-  pendingShortcut.value = ''
-
-  // Listen for keyboard events from Swift via IPC
-  keyboardEventCleanup = window.electronAPI.onKeyboardEvent((event) => {
-    if (event.type === 'keydown') {
-      shortcutKeyHandler?.(event)
-    } else if (event.type === 'keyup') {
-      shortcutKeyUpHandler?.(event)
-    }
-  })
-
-  // keydown handler for "modifier + character" combos
-  shortcutKeyHandler = (e: any) => {
-    // Record modifier key sides for keyup detection
-    if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
-      modifierKeySides.set('Control', e.code === 'ControlLeft' ? 'Left' : 'Right')
-    }
-    if (e.code === 'AltLeft' || e.code === 'AltRight') {
-      modifierKeySides.set('Alt', e.code === 'AltLeft' ? 'Left' : 'Right')
-    }
-    if (e.code === 'MetaLeft' || e.code === 'MetaRight') {
-      modifierKeySides.set('Meta', e.code === 'MetaLeft' ? 'Left' : 'Right')
-    }
-    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-      modifierKeySides.set('Shift', e.code === 'ShiftLeft' ? 'Left' : 'Right')
-    }
-
-    // Detect modifier keys with left/right distinction - use capturedKeys to accumulate
-    if (e.code === 'ControlLeft' || e.code === 'ControlRight') {
-      capturedKeys.push(e.code === 'ControlLeft' ? 'LeftControl' : 'RightControl')
-    } else if (e.ctrlKey) {
-      const side = modifierKeySides.get('Control')
-      capturedKeys.push(side ? (side === 'Left' ? 'LeftControl' : 'RightControl') : 'Ctrl')
-    }
-
-    if (e.code === 'AltLeft' || e.code === 'AltRight') {
-      capturedKeys.push(e.code === 'AltLeft' ? 'LeftOption' : 'RightOption')
-    } else if (e.altKey) {
-      const side = modifierKeySides.get('Alt')
-      capturedKeys.push(side ? (side === 'Left' ? 'LeftOption' : 'RightOption') : 'Alt')
-    }
-
-    if (e.code === 'MetaLeft' || e.code === 'MetaRight') {
-      capturedKeys.push(e.code === 'MetaLeft' ? 'LeftCommand' : 'RightCommand')
-    } else if (e.metaKey) {
-      const side = modifierKeySides.get('Meta')
-      capturedKeys.push(side ? (side === 'Left' ? 'LeftCommand' : 'RightCommand') : 'Command')
-    }
-
-    if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-      capturedKeys.push(e.code === 'ShiftLeft' ? 'LeftShift' : 'RightShift')
-    } else if (e.shiftKey) {
-      const side = modifierKeySides.get('Shift')
-      capturedKeys.push(side ? (side === 'Left' ? 'LeftShift' : 'RightShift') : 'Shift')
-    }
-
-    const key = e.key
-    // Use e.code to check if it's a modifier key (e.g., "AltLeft", "ControlRight")
-    const isModifierCode = (code: string) => {
-      return code === 'ControlLeft' || code === 'ControlRight' ||
-             code === 'AltLeft' || code === 'AltRight' ||
-             code === 'MetaLeft' || code === 'MetaRight' ||
-             code === 'ShiftLeft' || code === 'ShiftRight'
-    }
-    // Check for non-modifier key using e.code
-    if (!isModifierCode(e.code)) {
-      const normalizedKey = keyFromCode(e.code, key)
-      capturedKeys.push(normalizedKey)
-
-      // Full combo captured - deduplicate first
-      const uniqueKeys = [...new Set(capturedKeys)]
+    const uniqueKeys = [...new Set(capturedKeys)]
+    if (uniqueKeys.length > 0) {
       pendingShortcut.value = uniqueKeys.join('+')
       shortcutDisplay.value = uniqueKeys
       stopShortcutListeners()
-    } else {
-      // Only modifier(s) so far — show live preview (deduplicate)
-      const uniqueKeys = [...new Set(capturedKeys)]
-      shortcutDisplay.value = uniqueKeys
-      // Also set pendingShortcut so save button appears
-      pendingShortcut.value = uniqueKeys.join('+')
-    }
-  }
-
-  // keyup handler for "modifier-only" combos and single modifier keys
-  shortcutKeyUpHandler = (e: any) => {
-    // Check if the released key is a modifier key
-    const isModifierKey = (code: string) => {
-      return code === 'ControlLeft' || code === 'ControlRight' ||
-             code === 'AltLeft' || code === 'AltRight' ||
-             code === 'MetaLeft' || code === 'MetaRight' ||
-             code === 'ShiftLeft' || code === 'ShiftRight'
-    }
-
-    // If the released key is a modifier key and we have captured keys
-    if (isModifierKey(e.code)) {
-      // capturedKeys should already have the modifier from keydown
-      // Just deduplicate and save
-      const uniqueKeys = [...new Set(capturedKeys)]
-      if (uniqueKeys.length > 0) {
-        pendingShortcut.value = uniqueKeys.join('+')
-        shortcutDisplay.value = uniqueKeys
-        stopShortcutListeners()
-      }
-      return
-    }
-
-    // When a non-modifier key is released, check if any modifier is still held
-    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) {
-      // Add the non-modifier key to capturedKeys (modifiers were already added in keydown)
-      const normalizedKey = keyFromCode(e.code, e.key)
-      capturedKeys.push(normalizedKey)
-
-      // Deduplicate and save
-      const uniqueKeys = [...new Set(capturedKeys)]
-      if (uniqueKeys.length > 0) {
-        pendingShortcut.value = uniqueKeys.join('+')
-        shortcutDisplay.value = uniqueKeys
-        stopShortcutListeners()
-      }
     }
   }
 }
 
+async function startRecordShortcut(mode: VoiceMode): Promise<void> {
+  stopShortcutListeners()
+  resetRecordingState()
+  recordingShortcut.value = mode
+  shortcutKeyHandler = handleShortcutKeyDown
+  shortcutKeyUpHandler = handleShortcutKeyUp
+  window.addEventListener('keydown', shortcutKeyHandler, true)
+  window.addEventListener('keyup', shortcutKeyUpHandler, true)
+}
+
 function stopShortcutListeners(): void {
-  if (keyboardEventCleanup) {
-    keyboardEventCleanup()
-    keyboardEventCleanup = null
+  if (shortcutKeyHandler) {
+    window.removeEventListener('keydown', shortcutKeyHandler, true)
+    shortcutKeyHandler = null
   }
-  shortcutKeyHandler = null
-  shortcutKeyUpHandler = null
+  if (shortcutKeyUpHandler) {
+    window.removeEventListener('keyup', shortcutKeyUpHandler, true)
+    shortcutKeyUpHandler = null
+  }
 }
 
 async function confirmShortcut(): Promise<void> {
   if (!pendingShortcut.value || !recordingShortcut.value) return
-  const mode = recordingShortcut.value
-  const ok = await window.electronAPI.stopShortcutRecord(mode, pendingShortcut.value)
-  if (ok) {
-    if (mode === 'assistant') {
-      store.assistantShortcut = pendingShortcut.value
-    } else {
-      store.transcriptionShortcut = pendingShortcut.value
-    }
-    showSaveMessage('快捷键已保存')
-  } else {
-    showSaveMessage('快捷键注册失败，请换一个组合')
-    // Re-register old shortcut
-    await window.electronAPI.stopShortcutRecord()
+  if (!isValidShortcutText(pendingShortcut.value)) {
+    showSaveMessage('快捷键至少需要一个修饰键')
+    return
   }
+
+  const mode = recordingShortcut.value
+  const key = mode === 'assistant' ? 'assistantShortcut' : 'transcriptionShortcut'
+  await store.saveSetting(key, pendingShortcut.value)
+
+  if (mode === 'assistant') {
+    store.assistantShortcut = pendingShortcut.value
+  } else {
+    store.transcriptionShortcut = pendingShortcut.value
+  }
+
+  await window.electronAPI.refreshShortcutStatus()
+  showSaveMessage('快捷键已保存')
   stopShortcutListeners()
-  modifierKeySides.clear()
-  recordingShortcut.value = false
-  pendingShortcut.value = ''
-  shortcutDisplay.value = []
+  resetRecordingState()
 }
 
 async function cancelShortcut(): Promise<void> {
   stopShortcutListeners()
-  // Re-register old shortcut
-  await window.electronAPI.stopShortcutRecord()
-  modifierKeySides.clear()
-  recordingShortcut.value = false
-  pendingShortcut.value = ''
-  shortcutDisplay.value = []
+  resetRecordingState()
 }
 
 // Reset to default shortcut
 async function resetShortcut(mode: VoiceMode): Promise<void> {
   const defaultShortcut = mode === 'assistant' ? 'RightOption' : 'RightCommand'
-  const ok = await window.electronAPI.stopShortcutRecord(mode, defaultShortcut)
-  if (ok) {
-    if (mode === 'assistant') {
-      store.assistantShortcut = defaultShortcut
-    } else {
-      store.transcriptionShortcut = defaultShortcut
-    }
-    showSaveMessage('快捷键已重置为默认')
+  const key = mode === 'assistant' ? 'assistantShortcut' : 'transcriptionShortcut'
+  await store.saveSetting(key, defaultShortcut)
+
+  if (mode === 'assistant') {
+    store.assistantShortcut = defaultShortcut
   } else {
-    showSaveMessage('快捷键重置失败')
-    await window.electronAPI.stopShortcutRecord()
+    store.transcriptionShortcut = defaultShortcut
   }
+
+  await window.electronAPI.refreshShortcutStatus()
+  showSaveMessage('快捷键已重置为默认')
 }
 
 // Input method
@@ -603,10 +586,13 @@ async function selectMicrophone(event: Event): Promise<void> {
 
 // Permissions
 const permissions = ref({ microphone: false, accessibility: false, screen: false })
+const shortcutStatus = ref<ShortcutServiceStatus | null>(null)
+let unsubscribeShortcutStatus: (() => void) | null = null
 
 async function checkPermissions(): Promise<void> {
   try {
     permissions.value = await window.electronAPI.checkPermissions()
+    shortcutStatus.value = await window.electronAPI.refreshShortcutStatus()
   } catch (err) {
     console.error('Failed to check permissions:', err)
   }
@@ -615,6 +601,36 @@ async function checkPermissions(): Promise<void> {
 async function requestPermission(type: string): Promise<void> {
   await window.electronAPI.requestPermission(type)
   await checkPermissions()
+}
+
+function getShortcutModeStatus(mode: VoiceMode): ShortcutModeStatus | null {
+  return shortcutStatus.value?.modes[mode] ?? null
+}
+
+function shortcutStatusText(mode: VoiceMode): string {
+  const status = getShortcutModeStatus(mode)
+  if (!status) return '正在检查快捷键状态...'
+
+  if (status.backendState === 'native') return '已生效（原生监听）'
+  if (status.backendState === 'fallback') return '已生效（兼容模式）'
+
+  switch (status.reason) {
+    case 'unsupported_without_accessibility':
+    case 'permission_missing':
+      return '需要辅助功能权限'
+    case 'backend_failed':
+      return '快捷键暂不可用'
+    default:
+      return '等待生效'
+  }
+}
+
+function shortcutStatusClass(mode: VoiceMode): string {
+  const status = getShortcutModeStatus(mode)
+  if (!status) return 'pending'
+  if (status.backendState === 'native' || status.backendState === 'fallback') return 'ready'
+  if (status.reason === 'unsupported_without_accessibility' || status.reason === 'permission_missing') return 'warning'
+  return 'error'
 }
 
 // Version
@@ -666,6 +682,7 @@ onMounted(async () => {
     await checkPermissions()
     await enumerateMicrophones()
     await loadHistory()
+    shortcutStatus.value = await window.electronAPI.getShortcutStatus()
 
     // Listen for dock update lock state
     unsubscribeDockLock = window.electronAPI.onDockUpdateLock((locked: boolean) => {
@@ -675,6 +692,10 @@ onMounted(async () => {
     // Listen for history updates
     unsubscribeHistoryUpdate = window.electronAPI.onHistoryUpdated(() => {
       loadHistory()
+    })
+
+    unsubscribeShortcutStatus = window.electronAPI.onShortcutStatusChanged((status) => {
+      shortcutStatus.value = status
     })
   } catch (err) {
     console.error('Failed to initialize settings:', err)
@@ -688,6 +709,10 @@ onUnmounted(() => {
   if (unsubscribeHistoryUpdate) {
     unsubscribeHistoryUpdate()
   }
+  if (unsubscribeShortcutStatus) {
+    unsubscribeShortcutStatus()
+  }
+  stopShortcutListeners()
 })
 </script>
 
@@ -757,6 +782,9 @@ onUnmounted(() => {
               <div class="shortcut-details">
                 <span class="shortcut-name">语音识别</span>
                 <span class="shortcut-desc">语音转文字输入</span>
+                <span :class="['shortcut-status', shortcutStatusClass('transcription')]">
+                  {{ shortcutStatusText('transcription') }}
+                </span>
               </div>
             </div>
             <div class="shortcut-control">
@@ -786,6 +814,9 @@ onUnmounted(() => {
               <div class="shortcut-details">
                 <span class="shortcut-name">语音助手</span>
                 <span class="shortcut-desc">根据选中文本和屏幕截图回答问题</span>
+                <span :class="['shortcut-status', shortcutStatusClass('assistant')]">
+                  {{ shortcutStatusText('assistant') }}
+                </span>
               </div>
             </div>
             <div class="shortcut-control">
@@ -1930,6 +1961,27 @@ onUnmounted(() => {
 
 .shortcut-desc {
   font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.shortcut-status {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.shortcut-status.ready {
+  color: var(--success-color);
+}
+
+.shortcut-status.warning {
+  color: var(--warning-color);
+}
+
+.shortcut-status.error {
+  color: var(--error-color);
+}
+
+.shortcut-status.pending {
   color: var(--text-secondary);
 }
 

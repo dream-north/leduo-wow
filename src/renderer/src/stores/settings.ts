@@ -1,6 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { AppConfig, InputMethod, PolishPreset, ExcludedApp, ApiProvider } from '../../../shared/types'
+import type {
+  AppConfig,
+  InputMethod,
+  PolishPreset,
+  ExcludedApp,
+  ApiProvider,
+  ShortcutServiceStatus
+} from '../../../shared/types'
 import { BUILTIN_PRESETS, ASSISTANT_BUILTIN_PRESETS, ASR_DEFAULT_BASE_URL, POLISH_DEFAULT_BASE_URL } from '../../../shared/types'
 
 declare global {
@@ -11,12 +18,13 @@ declare global {
       setConfig: (key: string, value: unknown) => Promise<boolean>
       checkPermissions: () => Promise<{ microphone: boolean; accessibility: boolean; screen: boolean }>
       requestPermission: (type: string) => Promise<boolean>
-      startShortcutRecord: (mode?: 'transcription' | 'assistant') => Promise<boolean>
-      stopShortcutRecord: (mode?: 'transcription' | 'assistant', newShortcut?: string) => Promise<boolean>
+      getShortcutStatus: () => Promise<ShortcutServiceStatus>
+      refreshShortcutStatus: () => Promise<ShortcutServiceStatus>
       onPipelineStatus: (callback: (status: string) => void) => () => void
       onPartialText: (callback: (text: string) => void) => () => void
       onFinalText: (callback: (text: string) => void) => () => void
       onError: (callback: (error: string) => void) => () => void
+      onShortcutStatusChanged: (callback: (status: ShortcutServiceStatus) => void) => () => void
       getVersion: () => Promise<string>
       getHistory: () => Promise<Array<{
         id: string
@@ -27,7 +35,6 @@ declare global {
       selectFolder: () => Promise<string>
       openPath: (path: string) => Promise<string>
       getRunningApps: () => Promise<Array<{ name: string; bundleId: string }>>
-      onKeyboardEvent: (callback: (event: KeyboardEvent) => void) => () => void
       onDockUpdateLock: (callback: (locked: boolean) => void) => () => void
       onHistoryUpdated: (callback: () => void) => () => void
     }

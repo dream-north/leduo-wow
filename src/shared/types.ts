@@ -77,6 +77,30 @@ export interface TranscriptionRecord {
   mode?: VoiceMode // 记录使用的模式
 }
 
+export type ShortcutPermissionState = 'granted' | 'missing'
+export type ShortcutBackendState = 'native' | 'fallback' | 'disabled'
+export type ShortcutStatusReason =
+  | 'ready'
+  | 'permission_missing'
+  | 'unsupported_without_accessibility'
+  | 'backend_failed'
+
+export interface ShortcutModeStatus {
+  mode: VoiceMode
+  shortcut: string
+  backendState: ShortcutBackendState
+  reason: ShortcutStatusReason
+  requiresAccessibility: boolean
+  canTriggerGlobally: boolean
+}
+
+export interface ShortcutServiceStatus {
+  permissionState: ShortcutPermissionState
+  backendState: ShortcutBackendState
+  reason: ShortcutStatusReason
+  modes: Record<VoiceMode, ShortcutModeStatus>
+}
+
 export const PRESET_STANDARD: PolishPreset = {
   name: '标准',
   builtIn: true,

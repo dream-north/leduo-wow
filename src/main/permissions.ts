@@ -54,7 +54,7 @@ export async function requestAccessibilityPermission(): Promise<boolean> {
     type: 'warning',
     title: '需要辅助功能权限',
     message:
-      '乐多汪汪需要辅助功能权限来模拟键盘输入。点击"确定"后将打开系统设置，请在左侧列表中找到并勾选"乐多汪汪"。',
+      '乐多汪汪需要辅助功能权限来使用全局快捷键和模拟键盘输入。点击"确定"后将打开系统设置，请在左侧列表中找到并勾选"乐多汪汪"。',
     buttons: ['确定']
   })
 

@@ -1,21 +1,22 @@
-import { app, BrowserWindow, shell, dialog } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray } from './tray'
 import { registerIpcHandlers } from './ipc-handlers'
 import { initConfigStore, getConfig } from './config-store'
-import { ShortcutManager } from './shortcut'
+import { ShortcutService } from './shortcut'
 import { Pipeline } from './pipeline'
 import { PipelineStatus } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { createOverlayWindow } from './overlay-window'
 import type { ConfigStore } from './config-store'
-import { checkPermissions, requestAccessibilityPermission } from './permissions'
+import { checkPermissions } from './permissions'
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let pipeline: Pipeline | null = null
 let configStore: ConfigStore | null = null
+let shortcutService: ShortcutService | null = null
 let isQuitting = false
 
 // Dock icon visibility state tracking
@@ -90,6 +91,10 @@ export function getConfigStore(): ConfigStore | null {
   return configStore
 }
 
+export function getShortcutService(): ShortcutService | null {
+  return shortcutService
+}
+
 // Queue for dock visibility updates
 let pendingDockState: boolean | null = null
 
@@ -150,26 +155,7 @@ app.whenReady().then(async () => {
   configStore = initConfigStore()
   const config = getConfig(configStore)
 
-  // Check accessibility permission for SwiftKeyboardListener
-  const permissions = checkPermissions()
-  if (!permissions.accessibility) {
-    const { response } = await dialog.showMessageBox({
-      type: 'warning',
-      title: '需要辅助功能权限',
-      message: '乐多汪汪需要辅助功能权限来使用全局快捷键功能。',
-      detail: '请点击"打开系统设置"，在左侧列表中找到并勾选"乐多汪汪"，然后重启应用。',
-      buttons: ['打开系统设置', '退出应用'],
-      defaultId: 0
-    })
-
-    if (response === 0) {
-      // Open system preferences and request permission
-      await requestAccessibilityPermission()
-    }
-    // Quit app regardless - user needs to restart after granting permission
-    app.quit()
-    return
-  }
+  checkPermissions()
 
   // Control dock icon visibility BEFORE creating any windows
   // This must be done early, otherwise it won't take effect until restart
@@ -192,10 +178,9 @@ app.whenReady().then(async () => {
   // Initialize pipeline
   pipeline = new Pipeline(overlayWindow, configStore)
 
-  // Initialize shortcut manager
-  const shortcutManager = new ShortcutManager(configStore, pipeline)
-  shortcutManager.setSettingsWindow(settingsWindow)
-  shortcutManager.register()
+  // Initialize shortcut service
+  shortcutService = new ShortcutService(configStore, pipeline)
+  shortcutService.start()
 
   // Create tray (always show tray icon)
   createTray({
@@ -204,7 +189,7 @@ app.whenReady().then(async () => {
   })
 
   // Register IPC handlers
-  registerIpcHandlers(configStore, pipeline, shortcutManager, overlayWindow)
+  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow)
 
   // Show settings window on first launch
   showSettingsWindow()
@@ -219,6 +204,10 @@ app.whenReady().then(async () => {
     lastDockState = null // Reset state to force update
     updateDockIconVisibility(currentConfig.hideDockIcon)
   }, 1000)
+
+  app.on('browser-window-focus', () => {
+    shortcutService?.refresh()
+  })
 })
 
 app.on('before-quit', () => {
@@ -226,21 +215,12 @@ app.on('before-quit', () => {
 })
 
 app.on('will-quit', () => {
-  // Unregister all shortcuts
-  const { globalShortcut } = require('electron')
-  globalShortcut.unregisterAll()
-
-  // Stop native keyboard listener
-  try {
-    const { keyboardListener } = require('../native-keyboard-listener')
-    keyboardListener.stop()
-  } catch (e) {
-    // Ignore if not available
-  }
+  shortcutService?.destroy()
 })
 
 app.on('activate', () => {
   showSettingsWindow()
+  shortcutService?.refresh()
 })
 
 app.on('window-all-closed', () => {

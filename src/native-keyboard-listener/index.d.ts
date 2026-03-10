@@ -13,9 +13,11 @@ class SwiftKeyboardListener {
   start(): boolean
   stop(): void
   setShortcut(shortcut: string): void
+  setShortcuts(shortcuts: { id: string; shortcut: string }[]): void
   onKeyDown(handler: KeyEventHandler): void
   onKeyUp(handler: KeyEventHandler): void
-  onShortcut(handler: (shortcut: string) => void): void
+  onShortcut(handler: (shortcut: string, id?: string) => void): void
+  onExit(handler: (code: number | null) => void): void
   offKeyDown(handler: KeyEventHandler): void
   offKeyUp(handler: KeyEventHandler): void
   getModifiers(): string[]

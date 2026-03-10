@@ -7,9 +7,8 @@ const electronAPI = {
   getConfigValue: (key: string) => ipcRenderer.invoke(IPC.CONFIG_GET, key),
   setConfig: (key: string, value: unknown) => ipcRenderer.invoke(IPC.CONFIG_SET, key, value),
 
-  // Shortcut recording
-  startShortcutRecord: (mode?: 'transcription' | 'assistant') => ipcRenderer.invoke(IPC.SHORTCUT_RECORD_START, mode),
-  stopShortcutRecord: (mode?: 'transcription' | 'assistant', newShortcut?: string) => ipcRenderer.invoke(IPC.SHORTCUT_RECORD_STOP, mode, newShortcut),
+  getShortcutStatus: () => ipcRenderer.invoke(IPC.SHORTCUT_STATUS_GET),
+  refreshShortcutStatus: () => ipcRenderer.invoke(IPC.SHORTCUT_REFRESH),
 
   // Permissions
   checkPermissions: () => ipcRenderer.invoke(IPC.PERMISSIONS_CHECK),
@@ -37,6 +36,12 @@ const electronAPI = {
     return () => ipcRenderer.removeListener(IPC.PIPELINE_ERROR, handler)
   },
 
+  onShortcutStatusChanged: (callback: (status: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status)
+    ipcRenderer.on(IPC.SHORTCUT_STATUS_CHANGED, handler)
+    return () => ipcRenderer.removeListener(IPC.SHORTCUT_STATUS_CHANGED, handler)
+  },
+
   // App
   getVersion: () => ipcRenderer.invoke(IPC.APP_GET_VERSION),
 
@@ -56,14 +61,6 @@ const electronAPI = {
 
   // Apps
   getRunningApps: () => ipcRenderer.invoke(IPC.APP_GET_RUNNING_APPS) as Promise<Array<{ name: string; bundleId: string }>>,
-
-  // Keyboard events from Swift (for shortcut recording)
-  onKeyboardEvent: (callback: (event: KeyboardEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: KeyboardEvent) => callback(data)
-    ipcRenderer.on(IPC.KEYBOARD_EVENT, handler)
-    return () => ipcRenderer.removeListener(IPC.KEYBOARD_EVENT, handler)
-  },
-
   // Dock update lock
   onDockUpdateLock: (callback: (locked: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, locked: boolean) => callback(locked)

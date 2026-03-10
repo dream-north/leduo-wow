@@ -1,255 +1,463 @@
-/**
- * Shortcut Manager - Swift Keyboard Listener Integration
- *
- * Uses Swift-based keyboard listener for shortcut detection:
- * - Single-key shortcuts (RightCommand, LeftOption, etc.)
- * - Combo shortcuts (Command+Space, LeftOption+1, etc.)
- * - Left/Right modifier key distinction
- *
- * The Swift process handles:
- * - Raw keyboard event capture via CGEventTap
- * - Shortcut matching when configured
- * - Emitting 'shortcut' events when a shortcut is triggered
- */
-
-import { keyboardListener, KeyInfo } from '../native-keyboard-listener'
+import { EventEmitter } from 'events'
+import { globalShortcut } from 'electron'
+import { keyboardListener, KeyInfo, parseShortcut } from '../native-keyboard-listener'
 import { ConfigStore, getConfig } from './config-store'
 import { Pipeline } from './pipeline'
-import { BrowserWindow } from 'electron'
-import { IPC } from '../shared/ipc-channels'
-import type { VoiceMode } from '../shared/types'
+import { checkPermissions } from './permissions'
+import type {
+  ShortcutBackendState,
+  ShortcutModeStatus,
+  ShortcutServiceStatus,
+  ShortcutStatusReason,
+  VoiceMode
+} from '../shared/types'
 
-export class ShortcutManager {
-  private configStore: ConfigStore
-  private pipeline: Pipeline
-  private settingsWindow: BrowserWindow | null = null
-  private transcriptionShortcut: string = ''
-  private assistantShortcut: string = ''
-  private isRecording: boolean = false
-  private recordingMode: VoiceMode | null = null
-  private listenerActive: boolean = false
-  private lastTriggerTime: number = 0
-  private debounceMs: number = 300  // Debounce to prevent multiple triggers
+interface ShortcutRegistration {
+  id: VoiceMode
+  shortcut: string
+}
 
-  constructor(configStore: ConfigStore, pipeline: Pipeline) {
-    this.configStore = configStore
-    this.pipeline = pipeline
+interface ShortcutBackendCapabilities {
+  global: boolean
+  sideAware: boolean
+  supportsModifierOnly: boolean
+  requiresAccessibility: boolean
+}
+
+interface ShortcutBackend extends EventEmitter {
+  id: ShortcutBackendState
+  capabilities: ShortcutBackendCapabilities
+  start(): boolean
+  stop(): void
+  setShortcuts(shortcuts: ShortcutRegistration[]): void
+  isAvailable(): boolean
+}
+
+interface ShortcutStatusChangedEvent {
+  status: ShortcutServiceStatus
+}
+
+const ESCAPE_KEYS = new Set(['Escape', 'Esc'])
+
+function isValidShortcut(shortcut: string): boolean {
+  const parsed = parseShortcut(shortcut)
+  return parsed.modifiers.length > 0
+}
+
+function isFallbackCompatible(shortcut: string): boolean {
+  const parsed = parseShortcut(shortcut)
+  return parsed.side === 'any' && parsed.key !== null && parsed.modifiers.length > 0
+}
+
+function mapModifierToAccelerator(part: string): string | null {
+  switch (part) {
+    case 'Command':
+    case 'Cmd':
+    case 'Meta':
+      return 'Command'
+    case 'Control':
+    case 'Ctrl':
+      return 'Control'
+    case 'Alt':
+    case 'Option':
+      return 'Alt'
+    case 'Shift':
+      return 'Shift'
+    default:
+      return null
   }
+}
 
-  setSettingsWindow(window: BrowserWindow | null): void {
-    this.settingsWindow = window
+function mapKeyToAccelerator(part: string): string {
+  const map: Record<string, string> = {
+    Return: 'Enter',
+    Space: 'Space',
+    Up: 'Up',
+    Down: 'Down',
+    Left: 'Left',
+    Right: 'Right',
+    Escape: 'Esc',
+    Delete: 'Delete',
+    Backspace: 'Backspace',
+    Tab: 'Tab'
   }
+  return map[part] || part
+}
 
-  /**
-   * Start the Swift keyboard listener
-   */
-  private startListener(): boolean {
-    if (this.listenerActive) return true
+function toElectronAccelerator(shortcut: string): string | null {
+  const parts = shortcut.split('+').map((part) => part.trim()).filter(Boolean)
+  if (parts.length < 2) return null
 
-    try {
-      // Listen for shortcut events from Swift
-      keyboardListener.onShortcut((shortcut: string, id?: string) => {
-        // 使用 id 判断模式，如果没有 id 则回退到 shortcut 字符串匹配
-        const mode = id || (shortcut === this.assistantShortcut ? 'assistant' : 'transcription')
-        this.handleShortcutTriggered(mode as VoiceMode)
-      })
+  const modifiers: string[] = []
+  let key: string | null = null
 
-      // Listen for key events
-      keyboardListener.onKeyDown((info: KeyInfo) => {
-        this.handleKeyDown(info)
-        this.forwardKeyEventToRenderer('keydown', info)
-      })
+  for (const part of parts) {
+    if (part.startsWith('Left') || part.startsWith('Right')) {
+      return null
+    }
 
-      keyboardListener.onKeyUp((info: KeyInfo) => {
-        this.handleKeyUp(info)
-        this.forwardKeyEventToRenderer('keyup', info)
-      })
-
-      const started = keyboardListener.start()
-      if (started) {
-        this.listenerActive = true
-        console.log('[ShortcutManager] Swift keyboard listener started')
+    const modifier = mapModifierToAccelerator(part)
+    if (modifier) {
+      if (!modifiers.includes(modifier)) {
+        modifiers.push(modifier)
       }
-      return started
-    } catch (err) {
-      console.error('[ShortcutManager] Failed to start listener:', err)
-      return false
+      continue
     }
+
+    key = mapKeyToAccelerator(part)
   }
 
-  /**
-   * Forward keyboard events to renderer for shortcut recording
-   */
-  private forwardKeyEventToRenderer(type: 'keydown' | 'keyup', info: KeyInfo): void {
-    if (!this.isRecording || !this.settingsWindow || this.settingsWindow.isDestroyed()) {
-      return
-    }
+  if (!key || modifiers.length === 0) return null
+  return [...modifiers, key].join('+')
+}
 
-    this.settingsWindow.webContents.send(IPC.KEYBOARD_EVENT, {
-      type,
-      key: info.key,
-      code: info.code,
-      keyCode: info.keyCode,
-      side: info.side,
-      modifiers: info.modifiers,
-      ctrlKey: info.modifiers.some(m => m.includes('Control')),
-      altKey: info.modifiers.some(m => m.includes('Alt')),
-      metaKey: info.modifiers.some(m => m.includes('Meta')),
-      shiftKey: info.modifiers.some(m => m.includes('Shift'))
+class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
+  readonly id: ShortcutBackendState = 'native'
+  readonly capabilities: ShortcutBackendCapabilities = {
+    global: true,
+    sideAware: true,
+    supportsModifierOnly: true,
+    requiresAccessibility: true
+  }
+
+  private started = false
+  private shortcuts: ShortcutRegistration[] = []
+
+  constructor() {
+    super()
+
+    keyboardListener.onShortcut((shortcut: string, id?: string) => {
+      if (!this.started || !id) return
+      this.emit('trigger', id as VoiceMode, shortcut)
+    })
+
+    keyboardListener.onKeyDown((info: KeyInfo) => {
+      if (!this.started) return
+      if (ESCAPE_KEYS.has(info.key) || ESCAPE_KEYS.has(info.code)) {
+        this.emit('escape')
+      }
+    })
+
+    keyboardListener.onExit((code) => {
+      if (!this.started) return
+      this.started = false
+      this.emit('exit', code)
     })
   }
 
-  /**
-   * Stop the Swift keyboard listener
-   */
-  private stopListener(): void {
-    if (!this.listenerActive) return
+  start(): boolean {
+    if (this.started) return true
+    const started = keyboardListener.start()
+    if (started) {
+      this.started = true
+      this.applyShortcuts()
+    }
+    return started
+  }
 
-    try {
+  stop(): void {
+    this.started = false
+    if (keyboardListener.isRunning()) {
+      keyboardListener.setShortcuts([])
       keyboardListener.stop()
-      this.listenerActive = false
-      console.log('[ShortcutManager] Swift keyboard listener stopped')
-    } catch (err) {
-      console.error('[ShortcutManager] Failed to stop listener:', err)
     }
   }
 
-  /**
-   * Clean up resources (call on app quit)
-   */
-  destroy(): void {
-    this.stopListener()
+  setShortcuts(shortcuts: ShortcutRegistration[]): void {
+    this.shortcuts = shortcuts
+    this.applyShortcuts()
   }
 
-  /**
-   * Handle shortcut triggered from Swift
-   */
+  isAvailable(): boolean {
+    return this.started && keyboardListener.isRunning()
+  }
+
+  private applyShortcuts(): void {
+    if (!this.started) return
+    keyboardListener.setShortcuts(this.shortcuts.map((shortcut) => ({
+      id: shortcut.id,
+      shortcut: shortcut.shortcut
+    })))
+  }
+}
+
+class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBackend {
+  readonly id: ShortcutBackendState = 'fallback'
+  readonly capabilities: ShortcutBackendCapabilities = {
+    global: true,
+    sideAware: false,
+    supportsModifierOnly: false,
+    requiresAccessibility: false
+  }
+
+  private started = false
+  private shortcuts: ShortcutRegistration[] = []
+  private registeredAccelerators: string[] = []
+  private registeredModes = new Set<VoiceMode>()
+
+  start(): boolean {
+    this.started = true
+    this.applyShortcuts()
+    return true
+  }
+
+  stop(): void {
+    this.unregisterAll()
+    this.started = false
+  }
+
+  setShortcuts(shortcuts: ShortcutRegistration[]): void {
+    this.shortcuts = shortcuts
+    this.applyShortcuts()
+  }
+
+  isAvailable(): boolean {
+    return this.started
+  }
+
+  getRegisteredModes(): Set<VoiceMode> {
+    return new Set(this.registeredModes)
+  }
+
+  private unregisterAll(): void {
+    for (const accelerator of this.registeredAccelerators) {
+      globalShortcut.unregister(accelerator)
+    }
+    this.registeredAccelerators = []
+    this.registeredModes.clear()
+  }
+
+  private applyShortcuts(): void {
+    this.unregisterAll()
+    if (!this.started) return
+
+    for (const shortcut of this.shortcuts) {
+      const accelerator = toElectronAccelerator(shortcut.shortcut)
+      if (!accelerator) continue
+
+      const registered = globalShortcut.register(accelerator, () => {
+        this.emit('trigger', shortcut.id, shortcut.shortcut)
+      })
+
+      if (registered) {
+        this.registeredAccelerators.push(accelerator)
+        this.registeredModes.add(shortcut.id)
+      } else {
+        this.emit('register-failed', shortcut)
+      }
+    }
+  }
+}
+
+export class ShortcutService extends EventEmitter {
+  private configStore: ConfigStore
+  private pipeline: Pipeline
+  private nativeBackend = new MacNativeShortcutBackend()
+  private fallbackBackend = new GlobalShortcutFallbackBackend()
+  private status: ShortcutServiceStatus = this.buildEmptyStatus()
+  private lastTriggerTime = 0
+  private readonly debounceMs = 300
+  private accessibilityPollTimer: ReturnType<typeof setInterval> | null = null
+  private accessibilityPollAttempts = 0
+
+  constructor(configStore: ConfigStore, pipeline: Pipeline) {
+    super()
+    this.configStore = configStore
+    this.pipeline = pipeline
+
+    this.nativeBackend.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
+    this.nativeBackend.on('escape', () => this.pipeline.cancel())
+    this.nativeBackend.on('exit', () => {
+      console.warn('[ShortcutService] Native backend exited unexpectedly')
+      this.refresh()
+    })
+
+    this.fallbackBackend.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
+  }
+
+  start(): void {
+    this.refresh()
+  }
+
+  destroy(): void {
+    this.stopAccessibilityPolling()
+    this.nativeBackend.stop()
+    this.fallbackBackend.stop()
+  }
+
+  refresh(): ShortcutServiceStatus {
+    const config = getConfig(this.configStore)
+    const permissions = checkPermissions()
+    const hasAccessibility = permissions.accessibility
+
+    const shortcuts: ShortcutRegistration[] = [
+      { id: 'transcription', shortcut: config.transcriptionShortcut || 'RightCommand' },
+      { id: 'assistant', shortcut: config.assistantShortcut || 'RightOption' }
+    ]
+
+    let backendState: ShortcutBackendState = 'disabled'
+    let reason: ShortcutStatusReason = hasAccessibility ? 'backend_failed' : 'permission_missing'
+    let registeredFallbackModes = new Set<VoiceMode>()
+
+    if (hasAccessibility) {
+      this.stopAccessibilityPolling()
+      this.fallbackBackend.stop()
+
+      const started = this.nativeBackend.start()
+      if (started) {
+        this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
+        backendState = 'native'
+        reason = 'ready'
+      } else {
+        this.nativeBackend.stop()
+        const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
+        if (fallbackShortcuts.length > 0) {
+          this.fallbackBackend.start()
+          this.fallbackBackend.setShortcuts(fallbackShortcuts)
+          registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
+          if (registeredFallbackModes.size > 0) {
+            backendState = 'fallback'
+            reason = 'ready'
+          } else {
+            reason = 'backend_failed'
+          }
+        }
+      }
+    } else {
+      this.nativeBackend.stop()
+      const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
+      if (fallbackShortcuts.length > 0) {
+        this.fallbackBackend.start()
+        this.fallbackBackend.setShortcuts(fallbackShortcuts)
+        registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
+        if (registeredFallbackModes.size > 0) {
+          backendState = 'fallback'
+          reason = 'ready'
+        } else {
+          reason = 'backend_failed'
+        }
+      } else {
+        this.fallbackBackend.stop()
+      }
+    }
+
+    const modes = shortcuts.reduce<Record<VoiceMode, ShortcutModeStatus>>((result, shortcut) => {
+      const valid = isValidShortcut(shortcut.shortcut)
+      const fallbackCompatible = isFallbackCompatible(shortcut.shortcut)
+
+      let modeBackendState: ShortcutBackendState = 'disabled'
+      let modeReason: ShortcutStatusReason = 'backend_failed'
+      let requiresAccessibility = false
+      let canTriggerGlobally = false
+
+      if (valid && hasAccessibility && backendState === 'native') {
+        modeBackendState = 'native'
+        modeReason = 'ready'
+        requiresAccessibility = true
+        canTriggerGlobally = true
+      } else if (valid && fallbackCompatible && backendState === 'fallback' && registeredFallbackModes.has(shortcut.id)) {
+        modeBackendState = 'fallback'
+        modeReason = 'ready'
+        requiresAccessibility = false
+        canTriggerGlobally = true
+      } else if (valid && !fallbackCompatible && !hasAccessibility) {
+        modeBackendState = 'disabled'
+        modeReason = 'unsupported_without_accessibility'
+        requiresAccessibility = true
+      } else if (valid && fallbackCompatible && backendState !== 'fallback') {
+        modeBackendState = 'disabled'
+        modeReason = 'backend_failed'
+      } else if (valid && hasAccessibility) {
+        modeBackendState = 'disabled'
+        modeReason = 'backend_failed'
+        requiresAccessibility = true
+      } else {
+        modeBackendState = 'disabled'
+        modeReason = hasAccessibility ? 'backend_failed' : 'permission_missing'
+      }
+
+      result[shortcut.id] = {
+        mode: shortcut.id,
+        shortcut: shortcut.shortcut,
+        backendState: modeBackendState,
+        reason: modeReason,
+        requiresAccessibility,
+        canTriggerGlobally
+      }
+      return result
+    }, {} as Record<VoiceMode, ShortcutModeStatus>)
+
+    this.status = {
+      permissionState: hasAccessibility ? 'granted' : 'missing',
+      backendState,
+      reason,
+      modes
+    }
+
+    this.emit('status-changed', { status: this.status } satisfies ShortcutStatusChangedEvent)
+    return this.status
+  }
+
+  getStatus(): ShortcutServiceStatus {
+    return this.status
+  }
+
+  updateShortcut(_mode: VoiceMode, _shortcut: string): ShortcutServiceStatus {
+    return this.refresh()
+  }
+
+  beginAccessibilityPolling(): void {
+    if (this.status.permissionState === 'granted' || this.accessibilityPollTimer) return
+
+    this.accessibilityPollAttempts = 0
+    this.accessibilityPollTimer = setInterval(() => {
+      this.accessibilityPollAttempts += 1
+      const status = this.refresh()
+      if (status.permissionState === 'granted' || this.accessibilityPollAttempts >= 20) {
+        this.stopAccessibilityPolling()
+      }
+    }, 1000)
+  }
+
+  private stopAccessibilityPolling(): void {
+    if (this.accessibilityPollTimer) {
+      clearInterval(this.accessibilityPollTimer)
+      this.accessibilityPollTimer = null
+    }
+    this.accessibilityPollAttempts = 0
+  }
+
   private handleShortcutTriggered(mode: VoiceMode): void {
     const now = Date.now()
-
-    console.log(`[ShortcutManager] Shortcut triggered for mode: ${mode}`)
-
-    // Debounce for shortcut trigger
-    if (now - this.lastTriggerTime < this.debounceMs) {
-      return
-    }
-
-    if (this.isRecording) return
+    if (now - this.lastTriggerTime < this.debounceMs) return
 
     this.lastTriggerTime = now
-
-    console.log(`[ShortcutManager] Triggering pipeline in ${mode} mode`)
-    this.pipeline.toggle(mode)
+    void this.pipeline.toggle(mode)
   }
 
-  /**
-   * Handle key down from listener
-   */
-  private handleKeyDown(info: KeyInfo): void {
-    // Check for ESC key during recording
-    if (this.isRecording && (info.key === 'Escape' || info.code === 'Escape')) {
-      this.pipeline.cancel()
+  private buildEmptyStatus(): ShortcutServiceStatus {
+    return {
+      permissionState: 'missing',
+      backendState: 'disabled',
+      reason: 'permission_missing',
+      modes: {
+        transcription: {
+          mode: 'transcription',
+          shortcut: 'RightCommand',
+          backendState: 'disabled',
+          reason: 'permission_missing',
+          requiresAccessibility: true,
+          canTriggerGlobally: false
+        },
+        assistant: {
+          mode: 'assistant',
+          shortcut: 'RightOption',
+          backendState: 'disabled',
+          reason: 'permission_missing',
+          requiresAccessibility: true,
+          canTriggerGlobally: false
+        }
+      }
     }
-  }
-
-  /**
-   * Handle key up from listener
-   */
-  private handleKeyUp(_info: KeyInfo): void {
-    // Key up handling - can be used for debugging if needed
-  }
-
-  /**
-   * Register both shortcuts with the Swift listener
-   */
-  register(): boolean {
-    const config = getConfig(this.configStore)
-    this.transcriptionShortcut = config.transcriptionShortcut || 'RightCommand'
-    this.assistantShortcut = config.assistantShortcut || 'RightOption'
-
-    console.log(`[ShortcutManager] Registering shortcuts:`)
-    console.log(`  - Transcription: ${this.transcriptionShortcut}`)
-    console.log(`  - Assistant: ${this.assistantShortcut}`)
-
-    // Start the listener first
-    const started = this.startListener()
-    if (!started) return false
-
-    // Pass both shortcuts to Swift for matching
-    keyboardListener.setShortcuts([
-      { id: 'transcription', shortcut: this.transcriptionShortcut },
-      { id: 'assistant', shortcut: this.assistantShortcut }
-    ])
-
-    return true
-  }
-
-  /**
-   * Update a specific mode's shortcut
-   */
-  updateShortcut(mode: VoiceMode, shortcut: string): boolean {
-    if (mode === 'transcription') {
-      this.transcriptionShortcut = shortcut
-    } else {
-      this.assistantShortcut = shortcut
-    }
-
-    // Update Swift listener with new shortcuts
-    keyboardListener.setShortcuts([
-      { id: 'transcription', shortcut: this.transcriptionShortcut },
-      { id: 'assistant', shortcut: this.assistantShortcut }
-    ])
-
-    return true
-  }
-
-  unregister(): void {
-    this.transcriptionShortcut = ''
-    this.assistantShortcut = ''
-    // Clear shortcuts in Swift (will stop matching) but keep listener running
-    keyboardListener.setShortcuts([])
-    // Don't stop listener - keep it running for shortcut recording
-  }
-
-  /**
-   * Temporarily unregister for recording
-   */
-  unregisterForRecording(mode: VoiceMode): void {
-    this.isRecording = true
-    this.recordingMode = mode
-    // Clear shortcuts in Swift to stop trigger events during recording
-    keyboardListener.setShortcuts([])
-    // Keep Swift running to capture keyboard events for recording
-  }
-
-  /**
-   * Re-register after recording
-   */
-  reRegisterAfterRecording(newShortcut?: string): boolean {
-    // 先保存 recordingMode，因为下面要清空
-    const mode = this.recordingMode
-
-    this.isRecording = false
-    this.recordingMode = null
-
-    if (newShortcut && mode) {
-      this.updateShortcut(mode, newShortcut)
-    }
-
-    // Re-register both shortcuts
-    keyboardListener.setShortcuts([
-      { id: 'transcription', shortcut: this.transcriptionShortcut },
-      { id: 'assistant', shortcut: this.assistantShortcut }
-    ])
-
-    return true
-  }
-
-  getTranscriptionShortcut(): string {
-    return this.transcriptionShortcut
-  }
-
-  getAssistantShortcut(): string {
-    return this.assistantShortcut
   }
 }

@@ -98,6 +98,7 @@ class SwiftKeyboardListener extends EventEmitter {
       this.process.on('exit', (code) => {
         console.log('[SwiftKeyboardListener] Process exited with code:', code)
         this.running = false
+        this.emit('exit', code)
       })
 
       // Handle stdout data
@@ -253,6 +254,10 @@ class SwiftKeyboardListener extends EventEmitter {
     this.on('shortcut', (event: Record<string, unknown>) => {
       handler(event.shortcut as string, event.id as string | undefined)
     })
+  }
+
+  onExit(handler: (code: number | null) => void): void {
+    this.on('exit', handler)
   }
 
   /**

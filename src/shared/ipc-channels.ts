@@ -6,9 +6,9 @@ export const IPC = {
   PIPELINE_PARTIAL_TEXT: 'pipeline:partial-text',
   PIPELINE_FINAL_TEXT: 'pipeline:final-text',
   PIPELINE_ERROR: 'pipeline:error',
-  SHORTCUT_RECORD_START: 'shortcut:record-start',
-  SHORTCUT_RECORD_STOP: 'shortcut:record-stop',
-  KEYBOARD_EVENT: 'keyboard:event',  // Forward keyboard events from Swift to renderer
+  SHORTCUT_STATUS_GET: 'shortcut:status-get',
+  SHORTCUT_STATUS_CHANGED: 'shortcut:status-changed',
+  SHORTCUT_REFRESH: 'shortcut:refresh',
   PERMISSIONS_CHECK: 'permissions:check',
   PERMISSIONS_REQUEST: 'permissions:request',
   APP_GET_VERSION: 'app:get-version',

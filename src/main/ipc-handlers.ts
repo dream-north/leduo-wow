@@ -2,19 +2,27 @@ import { ipcMain, app, BrowserWindow, dialog, shell } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import { getConfig, setConfig, getHistory, setHistory, ConfigStore } from './config-store'
 import { Pipeline } from './pipeline'
-import { ShortcutManager } from './shortcut'
+import { ShortcutService } from './shortcut'
 import { checkPermissions, requestMicrophonePermission, requestAccessibilityPermission, requestScreenPermission } from './permissions'
 import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
-import type { VoiceMode } from '../shared/types'
+import type { ShortcutServiceStatus } from '../shared/types'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
   pipeline: Pipeline,
-  shortcutManager: ShortcutManager,
+  shortcutService: ShortcutService,
   overlayWindow: BrowserWindow | null
 ): void {
+  shortcutService.on('status-changed', ({ status }: { status: ShortcutServiceStatus }) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC.SHORTCUT_STATUS_CHANGED, status)
+      }
+    })
+  })
+
   // Config handlers
   ipcMain.handle(IPC.CONFIG_GET_ALL, () => {
     return getConfig(configStore)
@@ -30,10 +38,10 @@ export function registerIpcHandlers(
 
     // Handle side effects
     if (key === 'shortcut' || key === 'transcriptionShortcut') {
-      shortcutManager.updateShortcut('transcription', value as string)
+      shortcutService.updateShortcut('transcription', value as string)
     }
     if (key === 'assistantShortcut') {
-      shortcutManager.updateShortcut('assistant', value as string)
+      shortcutService.updateShortcut('assistant', value as string)
     }
     if (key === 'launchAtLogin') {
       app.setLoginItemSettings({
@@ -64,28 +72,12 @@ export function registerIpcHandlers(
     return true
   })
 
-  // Shortcut recording — temporarily unregister so keydown events reach the renderer
-  ipcMain.handle(IPC.SHORTCUT_RECORD_START, (_event, mode?: VoiceMode) => {
-    shortcutManager.unregisterForRecording(mode || 'transcription')
-    console.log(`[IPC] Global shortcut unregistered for recording (${mode || 'transcription'})`)
-    return true
+  ipcMain.handle(IPC.SHORTCUT_STATUS_GET, () => {
+    return shortcutService.getStatus()
   })
 
-  ipcMain.handle(IPC.SHORTCUT_RECORD_STOP, (_event, mode?: VoiceMode, newShortcut?: string) => {
-    if (newShortcut && mode) {
-      // Save and register the new shortcut
-      const configKey = mode === 'assistant' ? 'assistantShortcut' : 'transcriptionShortcut'
-      setConfig(configStore, configKey, newShortcut)
-      // Use reRegisterAfterRecording to reset isRecording flag and register new shortcut
-      const ok = shortcutManager.reRegisterAfterRecording(newShortcut)
-      console.log(`[IPC] New ${mode} shortcut registered: ${newShortcut}, success: ${ok}`)
-      return ok
-    } else {
-      // Cancelled — re-register the old shortcut
-      const ok = shortcutManager.reRegisterAfterRecording()
-      console.log('[IPC] Old shortcut re-registered')
-      return ok
-    }
+  ipcMain.handle(IPC.SHORTCUT_REFRESH, () => {
+    return shortcutService.refresh()
   })
 
   // Pipeline status listener
@@ -112,7 +104,12 @@ export function registerIpcHandlers(
     if (type === 'microphone') {
       return await requestMicrophonePermission()
     } else if (type === 'accessibility') {
-      return await requestAccessibilityPermission()
+      const granted = await requestAccessibilityPermission()
+      shortcutService.refresh()
+      if (!granted) {
+        shortcutService.beginAccessibilityPolling()
+      }
+      return granted
     } else if (type === 'screen') {
       return await requestScreenPermission()
     }
