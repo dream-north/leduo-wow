@@ -7,13 +7,15 @@ import { checkPermissions, requestMicrophonePermission, requestAccessibilityPerm
 import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
+import { copyAssistantResultText } from './assistant-result-window'
 import type { ShortcutServiceStatus } from '../shared/types'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
   pipeline: Pipeline,
   shortcutService: ShortcutService,
-  overlayWindow: BrowserWindow | null
+  overlayWindow: BrowserWindow | null,
+  assistantResultWindow: BrowserWindow | null
 ): void {
   shortcutService.on('status-changed', ({ status }: { status: ShortcutServiceStatus }) => {
     BrowserWindow.getAllWindows().forEach((win) => {
@@ -138,6 +140,19 @@ export function registerIpcHandlers(
   // Shell: open path in Finder
   ipcMain.handle(IPC.SHELL_OPEN_PATH, (_event, path: string) => {
     return shell.openPath(path)
+  })
+
+
+  ipcMain.handle(IPC.ASSISTANT_RESULT_COPY, (_event, text: string) => {
+    copyAssistantResultText(text)
+    return true
+  })
+
+  ipcMain.handle(IPC.ASSISTANT_RESULT_CLOSE, () => {
+    if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
+      assistantResultWindow.hide()
+    }
+    return true
   })
 
   // Running apps list (macOS)

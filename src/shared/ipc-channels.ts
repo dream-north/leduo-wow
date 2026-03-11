@@ -25,5 +25,8 @@ export const IPC = {
   SHELL_OPEN_PATH: 'shell:open-path',
   APP_GET_RUNNING_APPS: 'app:get-running-apps',
   DOCK_UPDATE_LOCK: 'dock:update-lock',
-  HISTORY_UPDATED: 'history:updated'
+  HISTORY_UPDATED: 'history:updated',
+  ASSISTANT_RESULT_UPDATE: 'assistant-result:update',
+  ASSISTANT_RESULT_COPY: 'assistant-result:copy',
+  ASSISTANT_RESULT_CLOSE: 'assistant-result:close'
 } as const

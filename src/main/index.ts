@@ -9,12 +9,14 @@ import { Pipeline } from './pipeline'
 import { PipelineStatus } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { createOverlayWindow } from './overlay-window'
+import { createAssistantResultWindow } from './assistant-result-window'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let pipeline: Pipeline | null = null
+let assistantResultWindow: BrowserWindow | null = null
 let configStore: ConfigStore | null = null
 let shortcutService: ShortcutService | null = null
 let isQuitting = false
@@ -81,6 +83,10 @@ export function getOverlayWindow(): BrowserWindow | null {
 
 export function getSettingsWindow(): BrowserWindow | null {
   return settingsWindow
+}
+
+export function getAssistantResultWindow(): BrowserWindow | null {
+  return assistantResultWindow
 }
 
 export function getPipeline(): Pipeline | null {
@@ -174,9 +180,10 @@ app.whenReady().then(async () => {
   // Create windows
   settingsWindow = createSettingsWindow()
   overlayWindow = createOverlayWindow()
+  assistantResultWindow = createAssistantResultWindow()
 
   // Initialize pipeline
-  pipeline = new Pipeline(overlayWindow, configStore)
+  pipeline = new Pipeline(overlayWindow, configStore, assistantResultWindow)
 
   // Initialize shortcut service
   shortcutService = new ShortcutService(configStore, pipeline)
@@ -189,7 +196,7 @@ app.whenReady().then(async () => {
   })
 
   // Register IPC handlers
-  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow)
+  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow, assistantResultWindow)
 
   // Show settings window on first launch
   showSettingsWindow()

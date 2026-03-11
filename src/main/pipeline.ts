@@ -11,11 +11,13 @@ import { getConfig, addHistory, ConfigStore } from './config-store'
 import { getFrontmostApp } from './macos-apps'
 import { positionOverlayAtCursor } from './overlay-window'
 import { getSelectedText } from './selected-text'
+import { showAssistantResultWindow } from './assistant-result-window'
 
 export class Pipeline extends EventEmitter {
   private status: PipelineStatus = PipelineStatus.IDLE
   private currentMode: VoiceMode = 'transcription'
   private overlayWindow: BrowserWindow | null
+  private assistantResultWindow: BrowserWindow | null
   private configStore: ConfigStore
   private asrClient: ASRClient | null = null
   private partialText: string = ''
@@ -24,10 +26,11 @@ export class Pipeline extends EventEmitter {
   private screenshotActive: boolean = false
   private appCheckTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(overlayWindow: BrowserWindow | null, configStore: ConfigStore) {
+  constructor(overlayWindow: BrowserWindow | null, configStore: ConfigStore, assistantResultWindow: BrowserWindow | null) {
     super()
     this.overlayWindow = overlayWindow
     this.configStore = configStore
+    this.assistantResultWindow = assistantResultWindow
   }
 
   getStatus(): PipelineStatus {
@@ -357,8 +360,12 @@ export class Pipeline extends EventEmitter {
     await this.delay(100)
 
     try {
-      const inputter = new TextInputter()
-      await inputter.input(outputText, config.inputMethod)
+      if (this.currentMode === 'assistant' && config.assistantOutputMode === 'popup') {
+        showAssistantResultWindow(this.assistantResultWindow, outputText)
+      } else {
+        const inputter = new TextInputter()
+        await inputter.input(outputText, config.inputMethod)
+      }
 
       // Save to history
       addHistory(this.configStore, {

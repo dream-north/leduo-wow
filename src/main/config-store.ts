@@ -28,6 +28,7 @@ interface StoreSchema {
   assistantShortcut: string
   assistantEnabled: boolean
   assistantPrePolish: boolean
+  assistantOutputMode: 'input' | 'popup'
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -87,6 +88,7 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantShortcut: DEFAULT_CONFIG.assistantShortcut,
       assistantEnabled: DEFAULT_CONFIG.assistantEnabled,
       assistantPrePolish: DEFAULT_CONFIG.assistantPrePolish,
+      assistantOutputMode: DEFAULT_CONFIG.assistantOutputMode,
       assistantPrompt: DEFAULT_CONFIG.assistantPrompt,
       assistantPresets: DEFAULT_CONFIG.assistantPresets,
       assistantActivePresetIndex: DEFAULT_CONFIG.assistantActivePresetIndex,
@@ -182,6 +184,7 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantShortcut: s.get('assistantShortcut') ?? DEFAULT_CONFIG.assistantShortcut,
     assistantEnabled: s.get('assistantEnabled') ?? DEFAULT_CONFIG.assistantEnabled,
     assistantPrePolish: s.get('assistantPrePolish') ?? DEFAULT_CONFIG.assistantPrePolish,
+    assistantOutputMode: s.get('assistantOutputMode') ?? DEFAULT_CONFIG.assistantOutputMode,
     assistantPrompt: s.get('assistantPrompt') ?? DEFAULT_CONFIG.assistantPrompt,
     assistantPresets: s.get('assistantPresets') ?? DEFAULT_CONFIG.assistantPresets,
     assistantActivePresetIndex: s.get('assistantActivePresetIndex') ?? DEFAULT_CONFIG.assistantActivePresetIndex,
