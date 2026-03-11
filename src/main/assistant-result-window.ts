@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard } from 'electron'
+import { app, BrowserWindow, clipboard, screen } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { IPC } from '../shared/ipc-channels'
@@ -44,6 +44,13 @@ export function showAssistantResultWindow(win: BrowserWindow | null, text: strin
   if (!win || win.isDestroyed()) return
   latestAssistantResultText = text
 
+  const cursorPoint = screen.getCursorScreenPoint()
+  const targetDisplay = screen.getDisplayNearestPoint(cursorPoint)
+  const [winWidth, winHeight] = win.getSize()
+  const x = targetDisplay.bounds.x + Math.round((targetDisplay.bounds.width - winWidth) / 2)
+  const y = targetDisplay.bounds.y + Math.round((targetDisplay.bounds.height - winHeight) / 2)
+  win.setPosition(x, y)
+
   const sendUpdate = (): void => {
     win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, latestAssistantResultText)
   }
@@ -55,8 +62,6 @@ export function showAssistantResultWindow(win: BrowserWindow | null, text: strin
     win.webContents.once('did-finish-load', sendUpdate)
   } else {
     sendUpdate()
-    // Renderer listener can still be attached slightly later after a hidden window re-shows.
-    // Send one more time to avoid an empty result panel.
     setTimeout(sendUpdate, 120)
   }
 }

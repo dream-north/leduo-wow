@@ -37,10 +37,11 @@ style.textContent = `
     color: var(--text);
     background: var(--bg);
     min-height: 100vh;
+    -webkit-app-region: drag;
   }
 
   .page {
-    padding: 54px 20px 20px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -51,7 +52,13 @@ style.textContent = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-left: 8px;
+  }
+
+  .card,
+  .result-text,
+  .actions,
+  .btn {
+    -webkit-app-region: no-drag;
   }
 
   .title {
