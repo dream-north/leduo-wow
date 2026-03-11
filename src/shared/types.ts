@@ -8,6 +8,7 @@ export enum PipelineStatus {
 }
 
 export type InputMethod = 'clipboard' | 'applescript'
+export type AssistantOutputMode = 'input' | 'popup'
 
 // 语音模式：语音识别 / 语音助手
 export type VoiceMode = 'transcription' | 'assistant'
@@ -53,6 +54,7 @@ export interface AppConfig {
   assistantShortcut: string
   assistantEnabled: boolean
   assistantPrePolish: boolean  // 是否先进行AI润色
+  assistantOutputMode: AssistantOutputMode
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -162,6 +164,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantShortcut: 'RightOption',
   assistantEnabled: true,
   assistantPrePolish: false,  // 默认不先润色
+  assistantOutputMode: 'input',
   assistantPrompt: ASSISTANT_DEFAULT_PROMPT,
   assistantPresets: [...ASSISTANT_BUILTIN_PRESETS],
   assistantActivePresetIndex: 0,
