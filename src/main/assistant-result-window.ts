@@ -3,6 +3,8 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { IPC } from '../shared/ipc-channels'
 
+let latestAssistantResultText = ''
+
 export function createAssistantResultWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 640,
@@ -11,7 +13,7 @@ export function createAssistantResultWindow(): BrowserWindow {
     resizable: true,
     title: '语音助手结果',
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 12 },
+    trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#F3F5F9',
     webPreferences: {
       preload: join(__dirname, '../preload/assistant-result.js'),
@@ -40,9 +42,10 @@ export function createAssistantResultWindow(): BrowserWindow {
 
 export function showAssistantResultWindow(win: BrowserWindow | null, text: string): void {
   if (!win || win.isDestroyed()) return
+  latestAssistantResultText = text
 
   const sendUpdate = (): void => {
-    win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, text)
+    win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, latestAssistantResultText)
   }
 
   win.show()
@@ -52,7 +55,14 @@ export function showAssistantResultWindow(win: BrowserWindow | null, text: strin
     win.webContents.once('did-finish-load', sendUpdate)
   } else {
     sendUpdate()
+    // Renderer listener can still be attached slightly later after a hidden window re-shows.
+    // Send one more time to avoid an empty result panel.
+    setTimeout(sendUpdate, 120)
   }
+}
+
+export function getLatestAssistantResultText(): string {
+  return latestAssistantResultText
 }
 
 export function copyAssistantResultText(text: string): void {

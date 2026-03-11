@@ -28,5 +28,6 @@ export const IPC = {
   HISTORY_UPDATED: 'history:updated',
   ASSISTANT_RESULT_UPDATE: 'assistant-result:update',
   ASSISTANT_RESULT_COPY: 'assistant-result:copy',
-  ASSISTANT_RESULT_CLOSE: 'assistant-result:close'
+  ASSISTANT_RESULT_CLOSE: 'assistant-result:close',
+  ASSISTANT_RESULT_GET_LATEST: 'assistant-result:get-latest'
 } as const

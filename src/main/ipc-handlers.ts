@@ -7,7 +7,7 @@ import { checkPermissions, requestMicrophonePermission, requestAccessibilityPerm
 import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
-import { copyAssistantResultText } from './assistant-result-window'
+import { copyAssistantResultText, getLatestAssistantResultText } from './assistant-result-window'
 import type { ShortcutServiceStatus } from '../shared/types'
 
 export function registerIpcHandlers(
@@ -153,6 +153,10 @@ export function registerIpcHandlers(
       assistantResultWindow.hide()
     }
     return true
+  })
+
+  ipcMain.handle(IPC.ASSISTANT_RESULT_GET_LATEST, () => {
+    return getLatestAssistantResultText()
   })
 
   // Running apps list (macOS)

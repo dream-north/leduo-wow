@@ -4,6 +4,7 @@ declare global {
       onUpdate: (callback: (text: string) => void) => () => void
       copyText: (text: string) => Promise<void>
       closeWindow: () => Promise<void>
+      getLatestText: () => Promise<string>
     }
   }
 }
@@ -39,7 +40,7 @@ style.textContent = `
   }
 
   .page {
-    padding: 20px;
+    padding: 54px 20px 20px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -50,6 +51,7 @@ style.textContent = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    padding-left: 8px;
   }
 
   .title {
@@ -144,6 +146,13 @@ const closeBtn = document.getElementById('closeBtn') as HTMLButtonElement
 window.assistantResultAPI.onUpdate((text: string) => {
   resultText.value = text
   resultText.scrollTop = 0
+})
+
+void window.assistantResultAPI.getLatestText().then((latest) => {
+  if (latest) {
+    resultText.value = latest
+    resultText.scrollTop = 0
+  }
 })
 
 copyBtn.addEventListener('click', async () => {
