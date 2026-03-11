@@ -435,6 +435,7 @@ export class Pipeline extends EventEmitter {
       // 定位到光标所在的屏幕
       positionOverlayAtCursor(this.overlayWindow)
       this.overlayWindow.showInactive()
+      this.overlayWindow.moveTop()
       this.overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, {
         text,
         mode,

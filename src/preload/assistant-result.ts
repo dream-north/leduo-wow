@@ -8,7 +8,8 @@ const assistantResultAPI = {
     return () => ipcRenderer.removeListener(IPC.ASSISTANT_RESULT_UPDATE, handler)
   },
   copyText: (text: string) => ipcRenderer.invoke(IPC.ASSISTANT_RESULT_COPY, text),
-  closeWindow: () => ipcRenderer.invoke(IPC.ASSISTANT_RESULT_CLOSE)
+  closeWindow: () => ipcRenderer.invoke(IPC.ASSISTANT_RESULT_CLOSE),
+  getLatestText: () => ipcRenderer.invoke(IPC.ASSISTANT_RESULT_GET_LATEST)
 }
 
 contextBridge.exposeInMainWorld('assistantResultAPI', assistantResultAPI)

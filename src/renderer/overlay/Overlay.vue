@@ -207,14 +207,14 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 24px;
-  border-radius: 16px;
+  padding: 14px 18px;
+  border-radius: 18px;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   background: rgba(20, 20, 20, 0.92);
   color: white;
   font-size: 14px;
-  max-width: 380px;
+  width: min(440px, calc(100vw - 24px));
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
@@ -344,9 +344,10 @@ body {
 }
 
 .overlay-text {
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.45;
 }
 </style>
