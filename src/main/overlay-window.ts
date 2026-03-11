@@ -32,7 +32,8 @@ export function createOverlayWindow(): BrowserWindow {
 
   win.setAlwaysOnTop(true, 'floating')
   win.setIgnoreMouseEvents(true)
-  win.setVisibleOnAllWorkspaces(true)
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  win.setFullScreenable(false)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/overlay.html`)

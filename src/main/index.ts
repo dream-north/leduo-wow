@@ -219,6 +219,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  ;(app as Electron.App & { isQuitting?: boolean }).isQuitting = true
 })
 
 app.on('will-quit', () => {
