@@ -41,6 +41,11 @@ class SwiftKeyboardListener extends EventEmitter {
   private running: boolean = false
   private buffer: string = ''
 
+  private resetProcessState(): void {
+    this.running = false
+    this.process = null
+  }
+
   /**
    * Start the Swift keyboard listener process
    */
@@ -90,14 +95,20 @@ class SwiftKeyboardListener extends EventEmitter {
         return false
       }
 
+      this.process.stdin.on('error', (err) => {
+        console.error('[SwiftKeyboardListener] stdin error:', err)
+        this.resetProcessState()
+        this.emit('exit', null)
+      })
+
       this.process.on('error', (err) => {
         console.error('[SwiftKeyboardListener] Process error:', err)
-        this.running = false
+        this.resetProcessState()
       })
 
       this.process.on('exit', (code) => {
         console.log('[SwiftKeyboardListener] Process exited with code:', code)
-        this.running = false
+        this.resetProcessState()
         this.emit('exit', code)
       })
 
@@ -136,7 +147,6 @@ class SwiftKeyboardListener extends EventEmitter {
       if (this.process) {
         this.process.stdin?.end()
         this.process.kill()
-        this.process = null
       }
 
       currentModifiers.clear()
@@ -167,9 +177,16 @@ class SwiftKeyboardListener extends EventEmitter {
    * Send command to Swift process
    */
   private sendCommand(cmd: Record<string, unknown>): void {
-    if (this.process?.stdin) {
-      this.process.stdin.write(JSON.stringify(cmd) + '\n')
+    const stdin = this.process?.stdin
+    if (!stdin || stdin.destroyed || stdin.writableEnded || !stdin.writable) {
+      return
     }
+
+    stdin.write(JSON.stringify(cmd) + '\n', (err) => {
+      if (err) {
+        console.error('[SwiftKeyboardListener] Failed to send command:', err)
+      }
+    })
   }
 
   /**

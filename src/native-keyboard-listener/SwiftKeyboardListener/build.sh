@@ -10,9 +10,20 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Building SwiftKeyboardListener..."
 
+MIN_MACOS_VERSION="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+ARCH="$(uname -m)"
+if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x86_64" ]; then
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+fi
+
+SWIFT_TARGET="$ARCH-apple-macos$MIN_MACOS_VERSION"
+echo "Using Swift target: $SWIFT_TARGET"
+
 # Compile the Swift source
-# Using swiftc to compile into an executable
+# Explicitly set deployment target so helper can run on older supported macOS versions
 swiftc \
+    -target "$SWIFT_TARGET" \
     -o "$EXECUTABLE" \
     "$SCRIPT_DIR/Sources/main.swift" \
     -framework CoreFoundation \
