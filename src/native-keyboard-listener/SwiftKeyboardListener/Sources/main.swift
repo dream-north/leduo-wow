@@ -527,26 +527,11 @@ struct OverlayTheme {
     static let assistantAccent = NSColor(calibratedRed: 0.05, green: 0.63, blue: 0.49, alpha: 1)
     static let success = NSColor(calibratedRed: 0.09, green: 0.64, blue: 0.34, alpha: 1)
     static let danger = NSColor(calibratedRed: 0.86, green: 0.18, blue: 0.17, alpha: 1)
-    static let ink = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedRed: 0.93, green: 0.96, blue: 1.0, alpha: 1)
-            : NSColor(calibratedRed: 0.03, green: 0.06, blue: 0.13, alpha: 1)
-    }
-    static let muted = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedRed: 0.62, green: 0.69, blue: 0.78, alpha: 1)
-            : NSColor(calibratedRed: 0.39, green: 0.45, blue: 0.55, alpha: 1)
-    }
-    static let cardBorder = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 1, alpha: 0.12)
-            : NSColor(calibratedRed: 0.84, green: 0.89, blue: 0.96, alpha: 0.9)
-    }
-    static let hudFill = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.14, alpha: 0.9)
-            : NSColor(calibratedRed: 0.97, green: 0.98, blue: 1.0, alpha: 0.92)
-    }
+    static let ink = NSColor(calibratedRed: 0.03, green: 0.06, blue: 0.13, alpha: 1)
+    static let muted = NSColor(calibratedRed: 0.39, green: 0.45, blue: 0.55, alpha: 1)
+    static let cardBorder = NSColor(calibratedRed: 0.84, green: 0.89, blue: 0.96, alpha: 0.88)
+    static let hudFill = NSColor(calibratedRed: 0.97, green: 0.98, blue: 1.0, alpha: 0.84)
+    static let resultFill = NSColor(calibratedRed: 0.98, green: 0.99, blue: 1.0, alpha: 1.0)
 }
 
 func activeScreen() -> NSScreen? {
@@ -812,7 +797,7 @@ final class RecordingHUDPanelController {
 
 final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let panel: NSPanel
-    private let rootView = NSVisualEffectView()
+    private let rootView = NSView()
     private let surfaceView = NSView()
     private let titleBar = DraggableTitleBarView()
     private let eyebrowLabel = NSTextField(labelWithString: "语音助手")
@@ -825,6 +810,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let outerInset: CGFloat = 8
     private var currentMarkdown = ""
     private var copyResetWorkItem: DispatchWorkItem?
+    private var keyMonitor: Any?
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -834,26 +820,31 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         super.init()
         panel.contentView = rootView
         configureViews()
+        installKeyMonitor()
         panel.orderOut(nil)
+    }
+
+    deinit {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+        }
     }
 
     private func configureViews() {
         panel.ignoresMouseEvents = false
         panel.isMovable = true
         panel.isMovableByWindowBackground = false
-
-        rootView.material = .underWindowBackground
-        rootView.blendingMode = .behindWindow
-        rootView.state = .active
+        panel.hasShadow = false
         rootView.wantsLayer = true
         rootView.layer?.backgroundColor = NSColor.clear.cgColor
 
         surfaceView.wantsLayer = true
         surfaceView.layer?.cornerRadius = 22
         surfaceView.layer?.masksToBounds = true
-        surfaceView.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.76).cgColor
+        surfaceView.layer?.backgroundColor = OverlayTheme.resultFill.cgColor
         surfaceView.layer?.borderWidth = 1
         surfaceView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
+        surfaceView.layer?.cornerCurve = .continuous
 
         eyebrowLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         eyebrowLabel.textColor = OverlayTheme.assistantAccent
@@ -871,6 +862,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
+        webView.allowsBackForwardNavigationGestures = false
         webView.translatesAutoresizingMaskIntoConstraints = false
 
         for view in [surfaceView, titleBar, eyebrowLabel, titleLabel, copyButton, closeButton, webView] {
@@ -943,6 +935,11 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         loadMarkdown(markdown)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(webView)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.panel.makeFirstResponder(self.webView)
+        }
     }
 
     func hide() {
@@ -966,11 +963,26 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     }
 
     @objc private func handleCopy() {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(currentMarkdown, forType: .string)
-        copyButton.title = "已复制"
+        copyCurrentSelectionOrMarkdown()
+    }
 
+    @objc private func handleClose() {
+        hide()
+    }
+
+    private func copyCurrentSelectionOrMarkdown() {
+        webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, _ in
+            let selectedText = (result as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let textToCopy = selectedText.isEmpty ? self?.currentMarkdown ?? "" : selectedText
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(textToCopy, forType: .string)
+            self?.flashCopyFeedback()
+        }
+    }
+
+    private func flashCopyFeedback() {
+        copyButton.title = "已复制"
         copyResetWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             self?.copyButton.title = "复制"
@@ -979,8 +991,26 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: workItem)
     }
 
-    @objc private func handleClose() {
-        hide()
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        panel.makeFirstResponder(webView)
+        webView.evaluateJavaScript("""
+          document.body.tabIndex = 0;
+          document.body.focus();
+        """)
+    }
+
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.panel.isVisible,
+                  event.modifierFlags.contains(.command),
+                  event.charactersIgnoringModifiers?.lowercased() == "c" else {
+                return event
+            }
+
+            self.copyCurrentSelectionOrMarkdown()
+            return nil
+        }
     }
 }
 
@@ -1016,9 +1046,12 @@ enum MarkdownTemplateRenderer {
               font-size: 15px;
               line-height: 1.72;
               -webkit-font-smoothing: antialiased;
+              -webkit-user-select: text;
+              user-select: text;
             }
             body {
               padding: 4px 2px 24px;
+              cursor: text;
             }
             h1, h2, h3, h4 {
               margin: 1.1em 0 0.45em;

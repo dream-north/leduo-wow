@@ -164,12 +164,13 @@ export class Pipeline extends EventEmitter {
   private async stopRecording(): Promise<void> {
     console.log('[Pipeline] stopRecording called')
     this.setStatus(PipelineStatus.FINALIZING_ASR)
-    this.showHud('正在识别...', 'processing')
 
     const config = getConfig(this.configStore)
     this.stopAppCheckPolling()
     if (this.screenshotActive) {
       try {
+        this.overlay.hideHud()
+        await this.delay(80)
         this.screenshotBase64 = await this.captureScreen()
         console.log(`[Pipeline] Screenshot captured, size=${this.screenshotBase64.length}`)
         if (this.screenshotBase64 && config.screenshotSavePath) {
@@ -178,7 +179,13 @@ export class Pipeline extends EventEmitter {
       } catch (err) {
         console.error('[Pipeline] Screenshot capture failed:', err)
         this.screenshotBase64 = ''
+      } finally {
+        if (this.status === PipelineStatus.FINALIZING_ASR) {
+          this.showHud('正在识别...', 'processing')
+        }
       }
+    } else {
+      this.showHud('正在识别...', 'processing')
     }
 
     this.broadcastToWindows(IPC.AUDIO_STOP)
