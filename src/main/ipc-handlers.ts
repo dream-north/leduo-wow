@@ -1,4 +1,4 @@
-import { ipcMain, app, BrowserWindow, dialog, shell } from 'electron'
+import { ipcMain, app, BrowserWindow, clipboard, dialog, shell } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import { getConfig, setConfig, getHistory, setHistory, ConfigStore } from './config-store'
 import { Pipeline } from './pipeline'
@@ -8,12 +8,14 @@ import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
 import type { ShortcutServiceStatus } from '../shared/types'
+import { hideAssistantResultWindow } from './assistant-result-window'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
   pipeline: Pipeline,
   shortcutService: ShortcutService,
-  overlayWindow: BrowserWindow | null
+  overlayWindow: BrowserWindow | null,
+  assistantResultWindow: BrowserWindow | null
 ): void {
   shortcutService.on('status-changed', ({ status }: { status: ShortcutServiceStatus }) => {
     BrowserWindow.getAllWindows().forEach((win) => {
@@ -143,5 +145,15 @@ export function registerIpcHandlers(
   // Running apps list (macOS)
   ipcMain.handle(IPC.APP_GET_RUNNING_APPS, () => {
     return getRunningApps()
+  })
+
+  ipcMain.on(IPC.ASSISTANT_RESULT_COPY, (_event, text: string) => {
+    clipboard.writeText(text)
+  })
+
+  ipcMain.on(IPC.ASSISTANT_RESULT_CLOSE, () => {
+    if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
+      hideAssistantResultWindow(assistantResultWindow)
+    }
   })
 }

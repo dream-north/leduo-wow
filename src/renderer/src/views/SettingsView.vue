@@ -318,6 +318,12 @@ async function toggleAssistantPrePolish(value: boolean): Promise<void> {
   await store.saveSetting('assistantPrePolish', value)
 }
 
+async function setAssistantOutputMode(mode: 'input' | 'window'): Promise<void> {
+  store.assistantOutputMode = mode
+  await store.saveSetting('assistantOutputMode', mode)
+  showSaveMessage('助手输出方式已保存')
+}
+
 // Screenshot toggle
 async function toggleScreenshot(): Promise<void> {
   store.screenshotEnabled = !store.screenshotEnabled
@@ -1264,6 +1270,34 @@ onUnmounted(() => {
                 <span class="radio-text">
                   <strong>先润色再处理</strong>
                   <small>先用AI润色语音文本，再将润色后的文本发送给语音助手</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">输出方式</label>
+            <div class="radio-group">
+              <label class="radio-item" @click="setAssistantOutputMode('input')">
+                <input
+                  type="radio"
+                  name="assistantOutputMode"
+                  :checked="store.assistantOutputMode === 'input'"
+                />
+                <span class="radio-text">
+                  <strong>自动输入到当前应用</strong>
+                  <small>沿用当前输入方式，直接回填到前台应用</small>
+                </span>
+              </label>
+              <label class="radio-item" @click="setAssistantOutputMode('window')">
+                <input
+                  type="radio"
+                  name="assistantOutputMode"
+                  :checked="store.assistantOutputMode === 'window'"
+                />
+                <span class="radio-text">
+                  <strong>显示在独立弹窗</strong>
+                  <small>在当前屏幕弹出结果窗口，方便阅读和复制</small>
                 </span>
               </label>
             </div>

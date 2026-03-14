@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { applyFloatingWindowBehavior } from './floating-window'
 
 const winWidth = 400
 const winHeight = 120
@@ -22,6 +23,7 @@ export function createOverlayWindow(): BrowserWindow {
     hasShadow: false,
     resizable: false,
     focusable: false,
+    fullscreenable: false,
     webPreferences: {
       preload: join(__dirname, '../preload/overlay.js'),
       sandbox: false,
@@ -30,9 +32,8 @@ export function createOverlayWindow(): BrowserWindow {
     }
   })
 
-  win.setAlwaysOnTop(true, 'floating')
+  applyFloatingWindowBehavior(win, 'screen-saver')
   win.setIgnoreMouseEvents(true)
-  win.setVisibleOnAllWorkspaces(true)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/overlay.html`)

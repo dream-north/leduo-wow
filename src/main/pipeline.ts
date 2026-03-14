@@ -11,11 +11,13 @@ import { getConfig, addHistory, ConfigStore } from './config-store'
 import { getFrontmostApp } from './macos-apps'
 import { positionOverlayAtCursor } from './overlay-window'
 import { getSelectedText } from './selected-text'
+import { showAssistantResultWindow } from './assistant-result-window'
 
 export class Pipeline extends EventEmitter {
   private status: PipelineStatus = PipelineStatus.IDLE
   private currentMode: VoiceMode = 'transcription'
   private overlayWindow: BrowserWindow | null
+  private assistantResultWindow: BrowserWindow | null
   private configStore: ConfigStore
   private asrClient: ASRClient | null = null
   private partialText: string = ''
@@ -24,9 +26,14 @@ export class Pipeline extends EventEmitter {
   private screenshotActive: boolean = false
   private appCheckTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(overlayWindow: BrowserWindow | null, configStore: ConfigStore) {
+  constructor(
+    overlayWindow: BrowserWindow | null,
+    assistantResultWindow: BrowserWindow | null,
+    configStore: ConfigStore
+  ) {
     super()
     this.overlayWindow = overlayWindow
+    this.assistantResultWindow = assistantResultWindow
     this.configStore = configStore
   }
 
@@ -41,7 +48,6 @@ export class Pipeline extends EventEmitter {
   }
 
   private broadcastToWindows(channel: string, ...args: unknown[]): void {
-    const { BrowserWindow } = require('electron')
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(channel, ...args)
@@ -357,8 +363,12 @@ export class Pipeline extends EventEmitter {
     await this.delay(100)
 
     try {
-      const inputter = new TextInputter()
-      await inputter.input(outputText, config.inputMethod)
+      if (this.currentMode === 'assistant' && config.assistantOutputMode === 'window') {
+        this.showAssistantResult(outputText)
+      } else {
+        const inputter = new TextInputter()
+        await inputter.input(outputText, config.inputMethod)
+      }
 
       // Save to history
       addHistory(this.configStore, {
@@ -372,9 +382,9 @@ export class Pipeline extends EventEmitter {
       this.broadcastToWindows(IPC.PIPELINE_FINAL_TEXT, outputText, this.currentMode)
       this.reset()
     } catch (err) {
-      console.error('Input error:', err)
+      console.error('Output error:', err)
       this.setStatus(PipelineStatus.ERROR)
-      this.showOverlay('输入失败: ' + (err instanceof Error ? err.message : '未知错误'), 'error')
+      this.showOverlay('输出失败: ' + (err instanceof Error ? err.message : '未知错误'), 'error')
       setTimeout(() => this.reset(), 3000)
     }
   }
@@ -427,7 +437,9 @@ export class Pipeline extends EventEmitter {
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
       // 定位到光标所在的屏幕
       positionOverlayAtCursor(this.overlayWindow)
+      this.overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1)
       this.overlayWindow.showInactive()
+      this.overlayWindow.moveTop()
       this.overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, {
         text,
         mode,
@@ -442,6 +454,12 @@ export class Pipeline extends EventEmitter {
       this.overlayWindow.hide()
       // Clear content so stale text doesn't flash when showing again
       this.overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, { text: '', mode: '', screenshotActive: false })
+    }
+  }
+
+  private showAssistantResult(text: string): void {
+    if (this.assistantResultWindow && !this.assistantResultWindow.isDestroyed()) {
+      showAssistantResultWindow(this.assistantResultWindow, text)
     }
   }
 

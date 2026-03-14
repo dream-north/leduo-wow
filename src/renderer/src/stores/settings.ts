@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   AppConfig,
+  AssistantOutputMode,
   InputMethod,
   PolishPreset,
   ExcludedApp,
@@ -77,6 +78,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantShortcut = ref('RightOption')
   const assistantEnabled = ref(true)
   const assistantPrePolish = ref(false)
+  const assistantOutputMode = ref<AssistantOutputMode>('input')
   const assistantPrompt = ref('')
   const assistantPresets = ref<PolishPreset[]>([...ASSISTANT_BUILTIN_PRESETS])
   const assistantActivePresetIndex = ref(0)
@@ -119,6 +121,7 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantShortcut.value = config.assistantShortcut ?? 'RightOption'
       assistantEnabled.value = config.assistantEnabled ?? true
       assistantPrePolish.value = config.assistantPrePolish ?? false
+      assistantOutputMode.value = config.assistantOutputMode ?? 'input'
       assistantPrompt.value = config.assistantPrompt ?? ''
       assistantPresets.value = config.assistantPresets ?? [...ASSISTANT_BUILTIN_PRESETS]
       assistantActivePresetIndex.value = config.assistantActivePresetIndex ?? 0
@@ -175,6 +178,7 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantShortcut,
     assistantEnabled,
     assistantPrePolish,
+    assistantOutputMode,
     assistantPrompt,
     assistantPresets,
     assistantActivePresetIndex,
