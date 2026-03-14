@@ -6,7 +6,8 @@ import { MacNativeOverlayBackend } from './mac-native-overlay-backend'
 
 interface OverlayManagerOptions {
   overlayWindow: BrowserWindow | null
-  assistantResultWindow: BrowserWindow | null
+  getAssistantResultWindow?: () => BrowserWindow | null
+  setAssistantResultWindow?: (window: BrowserWindow | null) => void
   platform?: NodeJS.Platform
   nativeBackend?: OverlayBackend
   fallbackBackend?: OverlayBackend
@@ -23,7 +24,8 @@ export class OverlayManager implements OverlayBackend {
     this.nativeBackend = options.nativeBackend ?? (platform === 'darwin' ? new MacNativeOverlayBackend() : undefined)
     this.fallbackBackend = options.fallbackBackend ?? new ElectronOverlayBackend({
       overlayWindow: options.overlayWindow,
-      assistantResultWindow: options.assistantResultWindow
+      getAssistantResultWindow: options.getAssistantResultWindow,
+      setAssistantResultWindow: options.setAssistantResultWindow
     })
 
     const nativeReady = this.nativeBackend?.start() ?? false

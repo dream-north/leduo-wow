@@ -523,12 +523,30 @@ enum OverlayVoiceMode: String {
 }
 
 struct OverlayTheme {
-    static let accent = NSColor(calibratedRed: 0.01, green: 0.52, blue: 0.78, alpha: 1)
+    static let transcriptionAccent = NSColor(calibratedRed: 0.01, green: 0.52, blue: 0.78, alpha: 1)
+    static let assistantAccent = NSColor(calibratedRed: 0.05, green: 0.63, blue: 0.49, alpha: 1)
     static let success = NSColor(calibratedRed: 0.09, green: 0.64, blue: 0.34, alpha: 1)
     static let danger = NSColor(calibratedRed: 0.86, green: 0.18, blue: 0.17, alpha: 1)
-    static let ink = NSColor(calibratedRed: 0.06, green: 0.09, blue: 0.16, alpha: 1)
-    static let muted = NSColor(calibratedRed: 0.39, green: 0.45, blue: 0.55, alpha: 1)
-    static let cardBorder = NSColor(calibratedWhite: 1, alpha: 0.45)
+    static let ink = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.93, green: 0.96, blue: 1.0, alpha: 1)
+            : NSColor(calibratedRed: 0.03, green: 0.06, blue: 0.13, alpha: 1)
+    }
+    static let muted = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.62, green: 0.69, blue: 0.78, alpha: 1)
+            : NSColor(calibratedRed: 0.39, green: 0.45, blue: 0.55, alpha: 1)
+    }
+    static let cardBorder = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedWhite: 1, alpha: 0.12)
+            : NSColor(calibratedRed: 0.84, green: 0.89, blue: 0.96, alpha: 0.9)
+    }
+    static let hudFill = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.14, alpha: 0.9)
+            : NSColor(calibratedRed: 0.97, green: 0.98, blue: 1.0, alpha: 0.92)
+    }
 }
 
 func activeScreen() -> NSScreen? {
@@ -536,9 +554,59 @@ func activeScreen() -> NSScreen? {
     return NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens.first
 }
 
+final class OverlayPanel: NSPanel {
+    private let focusablePanel: Bool
+
+    init(focusable: Bool) {
+        self.focusablePanel = focusable
+        let styleMask: NSWindow.StyleMask = focusable ? [.borderless, .fullSizeContentView] : [.borderless, .nonactivatingPanel]
+        super.init(contentRect: .zero, styleMask: styleMask, backing: .buffered, defer: false)
+    }
+
+    override var canBecomeKey: Bool {
+        focusablePanel
+    }
+
+    override var canBecomeMain: Bool {
+        focusablePanel
+    }
+}
+
+final class DraggableTitleBarView: NSView {
+    private var initialLocation: NSPoint = .zero
+    private var initialOrigin: NSPoint = .zero
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window = window else { return }
+        initialLocation = NSEvent.mouseLocation
+        initialOrigin = window.frame.origin
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window = window else { return }
+        let currentLocation = NSEvent.mouseLocation
+        let deltaX = currentLocation.x - initialLocation.x
+        let deltaY = currentLocation.y - initialLocation.y
+        window.setFrameOrigin(NSPoint(x: initialOrigin.x + deltaX, y: initialOrigin.y + deltaY))
+    }
+}
+
+final class PanelActionButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
 func makePanel(level: NSWindow.Level, focusable: Bool) -> NSPanel {
-    let styleMask: NSWindow.StyleMask = focusable ? [.borderless, .fullSizeContentView] : [.borderless, .nonactivatingPanel]
-    let panel = NSPanel(contentRect: .zero, styleMask: styleMask, backing: .buffered, defer: false)
+    let panel = OverlayPanel(focusable: focusable)
     panel.level = level
     panel.isFloatingPanel = true
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
@@ -561,75 +629,99 @@ func symbolImage(_ name: String, pointSize: CGFloat, weight: NSFont.Weight = .se
 
 final class RecordingHUDPanelController {
     private let panel: NSPanel
-    private let rootView = NSVisualEffectView()
+    private let rootView = NSView()
+    private let cardView = NSVisualEffectView()
     private let glowView = NSView()
     private let iconView = NSImageView()
     private let captionLabel = NSTextField(labelWithString: "语音识别")
     private let textLabel = NSTextField(labelWithString: "正在聆听...")
     private let badgeLabel = NSTextField(labelWithString: "")
 
-    private let width: CGFloat = 448
-    private let height: CGFloat = 122
+    private let minWidth: CGFloat = 312
+    private let maxWidth: CGFloat = 520
+    private let height: CGFloat = 102
+    private let outerInset: CGFloat = 10
+    private var currentWidth: CGFloat = 312
 
     init() {
         panel = makePanel(level: .screenSaver, focusable: false)
         panel.ignoresMouseEvents = true
+        panel.hasShadow = true
         panel.contentView = rootView
         configureViews()
+        panel.orderOut(nil)
     }
 
     private func configureViews() {
-        rootView.material = .hudWindow
-        rootView.blendingMode = .behindWindow
-        rootView.state = .active
         rootView.wantsLayer = true
-        rootView.layer?.cornerRadius = 20
-        rootView.layer?.borderWidth = 1
-        rootView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
+        rootView.layer?.backgroundColor = NSColor.clear.cgColor
+
+        cardView.material = .popover
+        cardView.blendingMode = .withinWindow
+        cardView.state = .active
+        cardView.wantsLayer = true
+        cardView.layer?.cornerRadius = 20
+        cardView.layer?.masksToBounds = true
+        cardView.layer?.borderWidth = 1
+        cardView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
+        cardView.layer?.backgroundColor = OverlayTheme.hudFill.cgColor
+        cardView.layer?.cornerCurve = .continuous
 
         glowView.wantsLayer = true
-        glowView.layer?.cornerRadius = 16
-        glowView.layer?.opacity = 0.18
+        glowView.layer?.cornerRadius = 18
+        glowView.layer?.cornerCurve = .continuous
+        glowView.layer?.opacity = 0.12
 
-        iconView.contentTintColor = OverlayTheme.accent
+        iconView.contentTintColor = OverlayTheme.transcriptionAccent
 
-        captionLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        captionLabel.textColor = OverlayTheme.accent
+        captionLabel.font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        captionLabel.textColor = OverlayTheme.transcriptionAccent
 
-        textLabel.font = NSFont.systemFont(ofSize: 24, weight: .bold)
+        textLabel.font = NSFont.systemFont(ofSize: 16, weight: .bold)
         textLabel.textColor = OverlayTheme.ink
         textLabel.maximumNumberOfLines = 2
         textLabel.lineBreakMode = .byTruncatingTail
 
-        badgeLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        badgeLabel.textColor = OverlayTheme.accent
+        badgeLabel.font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        badgeLabel.textColor = OverlayTheme.transcriptionAccent
         badgeLabel.alignment = .right
 
-        for view in [glowView, iconView, captionLabel, textLabel, badgeLabel] {
+        for view in [cardView, glowView, iconView, captionLabel, textLabel, badgeLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
-            rootView.addSubview(view)
         }
 
+        rootView.addSubview(cardView)
+        cardView.addSubview(glowView)
+        cardView.addSubview(iconView)
+        cardView.addSubview(captionLabel)
+        cardView.addSubview(textLabel)
+        cardView.addSubview(badgeLabel)
+
         NSLayoutConstraint.activate([
-            glowView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 16),
-            glowView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 16),
-            glowView.widthAnchor.constraint(equalToConstant: 64),
-            glowView.heightAnchor.constraint(equalToConstant: 64),
+            cardView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: outerInset),
+            cardView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -outerInset),
+            cardView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: outerInset),
+            cardView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -outerInset),
 
-            iconView.leadingAnchor.constraint(equalTo: glowView.leadingAnchor, constant: 16),
-            iconView.topAnchor.constraint(equalTo: glowView.topAnchor, constant: 16),
-            iconView.widthAnchor.constraint(equalToConstant: 32),
-            iconView.heightAnchor.constraint(equalToConstant: 32),
+            glowView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 16),
+            glowView.centerYAnchor.constraint(equalTo: cardView.centerYAnchor),
+            glowView.widthAnchor.constraint(equalToConstant: 60),
+            glowView.heightAnchor.constraint(equalToConstant: 60),
 
-            captionLabel.leadingAnchor.constraint(equalTo: glowView.trailingAnchor, constant: 18),
-            captionLabel.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 20),
+            iconView.centerXAnchor.constraint(equalTo: glowView.centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: glowView.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 28),
+            iconView.heightAnchor.constraint(equalToConstant: 28),
+
+            captionLabel.leadingAnchor.constraint(equalTo: glowView.trailingAnchor, constant: 16),
+            captionLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 17),
 
             textLabel.leadingAnchor.constraint(equalTo: captionLabel.leadingAnchor),
-            textLabel.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 6),
-            textLabel.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -20),
+            textLabel.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 5),
+            textLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
 
-            badgeLabel.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -20),
-            badgeLabel.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 20),
+            badgeLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -20),
+            badgeLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 17),
             badgeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: captionLabel.trailingAnchor, constant: 12)
         ])
     }
@@ -644,18 +736,19 @@ final class RecordingHUDPanelController {
         captionLabel.stringValue = voiceMode == .assistant ? "语音助手" : "语音识别"
         textLabel.stringValue = text
         badgeLabel.stringValue = screenshotActive ? "截图上下文已启用" : ""
+        updatePanelSize(for: text)
         iconView.image = symbolImage(
             voiceMode == .assistant ? "sparkles" : "waveform.circle.fill",
-            pointSize: 28
+            pointSize: 24
         )
 
         let accent: NSColor
         switch mode {
         case .recording:
-            accent = OverlayTheme.accent
+            accent = baseAccent(for: voiceMode)
             applyPulse()
         case .processing:
-            accent = OverlayTheme.accent.withAlphaComponent(0.85)
+            accent = baseAccent(for: voiceMode).withAlphaComponent(0.88)
             applyPulse(duration: 1.1)
         case .success:
             accent = OverlayTheme.success
@@ -669,6 +762,7 @@ final class RecordingHUDPanelController {
         iconView.contentTintColor = accent
         captionLabel.textColor = accent
         badgeLabel.textColor = accent
+        textLabel.textColor = OverlayTheme.ink
     }
 
     func hide() {
@@ -680,10 +774,22 @@ final class RecordingHUDPanelController {
         guard let screen = activeScreen() else { return }
         let frame = screen.visibleFrame
         let origin = NSPoint(
-            x: round(frame.midX - width / 2),
+            x: round(frame.midX - currentWidth / 2),
             y: frame.minY + 64
         )
-        panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: currentWidth, height: height)), display: true)
+    }
+
+    private func updatePanelSize(for text: String) {
+        let displayText = text.isEmpty ? "正在聆听..." : text
+        let measured = NSString(string: displayText).size(withAttributes: [
+            .font: textLabel.font ?? NSFont.systemFont(ofSize: 17, weight: .semibold)
+        ]).width
+        currentWidth = min(max(minWidth, ceil(measured) + 150), maxWidth)
+    }
+
+    private func baseAccent(for voiceMode: OverlayVoiceMode) -> NSColor {
+        voiceMode == .assistant ? OverlayTheme.assistantAccent : OverlayTheme.transcriptionAccent
     }
 
     private func applyPulse(duration: CFTimeInterval = 0.85) {
@@ -704,12 +810,6 @@ final class RecordingHUDPanelController {
 
 // MARK: - Result Window
 
-final class DraggableTitleBarView: NSView {
-    override var mouseDownCanMoveWindow: Bool {
-        true
-    }
-}
-
 final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let panel: NSPanel
     private let rootView = NSVisualEffectView()
@@ -717,11 +817,12 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let titleBar = DraggableTitleBarView()
     private let eyebrowLabel = NSTextField(labelWithString: "语音助手")
     private let titleLabel = NSTextField(labelWithString: "回答结果")
-    private let copyButton = NSButton(title: "复制", target: nil, action: nil)
-    private let closeButton = NSButton(title: "关闭", target: nil, action: nil)
+    private let copyButton = PanelActionButton(title: "复制", target: nil, action: nil)
+    private let closeButton = PanelActionButton(title: "关闭", target: nil, action: nil)
     private let webView: WKWebView
     private let width: CGFloat = 620
     private let height: CGFloat = 468
+    private let outerInset: CGFloat = 8
     private var currentMarkdown = ""
     private var copyResetWorkItem: DispatchWorkItem?
 
@@ -733,27 +834,29 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         super.init()
         panel.contentView = rootView
         configureViews()
+        panel.orderOut(nil)
     }
 
     private func configureViews() {
         panel.ignoresMouseEvents = false
-        panel.isMovable = false
+        panel.isMovable = true
         panel.isMovableByWindowBackground = false
 
         rootView.material = .underWindowBackground
         rootView.blendingMode = .behindWindow
         rootView.state = .active
         rootView.wantsLayer = true
-        rootView.layer?.cornerRadius = 24
-        rootView.layer?.borderWidth = 1
-        rootView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
+        rootView.layer?.backgroundColor = NSColor.clear.cgColor
 
         surfaceView.wantsLayer = true
         surfaceView.layer?.cornerRadius = 22
+        surfaceView.layer?.masksToBounds = true
         surfaceView.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.76).cgColor
+        surfaceView.layer?.borderWidth = 1
+        surfaceView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
 
         eyebrowLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        eyebrowLabel.textColor = OverlayTheme.accent
+        eyebrowLabel.textColor = OverlayTheme.assistantAccent
         eyebrowLabel.alignment = .left
 
         titleLabel.font = NSFont.systemFont(ofSize: 22, weight: .bold)
@@ -783,10 +886,10 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         surfaceView.addSubview(webView)
 
         NSLayoutConstraint.activate([
-            surfaceView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 14),
-            surfaceView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -14),
-            surfaceView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 14),
-            surfaceView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -14),
+            surfaceView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: outerInset),
+            surfaceView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -outerInset),
+            surfaceView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: outerInset),
+            surfaceView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -outerInset),
 
             titleBar.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor),
             titleBar.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor),
@@ -822,7 +925,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         button.layer?.cornerRadius = 21
         button.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         if filled {
-            button.layer?.backgroundColor = OverlayTheme.accent.cgColor
+            button.layer?.backgroundColor = OverlayTheme.assistantAccent.cgColor
             button.contentTintColor = .white
         } else {
             button.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.84).cgColor
@@ -1345,9 +1448,9 @@ source.setCancelHandler {
     DispatchQueue.main.async {
         overlayCoordinator.dismissAll()
         eventTap.stop()
-        CFRunLoopStop(CFRunLoopGetMain())
+        application.stop(nil)
     }
 }
 
 source.resume()
-CFRunLoopRun()
+application.run()

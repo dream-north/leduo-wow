@@ -2,12 +2,17 @@ import type { BrowserWindow } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import type { OverlayHudPayload, OverlayResultPayload } from '../shared/types'
 import type { OverlayBackend } from './overlay-backend'
-import { positionOverlayAtCursor } from './overlay-window'
-import { hideAssistantResultWindow, showAssistantResultWindow } from './assistant-result-window'
+import { parkOverlayWindow, positionOverlayAtCursor } from './overlay-window'
+import {
+  createAssistantResultWindow,
+  hideAssistantResultWindow,
+  showAssistantResultWindow
+} from './assistant-result-window'
 
 interface ElectronOverlayBackendOptions {
   overlayWindow: BrowserWindow | null
-  assistantResultWindow: BrowserWindow | null
+  getAssistantResultWindow?: () => BrowserWindow | null
+  setAssistantResultWindow?: (window: BrowserWindow | null) => void
 }
 
 export class ElectronOverlayBackend implements OverlayBackend {
@@ -24,8 +29,8 @@ export class ElectronOverlayBackend implements OverlayBackend {
   }
 
   isAvailable(): boolean {
-    const { overlayWindow, assistantResultWindow } = this.options
-    return !!overlayWindow && !overlayWindow.isDestroyed() && !!assistantResultWindow && !assistantResultWindow.isDestroyed()
+    const { overlayWindow } = this.options
+    return !!overlayWindow && !overlayWindow.isDestroyed()
   }
 
   showHud(payload: OverlayHudPayload): void {
@@ -48,6 +53,7 @@ export class ElectronOverlayBackend implements OverlayBackend {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
     overlayWindow.hide()
+    parkOverlayWindow(overlayWindow)
     overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, {
       text: '',
       mode: 'recording',
@@ -57,13 +63,13 @@ export class ElectronOverlayBackend implements OverlayBackend {
   }
 
   showResult(payload: OverlayResultPayload): void {
-    const { assistantResultWindow } = this.options
+    const assistantResultWindow = this.getOrCreateAssistantResultWindow()
     if (!assistantResultWindow || assistantResultWindow.isDestroyed()) return
     showAssistantResultWindow(assistantResultWindow, payload.text)
   }
 
   hideResult(): void {
-    const { assistantResultWindow } = this.options
+    const assistantResultWindow = this.options.getAssistantResultWindow?.() ?? null
     if (!assistantResultWindow || assistantResultWindow.isDestroyed()) return
     hideAssistantResultWindow(assistantResultWindow)
   }
@@ -71,5 +77,16 @@ export class ElectronOverlayBackend implements OverlayBackend {
   dismissAll(): void {
     this.hideHud()
     this.hideResult()
+  }
+
+  private getOrCreateAssistantResultWindow(): BrowserWindow | null {
+    const existing = this.options.getAssistantResultWindow?.() ?? null
+    if (existing && !existing.isDestroyed()) {
+      return existing
+    }
+
+    const created = createAssistantResultWindow()
+    this.options.setAssistantResultWindow?.(created)
+    return created
   }
 }

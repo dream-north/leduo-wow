@@ -5,16 +5,19 @@ import { applyFloatingWindowBehavior } from './floating-window'
 
 const winWidth = 400
 const winHeight = 120
+const hiddenWindowBounds = {
+  x: -10000,
+  y: -10000,
+  width: 1,
+  height: 1
+}
 
 export function createOverlayWindow(): BrowserWindow {
-  const display = screen.getPrimaryDisplay()
-  const { width: screenWidth, height: screenHeight } = display.workAreaSize
-
   const win = new BrowserWindow({
-    width: winWidth,
-    height: winHeight,
-    x: Math.round((screenWidth - winWidth) / 2),
-    y: screenHeight - winHeight - 80,
+    width: hiddenWindowBounds.width,
+    height: hiddenWindowBounds.height,
+    x: hiddenWindowBounds.x,
+    y: hiddenWindowBounds.y,
     show: false,
     frame: false,
     transparent: true,
@@ -57,5 +60,9 @@ export function positionOverlayAtCursor(win: BrowserWindow): void {
   const x = currentDisplay.bounds.x + Math.round((screenWidth - winWidth) / 2)
   const y = currentDisplay.bounds.y + screenHeight - winHeight - 80
 
-  win.setPosition(x, y)
+  win.setBounds({ x, y, width: winWidth, height: winHeight })
+}
+
+export function parkOverlayWindow(win: BrowserWindow): void {
+  win.setBounds(hiddenWindowBounds)
 }

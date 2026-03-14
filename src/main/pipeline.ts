@@ -240,9 +240,9 @@ export class Pipeline extends EventEmitter {
             text,
             config.polishPrompt,
             this.screenshotBase64 || undefined,
-            (partialText) => {
+            () => {
               if (this.status === PipelineStatus.POLISHING) {
-                this.showHud(partialText, 'processing')
+                this.showHud('正在润色...', 'processing')
               }
             }
           )
@@ -267,9 +267,9 @@ export class Pipeline extends EventEmitter {
             text,
             config.polishPrompt,
             this.screenshotBase64 || undefined,
-            (partialText) => {
+            () => {
               if (this.status === PipelineStatus.POLISHING) {
-                this.showHud(partialText, 'processing')
+                this.showHud('正在润色...', 'processing')
               }
             }
           )
@@ -300,9 +300,9 @@ export class Pipeline extends EventEmitter {
             userPrompt,
             config.assistantPrompt,
             this.screenshotBase64 || undefined,
-            (partialText) => {
+            () => {
               if (this.status === PipelineStatus.POLISHING) {
-                this.showHud(partialText, 'processing')
+                this.showHud('正在思考...', 'processing')
               }
             }
           )

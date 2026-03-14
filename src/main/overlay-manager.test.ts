@@ -34,7 +34,7 @@ describe('OverlayManager', () => {
 
     const manager = new OverlayManager({
       overlayWindow: null,
-      assistantResultWindow: null,
+      getAssistantResultWindow: () => null,
       platform: 'darwin',
       nativeBackend: nativeBackend as never,
       fallbackBackend: fallbackBackend as never
@@ -58,7 +58,7 @@ describe('OverlayManager', () => {
 
     const manager = new OverlayManager({
       overlayWindow: null,
-      assistantResultWindow: null,
+      getAssistantResultWindow: () => null,
       platform: 'darwin',
       nativeBackend: nativeBackend as never,
       fallbackBackend: fallbackBackend as never

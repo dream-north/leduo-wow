@@ -9,7 +9,6 @@ import { Pipeline } from './pipeline'
 import { PipelineStatus } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { createOverlayWindow } from './overlay-window'
-import { createAssistantResultWindow } from './assistant-result-window'
 import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
@@ -186,10 +185,12 @@ app.whenReady().then(async () => {
   // Create windows
   settingsWindow = createSettingsWindow()
   overlayWindow = createOverlayWindow()
-  assistantResultWindow = createAssistantResultWindow()
   overlayManager = new OverlayManager({
     overlayWindow,
-    assistantResultWindow
+    getAssistantResultWindow: () => assistantResultWindow,
+    setAssistantResultWindow: (window) => {
+      assistantResultWindow = window
+    }
   })
 
   // Initialize pipeline
@@ -206,7 +207,7 @@ app.whenReady().then(async () => {
   })
 
   // Register IPC handlers
-  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow, assistantResultWindow)
+  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow, () => assistantResultWindow)
 
   // Show settings window on first launch
   showSettingsWindow()

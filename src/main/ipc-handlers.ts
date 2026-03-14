@@ -15,7 +15,7 @@ export function registerIpcHandlers(
   pipeline: Pipeline,
   shortcutService: ShortcutService,
   overlayWindow: BrowserWindow | null,
-  assistantResultWindow: BrowserWindow | null
+  getAssistantResultWindow: () => BrowserWindow | null
 ): void {
   shortcutService.on('status-changed', ({ status }: { status: ShortcutServiceStatus }) => {
     BrowserWindow.getAllWindows().forEach((win) => {
@@ -152,6 +152,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.on(IPC.ASSISTANT_RESULT_CLOSE, () => {
+    const assistantResultWindow = getAssistantResultWindow()
     if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
       hideAssistantResultWindow(assistantResultWindow)
     }
