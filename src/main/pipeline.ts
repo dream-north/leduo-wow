@@ -24,8 +24,12 @@ export class Pipeline extends EventEmitter {
   private isProcessingComplete: boolean = false
   private screenshotActive: boolean = false
   private appCheckTimer: ReturnType<typeof setInterval> | null = null
+  private llmAbortController: AbortController | null = null
   private latestAssistantDetailsMarkdown: string | undefined
+  private latestAssistantReasoningMarkdown: string | undefined
+  private latestAssistantCodeMarkdown: string | undefined
   private latestAssistantStats: OverlayResultStat[] | undefined
+  private latestAssistantSources: Array<{ index: number; title: string; url: string }> | undefined
 
   constructor(overlay: OverlayBackend, configStore: ConfigStore) {
     super()
@@ -234,9 +238,13 @@ export class Pipeline extends EventEmitter {
     }
 
     const config = getConfig(this.configStore)
+    const llmSignal = this.createLLMAbortSignal()
     let outputText = text
     this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantReasoningMarkdown = undefined
+    this.latestAssistantCodeMarkdown = undefined
     this.latestAssistantStats = undefined
+    this.latestAssistantSources = undefined
 
     if (this.currentMode === 'transcription' && config.polishEnabled) {
       const apiKey = config.polishApiKey
@@ -256,9 +264,16 @@ export class Pipeline extends EventEmitter {
               if (this.status === PipelineStatus.POLISHING) {
                 this.showHud('正在润色...', 'processing')
               }
+            },
+            {
+              signal: llmSignal
             }
           )
         } catch (err) {
+          if (this.isAbortError(err, llmSignal)) {
+            this.finishCancelledRun(llmSignal)
+            return
+          }
           console.error('Polish error:', err)
           outputText = text
         }
@@ -283,9 +298,16 @@ export class Pipeline extends EventEmitter {
               if (this.status === PipelineStatus.POLISHING) {
                 this.showHud('正在润色...', 'processing')
               }
+            },
+            {
+              signal: llmSignal
             }
           )
         } catch (err) {
+          if (this.isAbortError(err, llmSignal)) {
+            this.finishCancelledRun(llmSignal)
+            return
+          }
           console.error('Pre-polish error:', err)
           outputText = text
         }
@@ -308,45 +330,109 @@ export class Pipeline extends EventEmitter {
           }
 
           const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
-          if (config.assistantEnableCodeInterpreter) {
-            const assistantResult = await polisher.respondWithTools(
+          const initialAssistantWindowText = config.assistantEnableCodeInterpreter || config.assistantEnableSearch
+            ? '正在思考，必要时会调用工具...'
+            : '正在思考...'
+          if (config.assistantOutputMode === 'window') {
+            this.overlay.showResult({
+              text: initialAssistantWindowText,
+              format: 'markdown',
+              reasoningCollapsed: false
+            })
+          }
+          if (config.assistantEnableCodeInterpreter || config.assistantEnableSearch) {
+            const assistantResult = await polisher.respondWithToolsStream(
               userPrompt,
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
+              ({ answerText, reasoningText, isAnswering, codeMarkdown, codeCollapsed }) => {
+                if (this.status === PipelineStatus.POLISHING) {
+                  this.showHud(
+                    answerText
+                      ? '正在生成...'
+                      : codeMarkdown
+                        ? '正在执行工具...'
+                        : initialAssistantWindowText,
+                    'processing'
+                  )
+                }
+                this.latestAssistantCodeMarkdown = codeMarkdown
+                if (config.assistantOutputMode === 'window') {
+                  this.overlay.showResult({
+                    text: answerText || (reasoningText || codeMarkdown
+                      ? ''
+                      : initialAssistantWindowText),
+                    format: 'markdown',
+                    reasoningMarkdown: reasoningText || undefined,
+                    reasoningCollapsed: isAnswering,
+                    codeMarkdown,
+                    codeCollapsed
+                  })
+                }
+              },
               {
                 enableThinking: config.assistantEnableThinking,
                 enableSearch: config.assistantEnableSearch,
-                enableCodeInterpreter: config.assistantEnableCodeInterpreter
+                enableCodeInterpreter: config.assistantEnableCodeInterpreter,
+                thinkingBudget: config.assistantThinkingBudget,
+                signal: llmSignal
               }
             )
             outputText = assistantResult.text
             this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+            this.latestAssistantReasoningMarkdown = assistantResult.usage?.reasoningContent
+            this.latestAssistantCodeMarkdown = assistantResult.codeMarkdown
             this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+            this.latestAssistantSources = assistantResult.sources
           } else {
             const assistantResult = await polisher.polishStreamWithMetadata(
               userPrompt,
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
-              () => {
+              ({ answerText, reasoningText, isAnswering }) => {
                 if (this.status === PipelineStatus.POLISHING) {
                   this.showHud('正在思考...', 'processing')
+                }
+                if (config.assistantOutputMode === 'window') {
+                  this.overlay.showResult({
+                    text: answerText || (reasoningText ? '' : '正在生成...'),
+                    format: 'markdown',
+                    reasoningMarkdown: reasoningText || undefined,
+                    reasoningCollapsed: isAnswering
+                  })
                 }
               },
               {
                 enableThinking: config.assistantEnableThinking,
-                enableSearch: config.assistantEnableSearch
+                enableSearch: config.assistantEnableSearch,
+                thinkingBudget: config.assistantThinkingBudget,
+                signal: llmSignal
               }
             )
             outputText = assistantResult.text
             this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+            this.latestAssistantReasoningMarkdown = assistantResult.usage?.reasoningContent
+            this.latestAssistantCodeMarkdown = undefined
             this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+            this.latestAssistantSources = assistantResult.sources
           }
         } catch (err) {
+          if (this.isAbortError(err, llmSignal)) {
+            this.finishCancelledRun(llmSignal)
+            return
+          }
           console.error('Assistant error:', err)
           outputText = text
         }
       }
     }
+
+    if (llmSignal.aborted) {
+      this.finishCancelledRun(llmSignal)
+      return
+    }
+
+    this.clearLLMAbortSignal(llmSignal)
 
     this.setStatus(PipelineStatus.INPUTTING)
     this.overlay.hideHud()
@@ -358,7 +444,12 @@ export class Pipeline extends EventEmitter {
           text: outputText,
           format: 'markdown',
           detailsMarkdown: this.latestAssistantDetailsMarkdown,
-          stats: this.latestAssistantStats
+          reasoningMarkdown: this.latestAssistantReasoningMarkdown,
+          reasoningCollapsed: true,
+          codeMarkdown: this.latestAssistantCodeMarkdown,
+          codeCollapsed: true,
+          stats: this.latestAssistantStats,
+          sources: this.latestAssistantSources
         })
       } else {
         const inputter = new TextInputter()
@@ -392,6 +483,7 @@ export class Pipeline extends EventEmitter {
   private reset(): void {
     console.log('[Pipeline] reset()')
     this.stopAppCheckPolling()
+    this.cancelActiveLLMRequest()
     if (this.asrClient) {
       this.asrClient.abort()
       this.asrClient = null
@@ -400,7 +492,10 @@ export class Pipeline extends EventEmitter {
     this.screenshotBase64 = ''
     this.screenshotActive = false
     this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantReasoningMarkdown = undefined
+    this.latestAssistantCodeMarkdown = undefined
     this.latestAssistantStats = undefined
+    this.latestAssistantSources = undefined
     this.isProcessingComplete = false
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
@@ -410,6 +505,7 @@ export class Pipeline extends EventEmitter {
   private forceCancel(): void {
     console.log('[Pipeline] forceCancel()')
     this.stopAppCheckPolling()
+    this.cancelActiveLLMRequest()
     if (this.asrClient) {
       this.asrClient.abort()
       this.asrClient = null
@@ -417,14 +513,48 @@ export class Pipeline extends EventEmitter {
     this.partialText = ''
     this.screenshotActive = false
     this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantReasoningMarkdown = undefined
+    this.latestAssistantCodeMarkdown = undefined
     this.latestAssistantStats = undefined
+    this.latestAssistantSources = undefined
     this.isProcessingComplete = true
     this.broadcastToWindows(IPC.AUDIO_STOP)
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
+    this.overlay.hideResult()
     setTimeout(() => {
       this.isProcessingComplete = false
     }, 100)
+  }
+
+  private createLLMAbortSignal(): AbortSignal {
+    this.cancelActiveLLMRequest()
+    this.llmAbortController = new AbortController()
+    return this.llmAbortController.signal
+  }
+
+  private cancelActiveLLMRequest(): void {
+    this.llmAbortController?.abort()
+    this.llmAbortController = null
+  }
+
+  private clearLLMAbortSignal(signal: AbortSignal): void {
+    if (this.llmAbortController?.signal === signal) {
+      this.llmAbortController = null
+    }
+  }
+
+  private finishCancelledRun(signal: AbortSignal): void {
+    this.clearLLMAbortSignal(signal)
+    if (this.status !== PipelineStatus.IDLE) {
+      this.setStatus(PipelineStatus.IDLE)
+    }
+  }
+
+  private isAbortError(err: unknown, signal: AbortSignal): boolean {
+    if (signal.aborted) return true
+    if (!(err instanceof Error)) return false
+    return err.name === 'AbortError' || err.name === 'APIUserAbortError'
   }
 
   private showHud(text: string, mode: 'recording' | 'processing' | 'success' | 'error'): void {
@@ -440,7 +570,7 @@ export class Pipeline extends EventEmitter {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  private buildAssistantDetailsMarkdown(usage?: {
+  private buildAssistantDetailsMarkdown(_usage?: {
     inputTokens?: number
     outputTokens?: number
     totalTokens?: number
@@ -452,34 +582,7 @@ export class Pipeline extends EventEmitter {
       webExtractorCount?: number
     }
   }): string | undefined {
-    if (!usage) return undefined
-
-    const lines: string[] = ['---', '## 运行信息']
-
-    if (usage.totalTokens != null || usage.inputTokens != null || usage.outputTokens != null) {
-      lines.push('')
-      if (usage.totalTokens != null) lines.push(`- 总 Token：${usage.totalTokens}`)
-      if (usage.inputTokens != null) lines.push(`- 输入 Token：${usage.inputTokens}`)
-      if (usage.outputTokens != null) lines.push(`- 输出 Token：${usage.outputTokens}`)
-      if (usage.reasoningTokens != null) lines.push(`- 思考 Token：${usage.reasoningTokens}`)
-    }
-
-    const toolLines = [
-      usage.tools?.codeInterpreterCount != null ? `- 代码解释器调用次数：${usage.tools.codeInterpreterCount}` : null,
-      usage.tools?.webSearchCount != null ? `- 联网搜索调用次数：${usage.tools.webSearchCount}` : null,
-      usage.tools?.webExtractorCount != null ? `- 网页提取调用次数：${usage.tools.webExtractorCount}` : null
-    ].filter(Boolean) as string[]
-
-    if (toolLines.length > 0) {
-      lines.push('', '### 工具调用')
-      lines.push(...toolLines)
-    }
-
-    if (usage.reasoningContent) {
-      lines.push('', '### 思考过程', usage.reasoningContent)
-    }
-
-    return lines.length > 2 ? lines.join('\n') : undefined
+    return undefined
   }
 
   private buildAssistantStats(usage?: {
@@ -510,9 +613,7 @@ export class Pipeline extends EventEmitter {
       stats.push({
         kind: 'tokens-thinking',
         value: `${usage.reasoningTokens}`,
-        detail: usage.reasoningContent
-          ? `思考 Token ${usage.reasoningTokens}\n\n思考过程：\n${usage.reasoningContent}`
-          : `思考 Token ${usage.reasoningTokens}`
+        detail: `思考 Token ${usage.reasoningTokens}`
       })
     }
 

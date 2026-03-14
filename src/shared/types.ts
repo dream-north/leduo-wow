@@ -33,12 +33,23 @@ export interface OverlayResultPayload {
   format: OverlayResultFormat
   detailsMarkdown?: string
   stats?: OverlayResultStat[]
+  sources?: OverlayResultSource[]
+  reasoningMarkdown?: string
+  reasoningCollapsed?: boolean
+  codeMarkdown?: string
+  codeCollapsed?: boolean
 }
 
 export interface OverlayResultStat {
   kind: OverlayResultStatKind
   value: string
   detail: string
+}
+
+export interface OverlayResultSource {
+  index: number
+  title: string
+  url: string
 }
 
 export interface PolishPreset {
@@ -92,6 +103,7 @@ export interface AppConfig {
   assistantOutputMode: AssistantOutputMode
   assistantModel: string
   assistantEnableThinking: boolean
+  assistantThinkingBudget: number
   assistantEnableSearch: boolean
   assistantEnableCodeInterpreter: boolean
   assistantPrompt: string
@@ -206,6 +218,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantOutputMode: 'window',
   assistantModel: 'qwen3.5-flash',
   assistantEnableThinking: false,
+  assistantThinkingBudget: 256,
   assistantEnableSearch: false,
   assistantEnableCodeInterpreter: false,
   assistantPrompt: ASSISTANT_DEFAULT_PROMPT,

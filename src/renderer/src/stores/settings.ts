@@ -81,6 +81,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantOutputMode = ref<AssistantOutputMode>('window')
   const assistantModel = ref('qwen3.5-flash')
   const assistantEnableThinking = ref(false)
+  const assistantThinkingBudget = ref(256)
   const assistantEnableSearch = ref(false)
   const assistantEnableCodeInterpreter = ref(false)
   const assistantPrompt = ref('')
@@ -128,6 +129,7 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantOutputMode.value = config.assistantOutputMode ?? 'window'
       assistantModel.value = config.assistantModel ?? config.polishModel ?? 'qwen3.5-flash'
       assistantEnableThinking.value = config.assistantEnableThinking ?? false
+      assistantThinkingBudget.value = config.assistantThinkingBudget ?? 256
       assistantEnableSearch.value = config.assistantEnableSearch ?? false
       assistantEnableCodeInterpreter.value = config.assistantEnableCodeInterpreter ?? false
       assistantPrompt.value = config.assistantPrompt ?? ''
@@ -189,6 +191,7 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantOutputMode,
     assistantModel,
     assistantEnableThinking,
+    assistantThinkingBudget,
     assistantEnableSearch,
     assistantEnableCodeInterpreter,
     assistantPrompt,

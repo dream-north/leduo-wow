@@ -340,6 +340,16 @@ async function toggleAssistantThinking(): Promise<void> {
   showSaveMessage('助手思考模式已更新')
 }
 
+async function saveAssistantThinkingBudget(event?: Event): Promise<void> {
+  const nextValue = event
+    ? parseInt((event.target as HTMLInputElement).value, 10)
+    : store.assistantThinkingBudget
+  const budget = Number.isFinite(nextValue) && nextValue > 0 ? nextValue : 256
+  store.assistantThinkingBudget = budget
+  await store.saveSetting('assistantThinkingBudget', budget)
+  showSaveMessage('助手思考 Token 数已更新')
+}
+
 async function toggleAssistantSearch(): Promise<void> {
   store.assistantEnableSearch = !store.assistantEnableSearch
   await store.saveSetting('assistantEnableSearch', store.assistantEnableSearch)
@@ -1379,10 +1389,25 @@ onUnmounted(() => {
                 </button>
               </div>
 
+              <div v-if="store.assistantEnableThinking" class="setting-row inline-input-row">
+                <div class="inline-field-label">
+                  <div class="setting-label toggle-title">思考 Token 数</div>
+                  <div class="setting-description toggle-description">只对支持 `thinking_budget` 的助手模型生效，用来控制思考阶段最多消耗多少 Token。默认值是 256。</div>
+                </div>
+                <input
+                  :value="store.assistantThinkingBudget"
+                  type="number"
+                  min="1"
+                  step="64"
+                  class="input-field compact-number-input"
+                  @change="saveAssistantThinkingBudget"
+                />
+              </div>
+
               <div class="toggle-row">
                 <div>
                   <div class="setting-label toggle-title">联网搜索</div>
-                  <div class="setting-description toggle-description">只对语音助手生效。仅当当前模型支持联网搜索时才会真正生效。</div>
+                  <div class="setting-description toggle-description">只对语音助手生效。打开后表示允许模型在需要时联网搜索，不会每次都强制触发。</div>
                 </div>
                 <button
                   :class="['toggle', { active: store.assistantEnableSearch }]"
@@ -1766,6 +1791,24 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.inline-input-row {
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+}
+
+.inline-field-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.compact-number-input {
+  flex: 0 0 120px !important;
+  max-width: 120px;
 }
 
 .toggle-title {

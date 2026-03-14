@@ -31,6 +31,7 @@ interface StoreSchema {
   assistantOutputMode: AssistantOutputMode
   assistantModel: string
   assistantEnableThinking: boolean
+  assistantThinkingBudget: number
   assistantEnableSearch: boolean
   assistantEnableCodeInterpreter: boolean
   assistantPrompt: string
@@ -95,6 +96,7 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantOutputMode: DEFAULT_CONFIG.assistantOutputMode,
       assistantModel: DEFAULT_CONFIG.assistantModel,
       assistantEnableThinking: DEFAULT_CONFIG.assistantEnableThinking,
+      assistantThinkingBudget: DEFAULT_CONFIG.assistantThinkingBudget,
       assistantEnableSearch: DEFAULT_CONFIG.assistantEnableSearch,
       assistantEnableCodeInterpreter: DEFAULT_CONFIG.assistantEnableCodeInterpreter,
       assistantPrompt: DEFAULT_CONFIG.assistantPrompt,
@@ -195,6 +197,7 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantOutputMode: s.get('assistantOutputMode') ?? DEFAULT_CONFIG.assistantOutputMode,
     assistantModel: s.get('assistantModel') ?? s.get('polishModel') ?? DEFAULT_CONFIG.assistantModel,
     assistantEnableThinking: s.get('assistantEnableThinking') ?? DEFAULT_CONFIG.assistantEnableThinking,
+    assistantThinkingBudget: s.get('assistantThinkingBudget') ?? DEFAULT_CONFIG.assistantThinkingBudget,
     assistantEnableSearch: s.get('assistantEnableSearch') ?? DEFAULT_CONFIG.assistantEnableSearch,
     assistantEnableCodeInterpreter: s.get('assistantEnableCodeInterpreter') ?? DEFAULT_CONFIG.assistantEnableCodeInterpreter,
     assistantPrompt: s.get('assistantPrompt') ?? DEFAULT_CONFIG.assistantPrompt,

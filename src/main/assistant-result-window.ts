@@ -65,7 +65,18 @@ export function positionAssistantResultWindowAtCursor(win: BrowserWindow): void 
   win.setPosition(targetX, targetY)
 }
 
-export function showAssistantResultWindow(win: BrowserWindow, payload: { text: string; detailsMarkdown?: string }): void {
+export function showAssistantResultWindow(
+  win: BrowserWindow,
+  payload: {
+    text: string
+    detailsMarkdown?: string
+    sources?: Array<{ index: number; title: string; url: string }>
+    reasoningMarkdown?: string
+    reasoningCollapsed?: boolean
+    codeMarkdown?: string
+    codeCollapsed?: boolean
+  }
+): void {
   positionAssistantResultWindowAtCursor(win)
   applyFloatingWindowBehavior(win, 'screen-saver')
 

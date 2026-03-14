@@ -31,6 +31,7 @@ describe('settings store assistant output mode', () => {
         assistantOutputMode: 'window',
         assistantModel: 'qwen3.5-flash',
         assistantEnableThinking: false,
+        assistantThinkingBudget: 256,
         assistantEnableSearch: false,
         assistantEnableCodeInterpreter: false,
         assistantPrompt: '',
@@ -59,6 +60,7 @@ describe('settings store assistant output mode', () => {
     expect(store.assistantOutputMode).toBe('window')
     expect(store.assistantModel).toBe('qwen3.5-flash')
     expect(store.assistantEnableThinking).toBe(false)
+    expect(store.assistantThinkingBudget).toBe(256)
     expect(store.assistantEnableSearch).toBe(false)
     expect(store.assistantEnableCodeInterpreter).toBe(false)
   })

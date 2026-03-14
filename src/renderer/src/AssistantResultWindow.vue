@@ -4,7 +4,15 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 declare global {
   interface Window {
     assistantResultAPI: {
-      onUpdate: (callback: (data: { text: string; detailsMarkdown?: string }) => void) => () => void
+      onUpdate: (callback: (data: {
+        text: string
+        detailsMarkdown?: string
+        sources?: Array<{ index: number; title: string; url: string }>
+        reasoningMarkdown?: string
+        reasoningCollapsed?: boolean
+        codeMarkdown?: string
+        codeCollapsed?: boolean
+      }) => void) => () => void
       onHide: (callback: () => void) => () => void
       copyToClipboard: (text: string) => void
       closeWindow: () => void
@@ -14,6 +22,11 @@ declare global {
 
 const text = ref('')
 const detailsMarkdown = ref('')
+const sources = ref<Array<{ index: number; title: string; url: string }>>([])
+const reasoningMarkdown = ref('')
+const reasoningCollapsed = ref(false)
+const codeMarkdown = ref('')
+const codeCollapsed = ref(true)
 const copied = ref(false)
 let cleanupUpdate: (() => void) | null = null
 let cleanupHide: (() => void) | null = null
@@ -46,6 +59,11 @@ onMounted(() => {
   cleanupUpdate = window.assistantResultAPI.onUpdate((data) => {
     text.value = data.text
     detailsMarkdown.value = data.detailsMarkdown ?? ''
+    sources.value = data.sources ?? []
+    reasoningMarkdown.value = data.reasoningMarkdown ?? ''
+    reasoningCollapsed.value = data.reasoningCollapsed ?? false
+    codeMarkdown.value = data.codeMarkdown ?? ''
+    codeCollapsed.value = data.codeCollapsed ?? true
     copied.value = false
     clearCopiedTimer()
   })
@@ -78,9 +96,26 @@ onUnmounted(() => {
       </div>
 
       <div class="result-body">
+        <details v-if="reasoningMarkdown" class="result-reasoning" :open="!reasoningCollapsed">
+          <summary>思考过程</summary>
+          <pre class="result-reasoning-text">{{ reasoningMarkdown }}</pre>
+        </details>
+        <details v-if="codeMarkdown" class="result-reasoning" :open="!codeCollapsed">
+          <summary>代码执行</summary>
+          <pre class="result-reasoning-text">{{ codeMarkdown }}</pre>
+        </details>
         <pre class="result-text">{{ text }}</pre>
         <div v-if="detailsMarkdown" class="result-meta">
           <pre class="result-meta-text">{{ detailsMarkdown }}</pre>
+        </div>
+
+        <div v-if="sources.length" class="result-sources">
+          <h2>搜索来源</h2>
+          <ol>
+            <li v-for="source in sources" :key="source.index">
+              <a :href="source.url">{{ source.title || source.url }}</a>
+            </li>
+          </ol>
         </div>
       </div>
     </div>
@@ -177,6 +212,21 @@ h1 {
   border-top: 1px solid rgba(148, 163, 184, 0.22);
 }
 
+.result-reasoning {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.result-reasoning summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
 .result-meta-text {
   color: #475569;
   font-size: 12px;
@@ -184,5 +234,38 @@ h1 {
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
+}
+
+.result-reasoning-text {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.result-sources {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.result-sources h2 {
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.result-sources ol {
+  padding-left: 18px;
+}
+
+.result-sources li + li {
+  margin-top: 6px;
+}
+
+.result-sources a {
+  color: #0284c7;
 }
 </style>

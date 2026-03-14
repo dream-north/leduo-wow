@@ -18,6 +18,7 @@ const mockState = vi.hoisted(() => ({
     assistantOutputMode: 'input' as 'input' | 'window',
     assistantModel: 'qwen3.5-flash',
     assistantEnableThinking: false,
+    assistantThinkingBudget: 256,
     assistantEnableSearch: false,
     assistantEnableCodeInterpreter: false,
     assistantPrompt: '',
@@ -90,7 +91,10 @@ vi.mock('./asr-client', () => ({
 const llmPolisherState = vi.hoisted(() => ({
   polishStreamMock: vi.fn(async (text: string) => text),
   polishStreamWithMetadataMock: vi.fn(async (text: string): Promise<any> => ({ text })),
-  respondWithToolsMock: vi.fn(async (text: string): Promise<any> => ({ text }))
+  respondWithToolsMock: vi.fn(async (text: string): Promise<any> => ({ text })),
+  respondWithToolsStreamMock: vi.fn(async (text: string): Promise<any> => ({ text })),
+  respondWithSearchMock: vi.fn(async (text: string): Promise<any> => ({ text })),
+  respondWithSearchStreamMock: vi.fn(async (text: string): Promise<any> => ({ text }))
 }))
 
 vi.mock('./llm-polisher', () => ({
@@ -98,10 +102,16 @@ vi.mock('./llm-polisher', () => ({
     polishStream: typeof llmPolisherState.polishStreamMock
     polishStreamWithMetadata: typeof llmPolisherState.polishStreamWithMetadataMock
     respondWithTools: typeof llmPolisherState.respondWithToolsMock
+    respondWithToolsStream: typeof llmPolisherState.respondWithToolsStreamMock
+    respondWithSearch: typeof llmPolisherState.respondWithSearchMock
+    respondWithSearchStream: typeof llmPolisherState.respondWithSearchStreamMock
   }) {
     this.polishStream = llmPolisherState.polishStreamMock
     this.polishStreamWithMetadata = llmPolisherState.polishStreamWithMetadataMock
     this.respondWithTools = llmPolisherState.respondWithToolsMock
+    this.respondWithToolsStream = llmPolisherState.respondWithToolsStreamMock
+    this.respondWithSearch = llmPolisherState.respondWithSearchMock
+    this.respondWithSearchStream = llmPolisherState.respondWithSearchStreamMock
   })
 }))
 
@@ -127,6 +137,7 @@ describe('Pipeline assistant output mode', () => {
     mockState.config.assistantOutputMode = 'input'
     mockState.config.polishApiKey = ''
     mockState.config.assistantEnableThinking = false
+    mockState.config.assistantThinkingBudget = 256
     mockState.config.assistantEnableSearch = false
     mockState.config.assistantEnableCodeInterpreter = false
     mockState.addHistoryMock.mockReset()
@@ -139,6 +150,12 @@ describe('Pipeline assistant output mode', () => {
     llmPolisherState.polishStreamWithMetadataMock.mockImplementation(async (text: string) => ({ text }))
     llmPolisherState.respondWithToolsMock.mockReset()
     llmPolisherState.respondWithToolsMock.mockImplementation(async (text: string) => ({ text }))
+    llmPolisherState.respondWithToolsStreamMock.mockReset()
+    llmPolisherState.respondWithToolsStreamMock.mockImplementation(async (text: string) => ({ text }))
+    llmPolisherState.respondWithSearchMock.mockReset()
+    llmPolisherState.respondWithSearchMock.mockImplementation(async (text: string) => ({ text }))
+    llmPolisherState.respondWithSearchStreamMock.mockReset()
+    llmPolisherState.respondWithSearchStreamMock.mockImplementation(async (text: string) => ({ text }))
     vi.useFakeTimers()
   })
 
@@ -177,10 +194,10 @@ describe('Pipeline assistant output mode', () => {
     await task
 
     expect(mockState.inputMock).not.toHaveBeenCalled()
-    expect(overlay.showResult).toHaveBeenCalledWith({
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
       text: '弹窗结果',
       format: 'markdown'
-    })
+    }))
     expect(mockState.addHistoryMock).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
@@ -207,10 +224,10 @@ describe('Pipeline assistant output mode', () => {
     })
   })
 
-  it('passes assistant-only thinking and search flags to the assistant model call', async () => {
+  it('passes assistant-only thinking flags to the streamed assistant model call', async () => {
     mockState.config.polishApiKey = 'llm-key'
     mockState.config.assistantEnableThinking = true
-    mockState.config.assistantEnableSearch = true
+    mockState.config.assistantEnableSearch = false
 
     const overlay = createOverlayBackend()
     const pipeline = new Pipeline(overlay as never, {} as never)
@@ -227,7 +244,9 @@ describe('Pipeline assistant output mode', () => {
       expect.any(Function),
       {
         enableThinking: true,
-        enableSearch: true
+        enableSearch: false,
+        thinkingBudget: 256,
+        signal: expect.any(AbortSignal)
       }
     )
   })
@@ -253,17 +272,18 @@ describe('Pipeline assistant output mode', () => {
     await vi.advanceTimersByTimeAsync(100)
     await task
 
-    expect(overlay.showResult).toHaveBeenCalledWith({
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
       text: '这是最终回答',
       format: 'markdown',
-      detailsMarkdown: expect.stringContaining('思考过程'),
+      reasoningMarkdown: '先分析问题，再给出结论。',
+      reasoningCollapsed: true,
       stats: expect.arrayContaining([
         expect.objectContaining({
           kind: 'tokens-thinking',
-          detail: expect.stringContaining('先分析问题，再给出结论。')
+          detail: '思考 Token 88'
         })
       ])
-    })
+    }))
   })
 
   it('uses the responses tool path when Python interpreter is enabled and shows usage details in the result payload', async () => {
@@ -272,7 +292,7 @@ describe('Pipeline assistant output mode', () => {
     mockState.config.assistantEnableThinking = true
     mockState.config.assistantEnableSearch = true
     mockState.config.assistantEnableCodeInterpreter = true
-    llmPolisherState.respondWithToolsMock.mockResolvedValue({
+    llmPolisherState.respondWithToolsStreamMock.mockResolvedValue({
       text: '计算结果是 1728',
       usage: {
         totalTokens: 321,
@@ -294,26 +314,178 @@ describe('Pipeline assistant output mode', () => {
     await vi.advanceTimersByTimeAsync(100)
     await task
 
-    expect(llmPolisherState.respondWithToolsMock).toHaveBeenCalledWith(
+    expect(llmPolisherState.respondWithToolsStreamMock).toHaveBeenCalledWith(
       '请计算 12 的三次方',
       '',
       undefined,
+      expect.any(Function),
       {
         enableThinking: true,
         enableSearch: true,
-        enableCodeInterpreter: true
+        enableCodeInterpreter: true,
+        thinkingBudget: 256,
+        signal: expect.any(AbortSignal)
       }
     )
-    expect(overlay.showResult).toHaveBeenCalledWith({
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
       text: '计算结果是 1728',
       format: 'markdown',
-      detailsMarkdown: expect.stringContaining('代码解释器调用次数：1'),
       stats: expect.arrayContaining([
         expect.objectContaining({
           kind: 'code-interpreter',
           value: '1'
         })
       ])
+    }))
+  })
+
+  it('allows the tools path to decide whether to search and forwards sources to the result payload', async () => {
+    mockState.config.assistantOutputMode = 'window'
+    mockState.config.polishApiKey = 'llm-key'
+    mockState.config.assistantEnableSearch = true
+    llmPolisherState.respondWithToolsStreamMock.mockResolvedValue({
+      text: '杭州明天多云。[ref_1]',
+      usage: {
+        totalTokens: 88,
+        inputTokens: 40,
+        outputTokens: 48
+      },
+      sources: [
+        {
+          index: 1,
+          title: '杭州天气预报',
+          url: 'https://example.com/weather'
+        }
+      ]
     })
+
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
+
+    ;(pipeline as any).currentMode = 'assistant'
+    const task = (pipeline as any).onASRComplete('杭州明天天气是什么？')
+    await vi.advanceTimersByTimeAsync(100)
+    await task
+
+    expect(llmPolisherState.respondWithToolsStreamMock).toHaveBeenCalledWith(
+      '杭州明天天气是什么？',
+      '',
+      undefined,
+      expect.any(Function),
+      {
+        enableThinking: false,
+        enableSearch: true,
+        enableCodeInterpreter: false,
+        thinkingBudget: 256,
+        signal: expect.any(AbortSignal)
+      }
+    )
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
+      text: '杭州明天多云。[ref_1]',
+      format: 'markdown',
+      stats: expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'tokens-total',
+          value: '88'
+        })
+      ]),
+      sources: [
+        {
+          index: 1,
+          title: '杭州天气预报',
+          url: 'https://example.com/weather'
+        }
+      ]
+    }))
+  })
+
+  it('streams assistant output when search is enabled', async () => {
+    mockState.config.assistantOutputMode = 'window'
+    mockState.config.polishApiKey = 'llm-key'
+    mockState.config.assistantEnableSearch = true
+
+    llmPolisherState.respondWithToolsStreamMock.mockImplementation((async (
+      _text: string,
+      _prompt: string,
+      _image: string | undefined,
+      onProgress: (progress: { answerText: string; reasoningText: string; isAnswering: boolean }) => void
+    ) => {
+      onProgress({
+        answerText: '',
+        reasoningText: '先搜索相关资料。',
+        isAnswering: false
+      })
+      onProgress({
+        answerText: '这是搜索后的回答',
+        reasoningText: '先搜索相关资料。',
+        isAnswering: true
+      })
+      return {
+        text: '这是搜索后的回答',
+        usage: {
+          totalTokens: 66,
+          reasoningTokens: 12,
+          reasoningContent: '先搜索相关资料。'
+        },
+        sources: [
+          {
+            index: 1,
+            title: '示例来源',
+            url: 'https://example.com'
+          }
+        ]
+      }
+    }) as any)
+
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
+
+    ;(pipeline as any).currentMode = 'assistant'
+    const task = (pipeline as any).onASRComplete('帮我查一下')
+    await vi.advanceTimersByTimeAsync(100)
+    await task
+
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
+      text: '',
+      reasoningMarkdown: '先搜索相关资料。',
+      reasoningCollapsed: false
+    }))
+    expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
+      text: '这是搜索后的回答',
+      reasoningMarkdown: '先搜索相关资料。',
+      reasoningCollapsed: true
+      }))
+  })
+
+  it('aborts streamed assistant generation when cancel is triggered during polishing', async () => {
+    mockState.config.assistantOutputMode = 'window'
+    mockState.config.polishApiKey = 'llm-key'
+
+    llmPolisherState.polishStreamWithMetadataMock.mockImplementation((
+      async (_text: string, _prompt: string, _image: string | undefined, _onProgress: unknown, options?: { signal?: AbortSignal }) => {
+        await new Promise((_, reject) => {
+          options?.signal?.addEventListener('abort', () => {
+            const error = new Error('Request aborted')
+            error.name = 'AbortError'
+            reject(error)
+          }, { once: true })
+        })
+        return { text: '' }
+      }
+    ) as any)
+
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
+
+    ;(pipeline as any).currentMode = 'assistant'
+    const task = (pipeline as any).onASRComplete('取消这次回答')
+    await Promise.resolve()
+    pipeline.cancel()
+    await task
+
+    expect(overlay.hideResult).toHaveBeenCalled()
+    expect(mockState.inputMock).not.toHaveBeenCalled()
+    expect(mockState.addHistoryMock).not.toHaveBeenCalled()
+    expect(pipeline.getStatus()).toBe('idle')
   })
 })

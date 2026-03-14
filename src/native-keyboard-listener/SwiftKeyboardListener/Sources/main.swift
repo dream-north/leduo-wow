@@ -985,6 +985,11 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let outerInset: CGFloat = 8
     private var currentMarkdown = ""
     private var currentDisplayMarkdown = ""
+    private var currentSources: [[String: Any]] = []
+    private var currentReasoningMarkdown = ""
+    private var currentReasoningCollapsed = false
+    private var currentCodeMarkdown = ""
+    private var currentCodeCollapsed = true
     private var metaStatsHeightConstraint: NSLayoutConstraint?
     private var statDetailHeightConstraint: NSLayoutConstraint?
     private var copyResetWorkItem: DispatchWorkItem?
@@ -1145,14 +1150,28 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         }
     }
 
-    func show(markdown: String, detailsMarkdown: String? = nil, stats: [[String: String]] = []) {
+    func show(
+        markdown: String,
+        detailsMarkdown: String? = nil,
+        stats: [[String: String]] = [],
+        sources: [[String: Any]] = [],
+        reasoningMarkdown: String? = nil,
+        reasoningCollapsed: Bool = false,
+        codeMarkdown: String? = nil,
+        codeCollapsed: Bool = true
+    ) {
         currentMarkdown = markdown
-        currentDisplayMarkdown = stats.isEmpty ? [markdown, detailsMarkdown]
+        currentSources = sources
+        currentReasoningMarkdown = reasoningMarkdown ?? ""
+        currentReasoningCollapsed = reasoningCollapsed
+        currentCodeMarkdown = codeMarkdown ?? ""
+        currentCodeCollapsed = codeCollapsed
+        currentDisplayMarkdown = [markdown, detailsMarkdown]
             .compactMap { value in
                 guard let value, !value.isEmpty else { return nil }
                 return value
             }
-            .joined(separator: "\n\n") : markdown
+            .joined(separator: "\n\n")
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
         updateStats(stats)
@@ -1183,7 +1202,14 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     }
 
     private func loadMarkdown(_ markdown: String) {
-        let html = MarkdownTemplateRenderer.render(markdown)
+        let html = MarkdownTemplateRenderer.render(
+            markdown,
+            sources: currentSources,
+            reasoningMarkdown: currentReasoningMarkdown,
+            reasoningCollapsed: currentReasoningCollapsed,
+            codeMarkdown: currentCodeMarkdown,
+            codeCollapsed: currentCodeCollapsed
+        )
         webView.loadHTMLString(html, baseURL: nil)
     }
 
@@ -1291,6 +1317,21 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         """)
     }
 
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.allow)
+            return
+        }
+
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+
+        decisionHandler(.allow)
+    }
+
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
@@ -1309,8 +1350,23 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 // MARK: - Markdown Rendering
 
 enum MarkdownTemplateRenderer {
-    static func render(_ markdown: String) -> String {
-        let body = renderBlocks(markdown)
+    static func render(
+        _ markdown: String,
+        sources: [[String: Any]] = [],
+        reasoningMarkdown: String = "",
+        reasoningCollapsed: Bool = false,
+        codeMarkdown: String = "",
+        codeCollapsed: Bool = true
+    ) -> String {
+        let trimmedMarkdown = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningSection = renderReasoning(reasoningMarkdown, collapsed: reasoningCollapsed)
+        let codeSection = renderCodeSection(codeMarkdown, collapsed: codeCollapsed)
+        let mainContent = trimmedMarkdown.isEmpty
+            ? (reasoningSection.isEmpty && codeSection.isEmpty ? "<p class=\"placeholder\">正在生成...</p>" : "")
+            : renderBlocks(trimmedMarkdown)
+        let body = [reasoningSection, codeSection, mainContent, renderSources(sources)]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
         return """
         <!doctype html>
         <html lang="zh-CN">
@@ -1344,6 +1400,10 @@ enum MarkdownTemplateRenderer {
             body {
               padding: 4px 2px 24px;
               cursor: text;
+            }
+            .placeholder {
+              margin: 0.2em 0 0;
+              color: var(--muted);
             }
             h1, h2, h3, h4 {
               margin: 1.1em 0 0.45em;
@@ -1401,6 +1461,90 @@ enum MarkdownTemplateRenderer {
               color: var(--accent);
               text-decoration: none;
             }
+            .citation {
+              margin-left: 0.14em;
+              font-size: 0.72em;
+              vertical-align: super;
+            }
+            .citation a {
+              padding: 0 0.18em;
+              border-radius: 999px;
+              background: rgba(2, 132, 199, 0.10);
+              color: var(--accent);
+            }
+            .reasoning {
+              margin: 0.25em 0 1em;
+              border: 1px solid rgba(148, 163, 184, 0.28);
+              border-radius: 16px;
+              background: rgba(248, 250, 252, 0.8);
+              overflow: hidden;
+            }
+            .reasoning summary {
+              padding: 0.72em 0.9em;
+              cursor: pointer;
+              list-style: none;
+              color: var(--accent);
+              font-size: 0.92rem;
+              font-weight: 600;
+              user-select: none;
+            }
+            .reasoning summary::-webkit-details-marker {
+              display: none;
+            }
+            .reasoning-body {
+              padding: 0 0.9em 0.9em;
+              color: var(--muted);
+              font-size: 13px;
+              line-height: 1.62;
+            }
+            .reasoning-body > :first-child {
+              margin-top: 0;
+            }
+            .sources {
+              margin-top: 1.4em;
+              padding-top: 1.1em;
+              border-top: 1px solid var(--rule);
+            }
+            table {
+              width: 100%;
+              margin: 1em 0;
+              border-collapse: collapse;
+              overflow: hidden;
+              border: 1px solid rgba(148, 163, 184, 0.25);
+              border-radius: 14px;
+              background: rgba(255, 255, 255, 0.75);
+            }
+            th, td {
+              padding: 0.72em 0.82em;
+              border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+              text-align: left;
+              vertical-align: top;
+            }
+            th {
+              background: rgba(226, 232, 240, 0.45);
+              font-weight: 700;
+            }
+            tr:last-child td {
+              border-bottom: none;
+            }
+            .sources h3 {
+              margin: 0 0 0.7em;
+              font-size: 0.95rem;
+            }
+            .sources ol {
+              margin: 0;
+              padding-left: 1.2em;
+            }
+            .sources li + li {
+              margin-top: 0.45em;
+            }
+            .source-url {
+              display: block;
+              margin-top: 0.14em;
+              color: var(--muted);
+              font-size: 0.86em;
+              word-break: break-all;
+            }
             strong {
               font-weight: 700;
             }
@@ -1411,6 +1555,30 @@ enum MarkdownTemplateRenderer {
         </head>
         <body>\(body)</body>
         </html>
+        """
+    }
+
+    private static func renderReasoning(_ markdown: String, collapsed: Bool) -> String {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let openAttribute = collapsed ? "" : " open"
+        return """
+        <details class="reasoning"\(openAttribute)>
+          <summary>思考过程</summary>
+          <div class="reasoning-body">\(renderBlocks(trimmed))</div>
+        </details>
+        """
+    }
+
+    private static func renderCodeSection(_ markdown: String, collapsed: Bool) -> String {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let openAttribute = collapsed ? "" : " open"
+        return """
+        <details class="reasoning"\(openAttribute)>
+          <summary>代码执行</summary>
+          <div class="reasoning-body">\(renderBlocks(trimmed))</div>
+        </details>
         """
     }
 
@@ -1453,6 +1621,14 @@ enum MarkdownTemplateRenderer {
                 continue
             }
 
+            if isTableHeader(lines, at: index) {
+                let tableHTML = renderTable(lines: lines, startIndex: &index)
+                if !tableHTML.isEmpty {
+                    html.append(tableHTML)
+                    continue
+                }
+            }
+
             if trimmed.hasPrefix(">") {
                 var quoteLines: [String] = []
                 while index < lines.count {
@@ -1469,6 +1645,10 @@ enum MarkdownTemplateRenderer {
             if isUnorderedList(trimmed) {
                 var items: [String] = []
                 while index < lines.count {
+                    while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                        index += 1
+                    }
+                    guard index < lines.count else { break }
                     let candidate = lines[index].trimmingCharacters(in: .whitespaces)
                     guard isUnorderedList(candidate) else { break }
                     items.append("<li>\(renderInline(String(candidate.dropFirst(2))))</li>")
@@ -1480,13 +1660,22 @@ enum MarkdownTemplateRenderer {
 
             if isOrderedList(trimmed) {
                 var items: [String] = []
+                var startNumber: Int?
                 while index < lines.count {
+                    while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                        index += 1
+                    }
+                    guard index < lines.count else { break }
                     let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard let itemText = orderedListText(candidate) else { break }
-                    items.append("<li>\(renderInline(itemText))</li>")
+                    guard let item = orderedListItem(candidate) else { break }
+                    if startNumber == nil {
+                        startNumber = item.number
+                    }
+                    items.append("<li>\(renderInline(item.text))</li>")
                     index += 1
                 }
-                html.append("<ol>\(items.joined())</ol>")
+                let startAttribute = startNumber != nil && startNumber != 1 ? " start=\"\(startNumber!)\"" : ""
+                html.append("<ol\(startAttribute)>\(items.joined())</ol>")
                 continue
             }
 
@@ -1513,26 +1702,93 @@ enum MarkdownTemplateRenderer {
         return "<h\(hashes.count)>\(renderInline(content))</h\(hashes.count)>"
     }
 
+    private static func isTableHeader(_ lines: [String], at index: Int) -> Bool {
+        guard index + 1 < lines.count else { return false }
+        let header = lines[index].trimmingCharacters(in: .whitespaces)
+        let separator = lines[index + 1].trimmingCharacters(in: .whitespaces)
+        guard header.contains("|"), separator.contains("|") else { return false }
+        return isTableSeparator(separator)
+    }
+
+    private static func isTableSeparator(_ line: String) -> Bool {
+        let cells = splitTableRow(line)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return false }
+            return trimmed.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private static func splitTableRow(_ line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let stripped = trimmed
+            .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+        guard !stripped.isEmpty else { return [] }
+        return stripped.split(separator: "|", omittingEmptySubsequences: false).map {
+            String($0).trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    private static func renderTable(lines: [String], startIndex index: inout Int) -> String {
+        let headerCells = splitTableRow(lines[index])
+        guard !headerCells.isEmpty else { return "" }
+        index += 2
+
+        var bodyRows: [[String]] = []
+        while index < lines.count {
+            let candidate = lines[index].trimmingCharacters(in: .whitespaces)
+            if candidate.isEmpty {
+                index += 1
+                continue
+            }
+            guard candidate.contains("|"), !isTableSeparator(candidate) else { break }
+            let row = splitTableRow(candidate)
+            guard !row.isEmpty else { break }
+            bodyRows.append(row)
+            index += 1
+        }
+
+        let headerHTML = headerCells.map { "<th>\(renderInline($0))</th>" }.joined()
+        let bodyHTML = bodyRows.map { row in
+            let cells = row.map { "<td>\(renderInline($0))</td>" }.joined()
+            return "<tr>\(cells)</tr>"
+        }.joined()
+
+        return """
+        <table>
+          <thead><tr>\(headerHTML)</tr></thead>
+          <tbody>\(bodyHTML)</tbody>
+        </table>
+        """
+    }
+
     private static func isUnorderedList(_ line: String) -> Bool {
         line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
     }
 
     private static func isOrderedList(_ line: String) -> Bool {
-        orderedListText(line) != nil
+        orderedListItem(line) != nil
     }
 
-    private static func orderedListText(_ line: String) -> String? {
+    private static func orderedListItem(_ line: String) -> (number: Int, text: String)? {
         let regex = try? NSRegularExpression(pattern: #"^\d+\.\s+(.+)$"#)
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
         guard let match = regex?.firstMatch(in: line, range: range),
+              let fullRange = Range(match.range(at: 0), in: line),
               let textRange = Range(match.range(at: 1), in: line) else {
             return nil
         }
-        return String(line[textRange])
+        let prefix = line[fullRange].split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        guard let number = Int(prefix) else { return nil }
+        return (number: number, text: String(line[textRange]))
     }
 
     private static func renderInline<S: StringProtocol>(_ source: S) -> String {
         var html = escapeHTML(String(source))
+        html = replaceRegex(#"\[ref_(\d+)\]"#, in: html) { groups in
+            "<sup class=\"citation\"><a href=\"#ref-\(groups[1])\">\(groups[1])</a></sup>"
+        }
         html = replaceRegex(#"`([^`]+)`"#, in: html) { groups in
             "<code>\(groups[1])</code>"
         }
@@ -1585,6 +1841,31 @@ enum MarkdownTemplateRenderer {
         }
         return result
     }
+
+    private static func renderSources(_ sources: [[String: Any]]) -> String {
+        guard !sources.isEmpty else { return "" }
+        let items = sources.compactMap { item -> String? in
+            guard let index = item["index"] as? Int,
+                  let title = item["title"] as? String,
+                  let url = item["url"] as? String else {
+                return nil
+            }
+            return """
+            <li id="ref-\(index)">
+              <a href="\(escapeHTML(url))">\(escapeHTML(title))</a>
+              <span class="source-url">\(escapeHTML(url))</span>
+            </li>
+            """
+        }.joined()
+
+        guard !items.isEmpty else { return "" }
+        return """
+        <section class="sources">
+          <h3>搜索来源</h3>
+          <ol>\(items)</ol>
+        </section>
+        """
+    }
 }
 
 // MARK: - Overlay Coordinator
@@ -1633,7 +1914,21 @@ final class OverlayCoordinator {
         }
         let detailsMarkdown = payload["detailsMarkdown"] as? String
         let stats = payload["stats"] as? [[String: String]] ?? []
-        resultController.show(markdown: text, detailsMarkdown: detailsMarkdown, stats: stats)
+        let sources = payload["sources"] as? [[String: Any]] ?? []
+        let reasoningMarkdown = payload["reasoningMarkdown"] as? String
+        let reasoningCollapsed = payload["reasoningCollapsed"] as? Bool ?? false
+        let codeMarkdown = payload["codeMarkdown"] as? String
+        let codeCollapsed = payload["codeCollapsed"] as? Bool ?? true
+        resultController.show(
+            markdown: text,
+            detailsMarkdown: detailsMarkdown,
+            stats: stats,
+            sources: sources,
+            reasoningMarkdown: reasoningMarkdown,
+            reasoningCollapsed: reasoningCollapsed,
+            codeMarkdown: codeMarkdown,
+            codeCollapsed: codeCollapsed
+        )
     }
 
     func hideResult() {
