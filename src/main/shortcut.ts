@@ -156,6 +156,7 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
   }
 
   stop(): void {
+    if (!this.started) return
     this.started = false
     if (keyboardListener.isRunning()) {
       keyboardListener.setShortcuts([])

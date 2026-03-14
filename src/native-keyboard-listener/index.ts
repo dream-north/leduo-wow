@@ -20,6 +20,7 @@
 import { EventEmitter } from 'events'
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
+import type { OverlayHudPayload, OverlayResultPayload } from '../shared/types'
 
 export interface KeyInfo {
   key: string      // Key name: "MetaLeft", "MetaRight", "AltLeft", etc.
@@ -40,17 +41,22 @@ class SwiftKeyboardListener extends EventEmitter {
   private process: ChildProcess | null = null
   private running: boolean = false
   private buffer: string = ''
+  private refCount = 0
 
   private resetProcessState(): void {
     this.running = false
     this.process = null
+    this.refCount = 0
   }
 
   /**
    * Start the Swift keyboard listener process
    */
   start(): boolean {
-    if (this.running) return true
+    if (this.running) {
+      this.refCount += 1
+      return true
+    }
 
     // Find the Swift executable
     let executablePath: string
@@ -126,6 +132,7 @@ class SwiftKeyboardListener extends EventEmitter {
       this.sendCommand({ command: 'start' })
 
       this.running = true
+      this.refCount = 1
       console.log('[SwiftKeyboardListener] Started Swift process')
 
       return true
@@ -140,6 +147,11 @@ class SwiftKeyboardListener extends EventEmitter {
    */
   stop(): void {
     if (!this.running) return
+
+    this.refCount = Math.max(0, this.refCount - 1)
+    if (this.refCount > 0) {
+      return
+    }
 
     try {
       this.sendCommand({ command: 'stop' })
@@ -171,6 +183,30 @@ class SwiftKeyboardListener extends EventEmitter {
    */
   setShortcuts(shortcuts: { id: string; shortcut: string }[]): void {
     this.sendCommand({ command: 'setShortcuts', shortcuts })
+  }
+
+  showOverlayHud(payload: OverlayHudPayload): void {
+    this.sendCommand({ command: 'overlayHudShow', payload })
+  }
+
+  updateOverlayHud(payload: OverlayHudPayload): void {
+    this.sendCommand({ command: 'overlayHudUpdate', payload })
+  }
+
+  hideOverlayHud(): void {
+    this.sendCommand({ command: 'overlayHudHide' })
+  }
+
+  showOverlayResult(payload: OverlayResultPayload): void {
+    this.sendCommand({ command: 'overlayResultShow', payload })
+  }
+
+  hideOverlayResult(): void {
+    this.sendCommand({ command: 'overlayResultHide' })
+  }
+
+  dismissAllOverlays(): void {
+    this.sendCommand({ command: 'overlayDismissAll' })
   }
 
   /**
@@ -228,6 +264,10 @@ class SwiftKeyboardListener extends EventEmitter {
     } else if (type === 'shortcut') {
       // Shortcut triggered - emit special event
       this.emit('shortcut', event)
+    } else if (type === 'overlayReady') {
+      this.emit('overlay-ready')
+    } else if (type === 'overlayError') {
+      this.emit('overlay-error', event.message as string)
     }
   }
 
@@ -275,6 +315,14 @@ class SwiftKeyboardListener extends EventEmitter {
 
   onExit(handler: (code: number | null) => void): void {
     this.on('exit', handler)
+  }
+
+  onOverlayReady(handler: () => void): void {
+    this.on('overlay-ready', handler)
+  }
+
+  onOverlayError(handler: (message: string) => void): void {
+    this.on('overlay-error', handler)
   }
 
   /**

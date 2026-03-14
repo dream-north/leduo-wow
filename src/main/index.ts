@@ -10,12 +10,14 @@ import { PipelineStatus } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { createOverlayWindow } from './overlay-window'
 import { createAssistantResultWindow } from './assistant-result-window'
+import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let assistantResultWindow: BrowserWindow | null = null
+let overlayManager: OverlayManager | null = null
 let pipeline: Pipeline | null = null
 let configStore: ConfigStore | null = null
 let shortcutService: ShortcutService | null = null
@@ -83,6 +85,10 @@ export function getOverlayWindow(): BrowserWindow | null {
 
 export function getAssistantResultWindow(): BrowserWindow | null {
   return assistantResultWindow
+}
+
+export function getOverlayManager(): OverlayManager | null {
+  return overlayManager
 }
 
 export function getSettingsWindow(): BrowserWindow | null {
@@ -181,9 +187,13 @@ app.whenReady().then(async () => {
   settingsWindow = createSettingsWindow()
   overlayWindow = createOverlayWindow()
   assistantResultWindow = createAssistantResultWindow()
+  overlayManager = new OverlayManager({
+    overlayWindow,
+    assistantResultWindow
+  })
 
   // Initialize pipeline
-  pipeline = new Pipeline(overlayWindow, assistantResultWindow, configStore)
+  pipeline = new Pipeline(overlayManager, configStore)
 
   // Initialize shortcut service
   shortcutService = new ShortcutService(configStore, pipeline)
@@ -222,6 +232,7 @@ app.on('before-quit', () => {
 })
 
 app.on('will-quit', () => {
+  overlayManager?.destroy()
   shortcutService?.destroy()
 })
 

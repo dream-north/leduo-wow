@@ -26,8 +26,10 @@ swiftc \
     -target "$SWIFT_TARGET" \
     -o "$EXECUTABLE" \
     "$SCRIPT_DIR/Sources/main.swift" \
+    -framework AppKit \
     -framework CoreFoundation \
     -framework CoreGraphics \
+    -framework WebKit \
     -O
 
 echo "Built successfully at: $EXECUTABLE"

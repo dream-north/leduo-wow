@@ -9,9 +9,23 @@ export enum PipelineStatus {
 
 export type InputMethod = 'clipboard' | 'applescript'
 export type AssistantOutputMode = 'input' | 'window'
+export type OverlayVisualMode = 'recording' | 'processing' | 'success' | 'error'
+export type OverlayResultFormat = 'markdown'
 
 // 语音模式：语音识别 / 语音助手
 export type VoiceMode = 'transcription' | 'assistant'
+
+export interface OverlayHudPayload {
+  text: string
+  mode: OverlayVisualMode
+  voiceMode: VoiceMode
+  screenshotActive: boolean
+}
+
+export interface OverlayResultPayload {
+  text: string
+  format: OverlayResultFormat
+}
 
 export interface PolishPreset {
   name: string

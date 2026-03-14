@@ -27,7 +27,6 @@ const mockState = vi.hoisted(() => ({
   },
   addHistoryMock: vi.fn(),
   inputMock: vi.fn(),
-  showAssistantResultMock: vi.fn(),
   broadcastSendMock: vi.fn()
 }))
 
@@ -65,10 +64,6 @@ vi.mock('./text-inputter', () => ({
   })
 }))
 
-vi.mock('./assistant-result-window', () => ({
-  showAssistantResultWindow: mockState.showAssistantResultMock
-}))
-
 vi.mock('./selected-text', () => ({
   getSelectedText: vi.fn(async () => '')
 }))
@@ -77,26 +72,31 @@ vi.mock('./macos-apps', () => ({
   getFrontmostApp: vi.fn(async () => null)
 }))
 
-vi.mock('./overlay-window', () => ({
-  positionOverlayAtCursor: vi.fn()
+vi.mock('./asr-client', () => ({
+  ASRClient: vi.fn(function MockASRClient(this: Record<string, unknown>) {
+    this.on = vi.fn()
+    this.once = vi.fn()
+    this.start = vi.fn(async () => {})
+    this.appendAudio = vi.fn()
+    this.finish = vi.fn(async () => {})
+    this.abort = vi.fn()
+  })
 }))
 
 import { Pipeline } from './pipeline'
 
-function createOverlayWindow() {
+function createOverlayBackend() {
   return {
-    isDestroyed: () => false,
-    hide: vi.fn(),
-    showInactive: vi.fn(),
-    webContents: {
-      send: vi.fn()
-    }
-  }
-}
-
-function createAssistantResultWindow() {
-  return {
-    isDestroyed: () => false
+    id: 'test-overlay',
+    start: vi.fn(() => true),
+    destroy: vi.fn(),
+    isAvailable: vi.fn(() => true),
+    showHud: vi.fn(),
+    updateHud: vi.fn(),
+    hideHud: vi.fn(),
+    showResult: vi.fn(),
+    hideResult: vi.fn(),
+    dismissAll: vi.fn()
   }
 }
 
@@ -106,15 +106,13 @@ describe('Pipeline assistant output mode', () => {
     mockState.addHistoryMock.mockReset()
     mockState.inputMock.mockReset()
     mockState.inputMock.mockResolvedValue(undefined)
-    mockState.showAssistantResultMock.mockReset()
     mockState.broadcastSendMock.mockReset()
     vi.useFakeTimers()
   })
 
   it('inputs assistant output into the frontmost app when output mode is input', async () => {
-    const overlayWindow = createOverlayWindow()
-    const assistantResultWindow = createAssistantResultWindow()
-    const pipeline = new Pipeline(overlayWindow as never, assistantResultWindow as never, {} as never)
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('生成结果')
@@ -122,7 +120,8 @@ describe('Pipeline assistant output mode', () => {
     await task
 
     expect(mockState.inputMock).toHaveBeenCalledWith('生成结果', 'clipboard')
-    expect(mockState.showAssistantResultMock).not.toHaveBeenCalled()
+    expect(overlay.showResult).not.toHaveBeenCalled()
+    expect(overlay.hideHud).toHaveBeenCalled()
     expect(mockState.addHistoryMock).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
@@ -132,15 +131,13 @@ describe('Pipeline assistant output mode', () => {
       })
     )
     expect(mockState.broadcastSendMock).toHaveBeenCalledWith(IPC.PIPELINE_FINAL_TEXT, '生成结果', 'assistant')
-    expect(overlayWindow.hide).toHaveBeenCalled()
   })
 
-  it('shows assistant output in the dedicated window when output mode is window', async () => {
+  it('shows assistant output in the dedicated overlay window when output mode is window', async () => {
     mockState.config.assistantOutputMode = 'window'
 
-    const overlayWindow = createOverlayWindow()
-    const assistantResultWindow = createAssistantResultWindow()
-    const pipeline = new Pipeline(overlayWindow as never, assistantResultWindow as never, {} as never)
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('弹窗结果')
@@ -148,7 +145,10 @@ describe('Pipeline assistant output mode', () => {
     await task
 
     expect(mockState.inputMock).not.toHaveBeenCalled()
-    expect(mockState.showAssistantResultMock).toHaveBeenCalledWith(assistantResultWindow, '弹窗结果')
+    expect(overlay.showResult).toHaveBeenCalledWith({
+      text: '弹窗结果',
+      format: 'markdown'
+    })
     expect(mockState.addHistoryMock).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
@@ -158,6 +158,20 @@ describe('Pipeline assistant output mode', () => {
       })
     )
     expect(mockState.broadcastSendMock).toHaveBeenCalledWith(IPC.PIPELINE_FINAL_TEXT, '弹窗结果', 'assistant')
-    expect(overlayWindow.hide).toHaveBeenCalled()
+  })
+
+  it('hides previous result windows before starting a new recording', async () => {
+    const overlay = createOverlayBackend()
+    const pipeline = new Pipeline(overlay as never, {} as never)
+
+    await pipeline.toggle('assistant')
+
+    expect(overlay.hideResult).toHaveBeenCalledTimes(1)
+    expect(overlay.updateHud).toHaveBeenCalledWith({
+      text: '正在聆听...',
+      mode: 'recording',
+      voiceMode: 'assistant',
+      screenshotActive: false
+    })
   })
 })

@@ -8,16 +8,35 @@ export interface KeyInfo {
 }
 
 export type KeyEventHandler = (info: KeyInfo) => void
+export interface OverlayHudPayload {
+  text: string
+  mode: 'recording' | 'processing' | 'success' | 'error'
+  voiceMode: 'transcription' | 'assistant'
+  screenshotActive: boolean
+}
+
+export interface OverlayResultPayload {
+  text: string
+  format: 'markdown'
+}
 
 class SwiftKeyboardListener {
   start(): boolean
   stop(): void
   setShortcut(shortcut: string): void
   setShortcuts(shortcuts: { id: string; shortcut: string }[]): void
+  showOverlayHud(payload: OverlayHudPayload): void
+  updateOverlayHud(payload: OverlayHudPayload): void
+  hideOverlayHud(): void
+  showOverlayResult(payload: OverlayResultPayload): void
+  hideOverlayResult(): void
+  dismissAllOverlays(): void
   onKeyDown(handler: KeyEventHandler): void
   onKeyUp(handler: KeyEventHandler): void
   onShortcut(handler: (shortcut: string, id?: string) => void): void
   onExit(handler: (code: number | null) => void): void
+  onOverlayReady(handler: () => void): void
+  onOverlayError(handler: (message: string) => void): void
   offKeyDown(handler: KeyEventHandler): void
   offKeyUp(handler: KeyEventHandler): void
   getModifiers(): string[]

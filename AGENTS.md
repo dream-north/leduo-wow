@@ -12,12 +12,18 @@
 - 调用 DashScope 风格实时 ASR 做语音转文字
 - 可选地调用 OpenAI 兼容 LLM 做润色或回答
 - 将结果自动输入到当前前台应用
-- 用悬浮 Overlay 展示录音、处理中和结果状态
+- 用悬浮窗体系展示录音、处理中和结果状态
 
 当前实现已经不是单一“语音转写”模式，而是双模式：
 
 - `transcription`：语音识别 / 可选润色 / 自动输入
-- `assistant`：语音识别 / 可选预润色 / 结合选中文本与截图让 LLM 直接回答 / 自动输入
+- `assistant`：语音识别 / 可选预润色 / 结合选中文本与截图让 LLM 直接回答 / 自动输入或独立结果窗输出
+
+悬浮窗体系长期统一到 native overlay subsystem：
+
+- 录音状态 HUD：优先由 macOS native helper 展示
+- 助手结果窗：优先由 macOS native helper 展示 Markdown 结果
+- BrowserWindow Overlay 仅作为 fallback / 过渡实现，不是长期主路径
 
 ## 常用命令
 
@@ -68,8 +74,9 @@ npm run lint
 
 - 初始化配置与历史存储
 - 权限检查
-- 创建设置窗口与 Overlay 窗口
+- 创建设置窗口与 fallback BrowserWindow Overlay
 - 初始化 `Pipeline`
+- 初始化 `OverlayManager`
 - 初始化 `ShortcutService`
 - 注册 IPC
 - 创建托盘与控制 Dock 图标显示
@@ -96,7 +103,25 @@ npm run lint
 - 授权完成后再进入主设置页
 - 如果运行中权限被撤销，重新聚焦窗口时会再次进入 onboarding
 
-### Overlay 窗口
+### Native Overlay Backend
+
+- TS bridge：`src/native-keyboard-listener/index.ts`
+- macOS native 实现：`src/native-keyboard-listener/SwiftKeyboardListener/Sources/main.swift`
+
+负责：
+
+- 复用现有 Swift helper 进程承接快捷键监听与原生浮窗展示
+- 展示录音状态 HUD
+- 展示助手结果窗
+- 以平台无关的 overlay payload 与主进程通信
+
+约束：
+
+- Electron main 负责业务编排，native helper 只负责快捷键监听与浮窗展示
+- 录音 HUD 与助手结果窗必须共用同一套 overlay backend 抽象
+- 不要把 AppKit / `NSPanel` 等平台细节泄漏到 `Pipeline`、共享类型或设置页
+
+### BrowserWindow Overlay（Fallback）
 
 - 创建：`src/main/overlay-window.ts`
 - 页面入口：`src/renderer/overlay/main.ts`
@@ -110,6 +135,11 @@ npm run lint
 - 把 PCM 数据通过 IPC 发回主进程
 - 展示录音中、处理中、成功、错误状态
 - 展示当前模式以及截图激活状态
+
+说明：
+
+- 这是 Electron fallback / 过渡实现，不应继续扩展成长期主路径
+- 如果 native overlay 可用，运行时应优先使用 native backend
 
 ## 核心架构
 
@@ -131,6 +161,7 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 - 如果当前是 `RECORDING`，停止录音并结束 ASR
 - 如果当前已经在识别、润色或输入阶段，再按热键会强制取消并重置
 - `Esc` 在录音期间会取消当前流程
+- `Pipeline` 只通过 `OverlayBackend` / `OverlayManager` 驱动浮窗，不直接依赖 `BrowserWindow` 或某个平台原生窗口实现
 
 ### 双模式流程
 
@@ -155,8 +186,29 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 4. 读取当前选中文本 `src/main/selected-text.ts`
 5. 若开启截图，上下文中附带当前屏幕截图
 6. 使用 `assistantPrompt` 调用 LLM 直接生成回答
-7. 自动输入到前台 App
+7. 按配置自动输入到前台 App，或显示独立助手结果窗
 8. 写入历史
+
+### Overlay Backend 抽象
+
+文件：
+
+- `src/main/overlay-backend.ts`
+- `src/main/overlay-manager.ts`
+- `src/main/mac-native-overlay-backend.ts`
+- `src/main/electron-overlay-backend.ts`
+
+职责：
+
+- 为业务层提供统一的 HUD / 结果窗接口
+- 在 macOS 优先选择 native backend
+- native backend 不可用时回退到 Electron fallback backend
+
+约束：
+
+- 业务层只依赖平台无关的 overlay payload 与接口
+- 不要在 `Pipeline` 中重新接回某个具体窗口实现
+- 新增平台能力时，应通过新增 backend 接入，而不是污染业务逻辑
 
 ### 截图上下文
 
@@ -275,6 +327,8 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 - `PipelineStatus`
 - `VoiceMode`
 - `AppConfig`
+- `OverlayHudPayload`
+- `OverlayResultPayload`
 - `PolishPreset`
 - `ExcludedApp`
 
@@ -355,12 +409,17 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 | ASR 客户端 | `src/main/asr-client.ts` |
 | LLM 调用 | `src/main/llm-polisher.ts` |
 | 文本输入 | `src/main/text-inputter.ts` |
+| Overlay 抽象接口 | `src/main/overlay-backend.ts` |
+| Overlay 管理器 | `src/main/overlay-manager.ts` |
+| macOS native overlay backend | `src/main/mac-native-overlay-backend.ts` |
+| Electron overlay fallback backend | `src/main/electron-overlay-backend.ts` |
 | 悬浮窗创建 | `src/main/overlay-window.ts` |
+| 助手结果窗 fallback | `src/main/assistant-result-window.ts` |
 | 权限检查 | `src/main/permissions.ts` |
 | 选中文本读取 | `src/main/selected-text.ts` |
 | 托盘 | `src/main/tray.ts` |
-| 原生键盘监听封装 | `src/native-keyboard-listener/index.ts` |
-| Swift 键盘监听器源码 | `src/native-keyboard-listener/SwiftKeyboardListener/Sources/main.swift` |
+| 原生快捷键与 overlay bridge | `src/native-keyboard-listener/index.ts` |
+| Swift 键盘监听器与 native overlay | `src/native-keyboard-listener/SwiftKeyboardListener/Sources/main.swift` |
 | 设置页 | `src/renderer/src/views/SettingsView.vue` |
 | 设置状态 | `src/renderer/src/stores/settings.ts` |
 | Overlay 组件 | `src/renderer/overlay/Overlay.vue` |
@@ -375,7 +434,10 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 - 快捷键系统必须通过统一 backend 抽象接入，不要让业务代码直接依赖某个平台原生监听器
 - “快捷键录制”和“全局快捷键触发”是两个独立能力；录制逻辑不得依赖 native backend
 - 不要把 Electron `globalShortcut` 当成唯一实现；它只是 fallback backend
-- Overlay 录音在 renderer 进程，ASR 编排在 main 进程，修改时不要混淆职责边界
+- Overlay 展示必须通过统一 `OverlayBackend` / `OverlayManager` 接入，不要在业务代码里直接操作 `BrowserWindow` 或 Swift helper
+- 录音 HUD 与助手结果窗必须共用同一套 overlay backend，而不是两条独立实现链路
+- BrowserWindow Overlay 是 fallback / 过渡实现；native overlay 是长期主路径
+- overlay 音频采集仍可留在 renderer fallback 中，但 ASR 编排与浮窗状态驱动都在 main 进程，修改时不要混淆职责边界
 - `assistant` 与 `transcription` 两套配置是并存的，改动时要检查两条链路
 - 旧配置迁移逻辑已存在，新增配置项时要同步更新：
   - `StoreSchema`
@@ -388,12 +450,27 @@ IDLE -> RECORDING -> FINALIZING_ASR -> POLISHING -> INPUTTING -> IDLE
 
 ## 跨平台约束
 
-虽然当前产品仍以 macOS 为主，但快捷键系统需要为 Windows 预留抽象层：
+虽然当前产品仍以 macOS 为主，但快捷键系统与 overlay 系统都需要为 Windows 预留抽象层：
 
 - 配置层继续保存统一的快捷键字符串，不写死 macOS-only 语义到业务层
 - 平台差异下沉到 backend capability，而不是 UI 或 Pipeline
+- overlay 接口层必须平台无关，不把 `NSPanel`、`fullScreenAuxiliary`、`screen-saver` 等术语写入共享类型与业务层
+- “当前屏幕”是产品语义，统一定义为 cursor display，不绑定某个平台 API 名称
+- 全屏置顶能力由 backend 自行实现，不在共享逻辑中写死平台策略
 - Windows 第一阶段只要求支持通用全局组合键
+- Windows overlay backend 未来应实现与 macOS 相同的产品语义：
+  - HUD 显示 / 隐藏 / 更新
+  - 结果窗显示 / 复制 / 关闭 / 拖动
+  - 当前屏幕定位
+  - `assistantOutputMode` 语义一致
 - 如果未来 Windows 也要支持左右修饰键，再单独新增 Windows native backend；不要污染 fallback 语义
+
+## Native Overlay 设计守则
+
+- 录音 HUD：轻量、不可交互、光标所在屏幕、全屏可见优先
+- 助手结果窗：可交互、可复制、可关闭、可拖动、支持 Markdown 富文本
+- 两类浮窗统一视觉语言，但职责分离；不要为了复用而牺牲交互边界
+- native helper 构建产物继续忽略，不提交编译后的二进制
 
 ## 替代关系
 
