@@ -1,6 +1,6 @@
 import Store from 'electron-store'
 import { BrowserWindow } from 'electron'
-import { AppConfig, DEFAULT_CONFIG, PolishPreset, ExcludedApp, ApiProvider, AssistantOutputMode } from '../shared/types'
+import { AppConfig, DEFAULT_CONFIG, PolishPreset, ExcludedApp, ApiProvider, AssistantOutputMode, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 
 interface StoreSchema {
@@ -37,6 +37,8 @@ interface StoreSchema {
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
+  assistantResultWindowPosition?: OverlayWindowPosition
+  assistantResultWindowSize?: OverlayWindowSize
   // General
   shortcut: string
   inputMethod: 'clipboard' | 'applescript'
@@ -102,6 +104,8 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantPrompt: DEFAULT_CONFIG.assistantPrompt,
       assistantPresets: DEFAULT_CONFIG.assistantPresets,
       assistantActivePresetIndex: DEFAULT_CONFIG.assistantActivePresetIndex,
+      assistantResultWindowPosition: DEFAULT_CONFIG.assistantResultWindowPosition,
+      assistantResultWindowSize: DEFAULT_CONFIG.assistantResultWindowSize,
       // General
       shortcut: DEFAULT_CONFIG.shortcut,
       inputMethod: DEFAULT_CONFIG.inputMethod,
@@ -203,6 +207,8 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantPrompt: s.get('assistantPrompt') ?? DEFAULT_CONFIG.assistantPrompt,
     assistantPresets: s.get('assistantPresets') ?? DEFAULT_CONFIG.assistantPresets,
     assistantActivePresetIndex: s.get('assistantActivePresetIndex') ?? DEFAULT_CONFIG.assistantActivePresetIndex,
+    assistantResultWindowPosition: s.get('assistantResultWindowPosition') ?? DEFAULT_CONFIG.assistantResultWindowPosition,
+    assistantResultWindowSize: s.get('assistantResultWindowSize') ?? DEFAULT_CONFIG.assistantResultWindowSize,
     // General
     selectedMicrophoneId: s.get('selectedMicrophoneId') ?? '',
     launchAtLogin: s.get('launchAtLogin'),

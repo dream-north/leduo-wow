@@ -67,6 +67,8 @@ export class ElectronOverlayBackend implements OverlayBackend {
     if (!assistantResultWindow || assistantResultWindow.isDestroyed()) return
     showAssistantResultWindow(assistantResultWindow, {
       text: payload.text,
+      position: payload.position,
+      size: payload.size,
       detailsMarkdown: payload.detailsMarkdown,
       sources: payload.sources,
       reasoningMarkdown: payload.reasoningMarkdown,

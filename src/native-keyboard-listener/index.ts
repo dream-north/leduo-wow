@@ -20,7 +20,7 @@
 import { EventEmitter } from 'events'
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
-import type { OverlayHudPayload, OverlayResultPayload } from '../shared/types'
+import type { OverlayHudPayload, OverlayResultPayload, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 
 export interface KeyInfo {
   key: string      // Key name: "MetaLeft", "MetaRight", "AltLeft", etc.
@@ -42,11 +42,13 @@ class SwiftKeyboardListener extends EventEmitter {
   private running: boolean = false
   private buffer: string = ''
   private refCount = 0
+  private stopping = false
 
   private resetProcessState(): void {
     this.running = false
     this.process = null
     this.refCount = 0
+    this.stopping = false
   }
 
   /**
@@ -91,6 +93,7 @@ class SwiftKeyboardListener extends EventEmitter {
     }
 
     try {
+      this.stopping = false
       this.process = spawn(executablePath, [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: false
@@ -102,6 +105,11 @@ class SwiftKeyboardListener extends EventEmitter {
       }
 
       this.process.stdin.on('error', (err) => {
+        if (this.stopping || (err as NodeJS.ErrnoException).code === 'EPIPE') {
+          this.resetProcessState()
+          this.emit('exit', null)
+          return
+        }
         console.error('[SwiftKeyboardListener] stdin error:', err)
         this.resetProcessState()
         this.emit('exit', null)
@@ -154,6 +162,7 @@ class SwiftKeyboardListener extends EventEmitter {
     }
 
     try {
+      this.stopping = true
       this.sendCommand({ command: 'stop' })
 
       if (this.process) {
@@ -220,6 +229,9 @@ class SwiftKeyboardListener extends EventEmitter {
 
     stdin.write(JSON.stringify(cmd) + '\n', (err) => {
       if (err) {
+        if (this.stopping || (err as NodeJS.ErrnoException).code === 'EPIPE') {
+          return
+        }
         console.error('[SwiftKeyboardListener] Failed to send command:', err)
       }
     })
@@ -268,6 +280,10 @@ class SwiftKeyboardListener extends EventEmitter {
       this.emit('overlay-ready')
     } else if (type === 'overlayError') {
       this.emit('overlay-error', event.message as string)
+    } else if (type === 'overlayResultClosed') {
+      const position = event.position as OverlayWindowPosition | undefined
+      const size = event.size as OverlayWindowSize | undefined
+      this.emit('overlay-result-closed', position, size)
     }
   }
 
@@ -323,6 +339,10 @@ class SwiftKeyboardListener extends EventEmitter {
 
   onOverlayError(handler: (message: string) => void): void {
     this.on('overlay-error', handler)
+  }
+
+  onOverlayResultClosed(handler: (position?: OverlayWindowPosition, size?: OverlayWindowSize) => void): void {
+    this.on('overlay-result-closed', handler)
   }
 
   /**

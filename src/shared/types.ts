@@ -11,6 +11,15 @@ export type InputMethod = 'clipboard' | 'applescript'
 export type AssistantOutputMode = 'input' | 'window'
 export type OverlayVisualMode = 'recording' | 'processing' | 'success' | 'error'
 export type OverlayResultFormat = 'markdown'
+export interface OverlayWindowPosition {
+  x: number
+  y: number
+}
+
+export interface OverlayWindowSize {
+  width: number
+  height: number
+}
 export type OverlayResultStatKind =
   | 'tokens-total'
   | 'tokens-thinking'
@@ -31,6 +40,8 @@ export interface OverlayHudPayload {
 export interface OverlayResultPayload {
   text: string
   format: OverlayResultFormat
+  position?: OverlayWindowPosition
+  size?: OverlayWindowSize
   detailsMarkdown?: string
   stats?: OverlayResultStat[]
   sources?: OverlayResultSource[]
@@ -109,6 +120,8 @@ export interface AppConfig {
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
+  assistantResultWindowPosition?: OverlayWindowPosition
+  assistantResultWindowSize?: OverlayWindowSize
   // General
   launchAtLogin: boolean
   selectedMicrophoneId: string
@@ -224,6 +237,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantPrompt: ASSISTANT_DEFAULT_PROMPT,
   assistantPresets: [...ASSISTANT_BUILTIN_PRESETS],
   assistantActivePresetIndex: 0,
+  assistantResultWindowPosition: undefined,
+  assistantResultWindowSize: undefined,
   // General
   selectedMicrophoneId: '',
   launchAtLogin: false,

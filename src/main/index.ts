@@ -12,6 +12,7 @@ import { createOverlayWindow } from './overlay-window'
 import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
+import { keyboardListener } from '../native-keyboard-listener'
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -195,6 +196,9 @@ app.whenReady().then(async () => {
 
   // Initialize pipeline
   pipeline = new Pipeline(overlayManager, configStore)
+  keyboardListener.onOverlayResultClosed((position, size) => {
+    pipeline?.handleAssistantResultWindowClosed(position, size)
+  })
 
   // Initialize shortcut service
   shortcutService = new ShortcutService(configStore, pipeline)

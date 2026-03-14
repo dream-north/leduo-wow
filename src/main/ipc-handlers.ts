@@ -8,7 +8,6 @@ import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
 import type { ShortcutServiceStatus } from '../shared/types'
-import { hideAssistantResultWindow } from './assistant-result-window'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
@@ -154,7 +153,11 @@ export function registerIpcHandlers(
   ipcMain.on(IPC.ASSISTANT_RESULT_CLOSE, () => {
     const assistantResultWindow = getAssistantResultWindow()
     if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
-      hideAssistantResultWindow(assistantResultWindow)
+      const [x, y] = assistantResultWindow.getPosition()
+      const [width, height] = assistantResultWindow.getSize()
+      pipeline.handleAssistantResultWindowClosed({ x, y }, { width, height })
+    } else {
+      pipeline.handleAssistantResultWindowClosed()
     }
   })
 }

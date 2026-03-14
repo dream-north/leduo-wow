@@ -3,12 +3,12 @@ import { EventEmitter } from 'events'
 import { writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { join } from 'path'
 import { PipelineStatus, VoiceMode } from '../shared/types'
-import type { OverlayResultStat } from '../shared/types'
+import type { OverlayResultStat, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { ASRClient } from './asr-client'
 import { LLMPolisher } from './llm-polisher'
 import { TextInputter } from './text-inputter'
-import { getConfig, addHistory, ConfigStore } from './config-store'
+import { getConfig, addHistory, ConfigStore, setConfig } from './config-store'
 import { getFrontmostApp } from './macos-apps'
 import { getSelectedText } from './selected-text'
 import type { OverlayBackend } from './overlay-backend'
@@ -70,6 +70,23 @@ export class Pipeline extends EventEmitter {
     if (this.status === PipelineStatus.IDLE) return
     console.log(`[Pipeline] Cancel requested during ${this.status}`)
     this.forceCancel()
+  }
+
+  handleAssistantResultWindowClosed(position?: OverlayWindowPosition, size?: OverlayWindowSize): void {
+    if (position) {
+      setConfig(this.configStore, 'assistantResultWindowPosition', position)
+    }
+    if (size) {
+      setConfig(this.configStore, 'assistantResultWindowSize', size)
+    }
+
+    if (this.currentMode === 'assistant' && this.status === PipelineStatus.POLISHING) {
+      console.log('[Pipeline] Assistant result window closed during polishing, cancelling run')
+      this.forceCancel()
+      return
+    }
+
+    this.overlay.hideResult()
   }
 
   handleAudioCaptureError(message: string): void {
@@ -320,7 +337,12 @@ export class Pipeline extends EventEmitter {
         console.warn('[Pipeline] Assistant enabled but no polishApiKey configured, skipping')
       } else {
         this.setStatus(PipelineStatus.POLISHING)
-        this.showHud('正在思考...', 'processing')
+        const showsAssistantResultWindow = config.assistantOutputMode === 'window'
+        if (showsAssistantResultWindow) {
+          this.overlay.hideHud()
+        } else {
+          this.showHud('正在思考...', 'processing')
+        }
 
         try {
           const selectedText = await getSelectedText()
@@ -333,10 +355,12 @@ export class Pipeline extends EventEmitter {
           const initialAssistantWindowText = config.assistantEnableCodeInterpreter || config.assistantEnableSearch
             ? '正在思考，必要时会调用工具...'
             : '正在思考...'
-          if (config.assistantOutputMode === 'window') {
+          if (showsAssistantResultWindow) {
             this.overlay.showResult({
               text: initialAssistantWindowText,
               format: 'markdown',
+              position: config.assistantResultWindowPosition,
+              size: config.assistantResultWindowSize,
               reasoningCollapsed: false
             })
           }
@@ -346,7 +370,7 @@ export class Pipeline extends EventEmitter {
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
               ({ answerText, reasoningText, isAnswering, codeMarkdown, codeCollapsed }) => {
-                if (this.status === PipelineStatus.POLISHING) {
+                if (this.status === PipelineStatus.POLISHING && !showsAssistantResultWindow) {
                   this.showHud(
                     answerText
                       ? '正在生成...'
@@ -357,12 +381,14 @@ export class Pipeline extends EventEmitter {
                   )
                 }
                 this.latestAssistantCodeMarkdown = codeMarkdown
-                if (config.assistantOutputMode === 'window') {
+                if (showsAssistantResultWindow) {
                   this.overlay.showResult({
                     text: answerText || (reasoningText || codeMarkdown
                       ? ''
                       : initialAssistantWindowText),
                     format: 'markdown',
+                    position: config.assistantResultWindowPosition,
+                    size: config.assistantResultWindowSize,
                     reasoningMarkdown: reasoningText || undefined,
                     reasoningCollapsed: isAnswering,
                     codeMarkdown,
@@ -390,13 +416,15 @@ export class Pipeline extends EventEmitter {
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
               ({ answerText, reasoningText, isAnswering }) => {
-                if (this.status === PipelineStatus.POLISHING) {
+                if (this.status === PipelineStatus.POLISHING && !showsAssistantResultWindow) {
                   this.showHud('正在思考...', 'processing')
                 }
-                if (config.assistantOutputMode === 'window') {
+                if (showsAssistantResultWindow) {
                   this.overlay.showResult({
                     text: answerText || (reasoningText ? '' : '正在生成...'),
                     format: 'markdown',
+                    position: config.assistantResultWindowPosition,
+                    size: config.assistantResultWindowSize,
                     reasoningMarkdown: reasoningText || undefined,
                     reasoningCollapsed: isAnswering
                   })
@@ -443,6 +471,8 @@ export class Pipeline extends EventEmitter {
         this.overlay.showResult({
           text: outputText,
           format: 'markdown',
+          position: config.assistantResultWindowPosition,
+          size: config.assistantResultWindowSize,
           detailsMarkdown: this.latestAssistantDetailsMarkdown,
           reasoningMarkdown: this.latestAssistantReasoningMarkdown,
           reasoningCollapsed: true,

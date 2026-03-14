@@ -18,6 +18,18 @@ export interface OverlayHudPayload {
 export interface OverlayResultPayload {
   text: string
   format: 'markdown'
+  position?: OverlayWindowPosition
+  size?: OverlayWindowSize
+}
+
+export interface OverlayWindowPosition {
+  x: number
+  y: number
+}
+
+export interface OverlayWindowSize {
+  width: number
+  height: number
 }
 
 class SwiftKeyboardListener {
@@ -37,6 +49,7 @@ class SwiftKeyboardListener {
   onExit(handler: (code: number | null) => void): void
   onOverlayReady(handler: () => void): void
   onOverlayError(handler: (message: string) => void): void
+  onOverlayResultClosed(handler: (position?: OverlayWindowPosition, size?: OverlayWindowSize) => void): void
   offKeyDown(handler: KeyEventHandler): void
   offKeyUp(handler: KeyEventHandler): void
   getModifiers(): string[]

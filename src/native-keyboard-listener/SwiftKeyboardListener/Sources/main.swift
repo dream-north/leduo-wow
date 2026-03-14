@@ -544,7 +544,9 @@ final class OverlayPanel: NSPanel {
 
     init(focusable: Bool) {
         self.focusablePanel = focusable
-        let styleMask: NSWindow.StyleMask = focusable ? [.borderless, .fullSizeContentView] : [.borderless, .nonactivatingPanel]
+        let styleMask: NSWindow.StyleMask = focusable
+            ? [.borderless, .fullSizeContentView, .resizable]
+            : [.borderless, .nonactivatingPanel]
         super.init(contentRect: .zero, styleMask: styleMask, backing: .buffered, defer: false)
     }
 
@@ -980,8 +982,10 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let copyButton = PanelActionButton(title: "复制", target: nil, action: nil)
     private let closeButton = PanelActionButton(title: "关闭", target: nil, action: nil)
     private let webView: WKWebView
-    private let width: CGFloat = 620
-    private let height: CGFloat = 468
+    private let defaultWidth: CGFloat = 620
+    private let defaultHeight: CGFloat = 468
+    private let minWidth: CGFloat = 520
+    private let minHeight: CGFloat = 360
     private let outerInset: CGFloat = 8
     private var currentMarkdown = ""
     private var currentDisplayMarkdown = ""
@@ -1002,6 +1006,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         panel = makePanel(level: .screenSaver, focusable: true)
         super.init()
         panel.contentView = rootView
+        panel.minSize = NSSize(width: minWidth, height: minHeight)
         configureViews()
         installKeyMonitor()
         panel.orderOut(nil)
@@ -1152,6 +1157,8 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 
     func show(
         markdown: String,
+        position: [String: Any]? = nil,
+        size: [String: Any]? = nil,
         detailsMarkdown: String? = nil,
         stats: [[String: String]] = [],
         sources: [[String: Any]] = [],
@@ -1172,17 +1179,15 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
                 return value
             }
             .joined(separator: "\n\n")
+        let wasVisible = panel.isVisible
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
         updateStats(stats)
-        positionOnActiveScreen()
         loadMarkdown(currentDisplayMarkdown)
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(webView)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.panel.makeFirstResponder(self.webView)
+        if !wasVisible {
+            applyPanelSize(savedSize: size)
+            positionPanel(savedPosition: position)
+            panel.orderFrontRegardless()
         }
     }
 
@@ -1195,10 +1200,33 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         guard let screen = activeScreen() else { return }
         let frame = screen.visibleFrame
         let origin = NSPoint(
-            x: round(frame.midX - width / 2),
-            y: round(frame.midY - height / 2)
+            x: round(frame.midX - panel.frame.width / 2),
+            y: round(frame.midY - panel.frame.height / 2)
         )
-        panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
+        panel.setFrame(NSRect(origin: origin, size: panel.frame.size), display: true)
+    }
+
+    private func applyPanelSize(savedSize: [String: Any]?) {
+        let width = max(minWidth, CGFloat(savedSize?["width"] as? Double ?? Double(defaultWidth)))
+        let height = max(minHeight, CGFloat(savedSize?["height"] as? Double ?? Double(defaultHeight)))
+        panel.setContentSize(NSSize(width: width, height: height))
+    }
+
+    private func positionPanel(savedPosition: [String: Any]?) {
+        if let savedPosition,
+           let x = savedPosition["x"] as? Double,
+           let y = savedPosition["y"] as? Double {
+            let frame = NSRect(x: x, y: y, width: panel.frame.width, height: panel.frame.height)
+            let isVisibleOnAnyScreen = NSScreen.screens.contains { screen in
+                screen.visibleFrame.intersects(frame)
+            }
+            if isVisibleOnAnyScreen {
+                panel.setFrame(frame, display: true)
+                return
+            }
+        }
+
+        positionOnActiveScreen()
     }
 
     private func loadMarkdown(_ markdown: String) {
@@ -1285,6 +1313,18 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     }
 
     @objc private func handleClose() {
+        let origin = panel.frame.origin
+        outputJSON([
+            "type": "overlayResultClosed",
+            "position": [
+                "x": origin.x,
+                "y": origin.y
+            ],
+            "size": [
+                "width": panel.frame.width,
+                "height": panel.frame.height
+            ]
+        ])
         hide()
     }
 
@@ -1912,6 +1952,8 @@ final class OverlayCoordinator {
             outputOverlayError("Invalid result payload")
             return
         }
+        let position = payload["position"] as? [String: Any]
+        let size = payload["size"] as? [String: Any]
         let detailsMarkdown = payload["detailsMarkdown"] as? String
         let stats = payload["stats"] as? [[String: String]] ?? []
         let sources = payload["sources"] as? [[String: Any]] ?? []
@@ -1921,6 +1963,8 @@ final class OverlayCoordinator {
         let codeCollapsed = payload["codeCollapsed"] as? Bool ?? true
         resultController.show(
             markdown: text,
+            position: position,
+            size: size,
             detailsMarkdown: detailsMarkdown,
             stats: stats,
             sources: sources,
