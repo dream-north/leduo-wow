@@ -585,8 +585,107 @@ final class DraggableTitleBarView: NSView {
 }
 
 final class PanelActionButton: NSButton {
+    enum VisualStyle {
+        case filled
+        case outline
+    }
+
+    var visualStyle: VisualStyle = .filled {
+        didSet {
+            applyAppearance(animated: false)
+        }
+    }
+
+    private var hoverTrackingArea: NSTrackingArea?
+    private var isHovered = false
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        NSCursor.pointingHand.push()
+        setHovered(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        NSCursor.pop()
+        setHovered(false)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyAppearance(animated: false)
+    }
+
+    private func setHovered(_ hovered: Bool) {
+        guard isHovered != hovered else { return }
+        isHovered = hovered
+        applyAppearance(animated: true)
+    }
+
+    private func applyAppearance(animated: Bool) {
+        guard let layer else { return }
+
+        let backgroundColor: NSColor
+        let borderColor: NSColor
+        let textColor: NSColor
+        let scale: CGFloat
+
+        switch visualStyle {
+        case .filled:
+            backgroundColor = isHovered
+                ? OverlayTheme.assistantAccent.blended(withFraction: 0.14, of: .black) ?? OverlayTheme.assistantAccent
+                : OverlayTheme.assistantAccent
+            borderColor = .clear
+            textColor = .white
+            scale = isHovered ? 1.03 : 1.0
+        case .outline:
+            backgroundColor = isHovered
+                ? OverlayTheme.assistantAccent.withAlphaComponent(0.12)
+                : NSColor(calibratedWhite: 1, alpha: 0.84)
+            borderColor = isHovered
+                ? OverlayTheme.assistantAccent.withAlphaComponent(0.34)
+                : NSColor(calibratedWhite: 0.72, alpha: 0.35)
+            textColor = isHovered ? OverlayTheme.assistantAccent : OverlayTheme.ink
+            scale = isHovered ? 1.02 : 1.0
+        }
+
+        let updates = {
+            layer.backgroundColor = backgroundColor.cgColor
+            layer.borderColor = borderColor.cgColor
+            layer.transform = CATransform3DMakeScale(scale, scale, 1)
+            self.contentTintColor = textColor
+        }
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.animator().alphaValue = 1
+                updates()
+            }
+        } else {
+            updates()
+        }
     }
 }
 
@@ -915,15 +1014,11 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         button.isBordered = false
         button.wantsLayer = true
         button.layer?.cornerRadius = 21
+        button.layer?.cornerCurve = .continuous
+        button.layer?.borderWidth = filled ? 0 : 1
         button.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        if filled {
-            button.layer?.backgroundColor = OverlayTheme.assistantAccent.cgColor
-            button.contentTintColor = .white
-        } else {
-            button.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.84).cgColor
-            button.layer?.borderWidth = 1
-            button.layer?.borderColor = NSColor(calibratedWhite: 0.72, alpha: 0.35).cgColor
-            button.contentTintColor = OverlayTheme.ink
+        if let actionButton = button as? PanelActionButton {
+            actionButton.visualStyle = filled ? .filled : .outline
         }
     }
 

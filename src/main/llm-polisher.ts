@@ -33,8 +33,6 @@ export class LLMPolisher {
   async polish(text: string, systemPrompt: string, screenshotBase64?: string): Promise<string> {
     const startTime = Date.now()
     try {
-      const maxTokens = Math.min(Math.max(text.length * 3, 128), 1024)
-
       // Use raw POST to guarantee enable_thinking: false is sent
       // The OpenAI SDK may silently drop unknown body params
       const response = await this.client.post('/chat/completions', {
@@ -45,7 +43,6 @@ export class LLMPolisher {
             { role: 'user', content: this.buildUserContent(text, screenshotBase64) }
           ],
           temperature: 0.3,
-          max_tokens: maxTokens,
           enable_thinking: false
         }
       }) as OpenAI.Chat.Completions.ChatCompletion
@@ -67,9 +64,8 @@ export class LLMPolisher {
   ): Promise<string> {
     const startTime = Date.now()
     try {
-      const maxTokens = Math.min(Math.max(text.length * 3, 128), 1024)
       const hasImage = !!screenshotBase64
-      console.log(`[LLMPolisher] Stream start: model=${this.model}, textLen=${text.length}, image=${hasImage}, maxTokens=${maxTokens}`)
+      console.log(`[LLMPolisher] Stream start: model=${this.model}, textLen=${text.length}, image=${hasImage}`)
 
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -84,7 +80,6 @@ export class LLMPolisher {
             { role: 'user', content: this.buildUserContent(text, screenshotBase64) }
           ],
           temperature: 0.3,
-          max_tokens: maxTokens,
           stream: true,
           enable_thinking: false
         })

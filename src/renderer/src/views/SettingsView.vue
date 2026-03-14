@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
-import { BUILTIN_PRESETS, ASR_DEFAULT_BASE_URL, POLISH_DEFAULT_BASE_URL, ASSISTANT_DEFAULT_PROMPT } from '../../../shared/types'
+import {
+  BUILTIN_PRESETS,
+  ASR_DEFAULT_BASE_URL,
+  POLISH_DEFAULT_BASE_URL,
+  ASSISTANT_DEFAULT_PROMPT,
+  ASR_MODEL_PRESETS,
+  TEXT_MODEL_PRESETS
+} from '../../../shared/types'
 import type {
   PolishPreset,
   ShortcutModeStatus,
@@ -11,7 +18,8 @@ import type {
 } from '../../../shared/types'
 
 const store = useSettingsStore()
-const activeTab = ref(sessionStorage.getItem('settings-active-tab') || 'general')
+const initialTab = sessionStorage.getItem('settings-active-tab')
+const activeTab = ref(initialTab === 'prompt' ? 'prompt-transcription' : (initialTab || 'general'))
 const dockUpdateLocked = ref(false)
 let unsubscribeDockLock: (() => void) | null = null
 let unsubscribeHistoryUpdate: (() => void) | null = null
@@ -21,7 +29,8 @@ const saveMessage = ref('')
 const tabs = [
   { id: 'general', label: '通用', icon: '⚙️' },
   { id: 'api', label: 'API', icon: '🔑' },
-  { id: 'prompt', label: '提示词', icon: '✏️' },
+  { id: 'prompt-transcription', label: '语音识别', icon: '🎤' },
+  { id: 'prompt-assistant', label: '语音助手', icon: '🤖' },
   { id: 'history', label: '历史', icon: '📜' },
   { id: 'about', label: '关于', icon: 'ℹ️' }
 ]
@@ -400,9 +409,6 @@ async function savePolishPrompt(): Promise<void> {
   showSaveMessage('提示词已保存')
 }
 
-// 提示词 Tab 当前模式
-const promptMode = ref<VoiceMode>('transcription')
-
 // 语音助手提示词保存
 async function saveAssistantPrompt(): Promise<void> {
   const idx = store.assistantActivePresetIndex
@@ -536,6 +542,11 @@ async function saveAsrModel(): Promise<void> {
 async function savePolishModel(): Promise<void> {
   await store.saveSetting('polishModel', store.polishModel)
   showSaveMessage('润色模型已保存')
+}
+
+async function saveAssistantModel(): Promise<void> {
+  await store.saveSetting('assistantModel', store.assistantModel)
+  showSaveMessage('助手模型已保存')
 }
 
 async function savePolishBaseUrl(): Promise<void> {
@@ -1086,17 +1097,6 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="setting-group">
-            <label class="setting-label">模型</label>
-            <div class="setting-row">
-              <input
-                v-model="store.asrModel"
-                class="input-field"
-                placeholder="qwen3-asr-flash-realtime"
-              />
-              <button class="btn btn-primary" @click="saveAsrModel">保存</button>
-            </div>
-          </div>
         </div>
 
         <!-- Polish Section -->
@@ -1138,44 +1138,40 @@ onUnmounted(() => {
             </div>
           </div>
 
+        </div>
+      </div>
+
+      <!-- Transcription Prompt Tab -->
+      <div v-if="activeTab === 'prompt-transcription'" class="tab-content">
+        <h2 class="section-title">语音识别</h2>
           <div class="setting-group">
-            <label class="setting-label">模型</label>
+            <label class="setting-label">识别模型</label>
+            <p class="setting-description">选择语音识别阶段使用的 ASR 模型，可直接输入自定义模型名。</p>
+            <div class="setting-row">
+              <input
+                v-model="store.asrModel"
+                list="asr-model-presets"
+                class="input-field"
+                placeholder="qwen3-asr-flash-realtime"
+              />
+              <button class="btn btn-primary" @click="saveAsrModel">保存</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">润色模型</label>
+            <p class="setting-description">当启用 AI 润色时，使用这个模型处理最终文本。</p>
             <div class="setting-row">
               <input
                 v-model="store.polishModel"
+                list="text-model-presets"
                 class="input-field"
                 placeholder="qwen3.5-flash"
               />
               <button class="btn btn-primary" @click="savePolishModel">保存</button>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Prompt Tab -->
-      <div v-if="activeTab === 'prompt'" class="tab-content">
-        <h2 class="section-title">提示词设置</h2>
-
-        <!-- Mode tabs -->
-        <div class="mode-tabs">
-          <button
-            :class="['mode-tab', { active: promptMode === 'transcription' }]"
-            @click="promptMode = 'transcription'"
-          >
-            <span class="mode-icon">🎤</span>
-            <span>语音识别</span>
-          </button>
-          <button
-            :class="['mode-tab', { active: promptMode === 'assistant' }]"
-            @click="promptMode = 'assistant'"
-          >
-            <span class="mode-icon">🤖</span>
-            <span>语音助手</span>
-          </button>
-        </div>
-
-        <!-- 语音识别模式配置 -->
-        <div v-if="promptMode === 'transcription'" class="mode-config">
           <!-- Preset selector -->
           <div class="setting-group">
             <label class="setting-label">提示词预设</label>
@@ -1242,10 +1238,25 @@ onUnmounted(() => {
               <button class="btn btn-primary" @click="savePolishPrompt">保存提示词</button>
             </div>
           </div>
-        </div>
+      </div>
 
-        <!-- 语音助手模式配置 -->
-        <div v-else class="mode-config">
+      <!-- Assistant Prompt Tab -->
+      <div v-if="activeTab === 'prompt-assistant'" class="tab-content">
+        <h2 class="section-title">语音助手</h2>
+          <div class="setting-group">
+            <label class="setting-label">助手模型</label>
+            <p class="setting-description">选择语音助手回答时使用的模型，可直接输入自定义模型名。</p>
+            <div class="setting-row">
+              <input
+                v-model="store.assistantModel"
+                list="text-model-presets"
+                class="input-field"
+                placeholder="qwen3.5-flash"
+              />
+              <button class="btn btn-primary" @click="saveAssistantModel">保存</button>
+            </div>
+          </div>
+
           <!-- 先进行AI润色选项 -->
           <div class="setting-group">
             <label class="setting-label">处理流程</label>
@@ -1336,7 +1347,6 @@ onUnmounted(() => {
               <button class="btn btn-text" @click="resetAssistantPrompt">重置为默认</button>
             </div>
           </div>
-        </div>
       </div>
 
       <!-- History Tab -->
@@ -1394,6 +1404,13 @@ onUnmounted(() => {
           <p class="about-author">作者：梦北</p>
         </div>
       </div>
+
+      <datalist id="asr-model-presets">
+        <option v-for="model in ASR_MODEL_PRESETS" :key="model" :value="model" />
+      </datalist>
+      <datalist id="text-model-presets">
+        <option v-for="model in TEXT_MODEL_PRESETS" :key="model" :value="model" />
+      </datalist>
     </main>
   </div>
 </template>

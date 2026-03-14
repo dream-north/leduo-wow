@@ -78,7 +78,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantShortcut = ref('RightOption')
   const assistantEnabled = ref(true)
   const assistantPrePolish = ref(false)
-  const assistantOutputMode = ref<AssistantOutputMode>('input')
+  const assistantOutputMode = ref<AssistantOutputMode>('window')
+  const assistantModel = ref('qwen3.5-flash')
   const assistantPrompt = ref('')
   const assistantPresets = ref<PolishPreset[]>([...ASSISTANT_BUILTIN_PRESETS])
   const assistantActivePresetIndex = ref(0)
@@ -121,7 +122,8 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantShortcut.value = config.assistantShortcut ?? 'RightOption'
       assistantEnabled.value = config.assistantEnabled ?? true
       assistantPrePolish.value = config.assistantPrePolish ?? false
-      assistantOutputMode.value = config.assistantOutputMode ?? 'input'
+      assistantOutputMode.value = config.assistantOutputMode ?? 'window'
+      assistantModel.value = config.assistantModel ?? config.polishModel ?? 'qwen3.5-flash'
       assistantPrompt.value = config.assistantPrompt ?? ''
       assistantPresets.value = config.assistantPresets ?? [...ASSISTANT_BUILTIN_PRESETS]
       assistantActivePresetIndex.value = config.assistantActivePresetIndex ?? 0
@@ -179,6 +181,7 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantEnabled,
     assistantPrePolish,
     assistantOutputMode,
+    assistantModel,
     assistantPrompt,
     assistantPresets,
     assistantActivePresetIndex,

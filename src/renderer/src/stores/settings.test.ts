@@ -29,6 +29,7 @@ describe('settings store assistant output mode', () => {
         assistantEnabled: true,
         assistantPrePolish: false,
         assistantOutputMode: 'window',
+        assistantModel: 'qwen3.5-flash',
         assistantPrompt: '',
         assistantPresets: [],
         assistantActivePresetIndex: 0,
@@ -53,6 +54,7 @@ describe('settings store assistant output mode', () => {
     await store.loadSettings()
 
     expect(store.assistantOutputMode).toBe('window')
+    expect(store.assistantModel).toBe('qwen3.5-flash')
   })
 
   it('persists assistant output mode changes through saveSetting', async () => {

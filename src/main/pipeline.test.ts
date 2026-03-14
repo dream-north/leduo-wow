@@ -16,6 +16,7 @@ const mockState = vi.hoisted(() => ({
     assistantEnabled: true,
     assistantPrePolish: false,
     assistantOutputMode: 'input' as 'input' | 'window',
+    assistantModel: 'qwen3.5-flash',
     assistantPrompt: '',
     screenshotEnabled: false,
     screenshotSavePath: '',

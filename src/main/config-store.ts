@@ -29,6 +29,7 @@ interface StoreSchema {
   assistantEnabled: boolean
   assistantPrePolish: boolean
   assistantOutputMode: AssistantOutputMode
+  assistantModel: string
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -89,6 +90,7 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantEnabled: DEFAULT_CONFIG.assistantEnabled,
       assistantPrePolish: DEFAULT_CONFIG.assistantPrePolish,
       assistantOutputMode: DEFAULT_CONFIG.assistantOutputMode,
+      assistantModel: DEFAULT_CONFIG.assistantModel,
       assistantPrompt: DEFAULT_CONFIG.assistantPrompt,
       assistantPresets: DEFAULT_CONFIG.assistantPresets,
       assistantActivePresetIndex: DEFAULT_CONFIG.assistantActivePresetIndex,
@@ -185,6 +187,7 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantEnabled: s.get('assistantEnabled') ?? DEFAULT_CONFIG.assistantEnabled,
     assistantPrePolish: s.get('assistantPrePolish') ?? DEFAULT_CONFIG.assistantPrePolish,
     assistantOutputMode: s.get('assistantOutputMode') ?? DEFAULT_CONFIG.assistantOutputMode,
+    assistantModel: s.get('assistantModel') ?? s.get('polishModel') ?? DEFAULT_CONFIG.assistantModel,
     assistantPrompt: s.get('assistantPrompt') ?? DEFAULT_CONFIG.assistantPrompt,
     assistantPresets: s.get('assistantPresets') ?? DEFAULT_CONFIG.assistantPresets,
     assistantActivePresetIndex: s.get('assistantActivePresetIndex') ?? DEFAULT_CONFIG.assistantActivePresetIndex,

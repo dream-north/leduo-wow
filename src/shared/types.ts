@@ -37,6 +37,13 @@ export type ApiProvider = 'dashscope' | 'custom'
 
 export const ASR_DEFAULT_BASE_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime'
 export const POLISH_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+export const ASR_MODEL_PRESETS = [
+  'qwen3-asr-flash-realtime'
+] as const
+export const TEXT_MODEL_PRESETS = [
+  'qwen3.5-flash',
+  'qwen3.5-plus'
+] as const
 
 export interface ExcludedApp {
   name: string
@@ -69,6 +76,7 @@ export interface AppConfig {
   assistantEnabled: boolean
   assistantPrePolish: boolean  // 是否先进行AI润色
   assistantOutputMode: AssistantOutputMode
+  assistantModel: string
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -178,7 +186,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantShortcut: 'RightOption',
   assistantEnabled: true,
   assistantPrePolish: false,  // 默认不先润色
-  assistantOutputMode: 'input',
+  assistantOutputMode: 'window',
+  assistantModel: 'qwen3.5-flash',
   assistantPrompt: ASSISTANT_DEFAULT_PROMPT,
   assistantPresets: [...ASSISTANT_BUILTIN_PRESETS],
   assistantActivePresetIndex: 0,

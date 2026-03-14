@@ -302,7 +302,7 @@ export class Pipeline extends EventEmitter {
             userPrompt = `我的语音指令是："${outputText}"\n\n选中的文本是：\n\`\`\`\n${selectedText}\n\`\`\``
           }
 
-          const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
+          const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
             userPrompt,
             config.assistantPrompt,
