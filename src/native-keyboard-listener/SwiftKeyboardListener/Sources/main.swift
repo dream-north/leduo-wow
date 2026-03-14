@@ -689,6 +689,79 @@ final class PanelActionButton: NSButton {
     }
 }
 
+final class ResultStatBadgeView: NSView {
+    private let iconView = NSImageView()
+    private let valueLabel = NSTextField(labelWithString: "")
+    private var hoverTrackingArea: NSTrackingArea?
+    private let detail: String
+    var onHoverChange: ((Bool, String, NSRect) -> Void)?
+
+    init(symbolName: String, value: String, detail: String) {
+        self.detail = detail
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.96, alpha: 0.9).cgColor
+
+        iconView.image = symbolImage(symbolName, pointSize: 11, weight: .semibold)
+        iconView.contentTintColor = OverlayTheme.assistantAccent
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        valueLabel.stringValue = value
+        valueLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        valueLabel.textColor = OverlayTheme.ink
+        valueLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(iconView)
+        addSubview(valueLabel)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 24),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 12),
+            iconView.heightAnchor.constraint(equalToConstant: 12),
+            valueLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
+            valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        layer?.backgroundColor = OverlayTheme.assistantAccent.withAlphaComponent(0.14).cgColor
+        onHoverChange?(true, detail, bounds)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.96, alpha: 0.9).cgColor
+        onHoverChange?(false, detail, bounds)
+    }
+}
+
 func makePanel(level: NSWindow.Level, focusable: Bool) -> NSPanel {
     let panel = OverlayPanel(focusable: focusable)
     panel.level = level
@@ -899,6 +972,9 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let rootView = NSView()
     private let surfaceView = NSView()
     private let titleBar = DraggableTitleBarView()
+    private let metaStatsStackView = NSStackView()
+    private let statDetailView = NSVisualEffectView()
+    private let statDetailLabel = NSTextField(wrappingLabelWithString: "")
     private let eyebrowLabel = NSTextField(labelWithString: "语音助手")
     private let titleLabel = NSTextField(labelWithString: "回答结果")
     private let copyButton = PanelActionButton(title: "复制", target: nil, action: nil)
@@ -908,6 +984,9 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private let height: CGFloat = 468
     private let outerInset: CGFloat = 8
     private var currentMarkdown = ""
+    private var currentDisplayMarkdown = ""
+    private var metaStatsHeightConstraint: NSLayoutConstraint?
+    private var statDetailHeightConstraint: NSLayoutConstraint?
     private var copyResetWorkItem: DispatchWorkItem?
     private var keyMonitor: Any?
 
@@ -952,6 +1031,29 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         titleLabel.font = NSFont.systemFont(ofSize: 22, weight: .bold)
         titleLabel.textColor = OverlayTheme.ink
 
+        metaStatsStackView.orientation = .horizontal
+        metaStatsStackView.alignment = .centerY
+        metaStatsStackView.spacing = 8
+        metaStatsStackView.edgeInsets = NSEdgeInsets(top: 0, left: 22, bottom: 0, right: 22)
+        metaStatsStackView.translatesAutoresizingMaskIntoConstraints = false
+
+        statDetailView.material = .hudWindow
+        statDetailView.blendingMode = .withinWindow
+        statDetailView.state = .active
+        statDetailView.wantsLayer = true
+        statDetailView.isHidden = true
+        statDetailView.layer?.cornerRadius = 14
+        statDetailView.layer?.cornerCurve = .continuous
+        statDetailView.layer?.borderWidth = 1
+        statDetailView.layer?.borderColor = OverlayTheme.cardBorder.cgColor
+        statDetailView.translatesAutoresizingMaskIntoConstraints = false
+
+        statDetailLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        statDetailLabel.textColor = OverlayTheme.ink
+        statDetailLabel.maximumNumberOfLines = 6
+        statDetailLabel.lineBreakMode = .byTruncatingTail
+        statDetailLabel.translatesAutoresizingMaskIntoConstraints = false
+
         styleButton(copyButton, filled: true)
         styleButton(closeButton, filled: false)
         copyButton.target = self
@@ -964,17 +1066,25 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         webView.allowsBackForwardNavigationGestures = false
         webView.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [surfaceView, titleBar, eyebrowLabel, titleLabel, copyButton, closeButton, webView] {
+        for view in [surfaceView, titleBar, metaStatsStackView, statDetailView, statDetailLabel, eyebrowLabel, titleLabel, copyButton, closeButton, webView] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
 
         rootView.addSubview(surfaceView)
         surfaceView.addSubview(titleBar)
+        surfaceView.addSubview(metaStatsStackView)
+        surfaceView.addSubview(statDetailView)
+        statDetailView.addSubview(statDetailLabel)
         titleBar.addSubview(eyebrowLabel)
         titleBar.addSubview(titleLabel)
         titleBar.addSubview(copyButton)
         titleBar.addSubview(closeButton)
         surfaceView.addSubview(webView)
+
+        metaStatsHeightConstraint = metaStatsStackView.heightAnchor.constraint(equalToConstant: 0)
+        metaStatsHeightConstraint?.isActive = true
+        statDetailHeightConstraint = statDetailView.heightAnchor.constraint(equalToConstant: 0)
+        statDetailHeightConstraint?.isActive = true
 
         NSLayoutConstraint.activate([
             surfaceView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: outerInset),
@@ -986,6 +1096,19 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
             titleBar.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor),
             titleBar.topAnchor.constraint(equalTo: surfaceView.topAnchor),
             titleBar.heightAnchor.constraint(equalToConstant: 88),
+
+            metaStatsStackView.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor),
+            metaStatsStackView.trailingAnchor.constraint(lessThanOrEqualTo: surfaceView.trailingAnchor, constant: -18),
+            metaStatsStackView.topAnchor.constraint(equalTo: titleBar.bottomAnchor, constant: 2),
+
+            statDetailView.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor, constant: 22),
+            statDetailView.trailingAnchor.constraint(lessThanOrEqualTo: surfaceView.trailingAnchor, constant: -22),
+            statDetailView.topAnchor.constraint(equalTo: metaStatsStackView.bottomAnchor, constant: 6),
+
+            statDetailLabel.leadingAnchor.constraint(equalTo: statDetailView.leadingAnchor, constant: 12),
+            statDetailLabel.trailingAnchor.constraint(equalTo: statDetailView.trailingAnchor, constant: -12),
+            statDetailLabel.topAnchor.constraint(equalTo: statDetailView.topAnchor, constant: 10),
+            statDetailLabel.bottomAnchor.constraint(equalTo: statDetailView.bottomAnchor, constant: -10),
 
             eyebrowLabel.leadingAnchor.constraint(equalTo: titleBar.leadingAnchor, constant: 22),
             eyebrowLabel.topAnchor.constraint(equalTo: titleBar.topAnchor, constant: 18),
@@ -1005,7 +1128,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 
             webView.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor, constant: 18),
             webView.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor, constant: -18),
-            webView.topAnchor.constraint(equalTo: titleBar.bottomAnchor, constant: 4),
+            webView.topAnchor.constraint(equalTo: statDetailView.bottomAnchor, constant: 8),
             webView.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor, constant: -18)
         ])
     }
@@ -1022,12 +1145,19 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         }
     }
 
-    func show(markdown: String) {
+    func show(markdown: String, detailsMarkdown: String? = nil, stats: [[String: String]] = []) {
         currentMarkdown = markdown
+        currentDisplayMarkdown = stats.isEmpty ? [markdown, detailsMarkdown]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n") : markdown
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
+        updateStats(stats)
         positionOnActiveScreen()
-        loadMarkdown(markdown)
+        loadMarkdown(currentDisplayMarkdown)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(webView)
@@ -1055,6 +1185,73 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private func loadMarkdown(_ markdown: String) {
         let html = MarkdownTemplateRenderer.render(markdown)
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    private func updateStats(_ stats: [[String: String]]) {
+        metaStatsStackView.arrangedSubviews.forEach { view in
+            metaStatsStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        showStatDetail(nil)
+
+        guard !stats.isEmpty else {
+            metaStatsHeightConstraint?.constant = 0
+            return
+        }
+
+        for stat in stats {
+            guard let kind = stat["kind"],
+                  let value = stat["value"],
+                  let detail = stat["detail"] else { continue }
+            let badge = ResultStatBadgeView(
+                symbolName: symbolName(for: kind),
+                value: value,
+                detail: detail
+            )
+            badge.onHoverChange = { [weak self] isHovering, detailText, _ in
+                guard let self else { return }
+                self.showStatDetail(isHovering ? detailText : nil)
+            }
+            metaStatsStackView.addArrangedSubview(badge)
+        }
+
+        metaStatsHeightConstraint?.constant = metaStatsStackView.arrangedSubviews.isEmpty ? 0 : 24
+    }
+
+    private func symbolName(for kind: String) -> String {
+        switch kind {
+        case "tokens-total":
+            return "circle.hexagongrid.fill"
+        case "tokens-thinking":
+            return "brain.head.profile"
+        case "code-interpreter":
+            return "terminal"
+        case "web-search":
+            return "globe"
+        case "web-extractor":
+            return "doc.text.magnifyingglass"
+        default:
+            return "info.circle"
+        }
+    }
+
+    private func showStatDetail(_ detail: String?) {
+        guard let detail, !detail.isEmpty else {
+            statDetailLabel.stringValue = ""
+            statDetailHeightConstraint?.constant = 0
+            statDetailView.isHidden = true
+            return
+        }
+
+        statDetailLabel.stringValue = detail
+        statDetailView.isHidden = false
+        let measured = NSString(string: detail).boundingRect(
+            with: NSSize(width: 340, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: statDetailLabel.font ?? NSFont.systemFont(ofSize: 12)],
+            context: nil
+        )
+        statDetailHeightConstraint?.constant = min(max(ceil(measured.height) + 20, 38), 140)
     }
 
     @objc private func handleCopy() {
@@ -1434,7 +1631,9 @@ final class OverlayCoordinator {
             outputOverlayError("Invalid result payload")
             return
         }
-        resultController.show(markdown: text)
+        let detailsMarkdown = payload["detailsMarkdown"] as? String
+        let stats = payload["stats"] as? [[String: String]] ?? []
+        resultController.show(markdown: text, detailsMarkdown: detailsMarkdown, stats: stats)
     }
 
     func hideResult() {

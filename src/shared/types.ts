@@ -11,6 +11,12 @@ export type InputMethod = 'clipboard' | 'applescript'
 export type AssistantOutputMode = 'input' | 'window'
 export type OverlayVisualMode = 'recording' | 'processing' | 'success' | 'error'
 export type OverlayResultFormat = 'markdown'
+export type OverlayResultStatKind =
+  | 'tokens-total'
+  | 'tokens-thinking'
+  | 'code-interpreter'
+  | 'web-search'
+  | 'web-extractor'
 
 // 语音模式：语音识别 / 语音助手
 export type VoiceMode = 'transcription' | 'assistant'
@@ -25,6 +31,14 @@ export interface OverlayHudPayload {
 export interface OverlayResultPayload {
   text: string
   format: OverlayResultFormat
+  detailsMarkdown?: string
+  stats?: OverlayResultStat[]
+}
+
+export interface OverlayResultStat {
+  kind: OverlayResultStatKind
+  value: string
+  detail: string
 }
 
 export interface PolishPreset {
@@ -77,6 +91,9 @@ export interface AppConfig {
   assistantPrePolish: boolean  // 是否先进行AI润色
   assistantOutputMode: AssistantOutputMode
   assistantModel: string
+  assistantEnableThinking: boolean
+  assistantEnableSearch: boolean
+  assistantEnableCodeInterpreter: boolean
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -188,6 +205,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantPrePolish: false,  // 默认不先润色
   assistantOutputMode: 'window',
   assistantModel: 'qwen3.5-flash',
+  assistantEnableThinking: false,
+  assistantEnableSearch: false,
+  assistantEnableCodeInterpreter: false,
   assistantPrompt: ASSISTANT_DEFAULT_PROMPT,
   assistantPresets: [...ASSISTANT_BUILTIN_PRESETS],
   assistantActivePresetIndex: 0,

@@ -333,6 +333,29 @@ async function setAssistantOutputMode(mode: 'input' | 'window'): Promise<void> {
   showSaveMessage('助手输出方式已保存')
 }
 
+async function toggleAssistantThinking(): Promise<void> {
+  if (store.assistantEnableCodeInterpreter) return
+  store.assistantEnableThinking = !store.assistantEnableThinking
+  await store.saveSetting('assistantEnableThinking', store.assistantEnableThinking)
+  showSaveMessage('助手思考模式已更新')
+}
+
+async function toggleAssistantSearch(): Promise<void> {
+  store.assistantEnableSearch = !store.assistantEnableSearch
+  await store.saveSetting('assistantEnableSearch', store.assistantEnableSearch)
+  showSaveMessage('助手联网搜索已更新')
+}
+
+async function toggleAssistantCodeInterpreter(): Promise<void> {
+  store.assistantEnableCodeInterpreter = !store.assistantEnableCodeInterpreter
+  await store.saveSetting('assistantEnableCodeInterpreter', store.assistantEnableCodeInterpreter)
+  if (store.assistantEnableCodeInterpreter && !store.assistantEnableThinking) {
+    store.assistantEnableThinking = true
+    await store.saveSetting('assistantEnableThinking', true)
+  }
+  showSaveMessage('助手 Python 解释器已更新')
+}
+
 // Screenshot toggle
 async function toggleScreenshot(): Promise<void> {
   store.screenshotEnabled = !store.screenshotEnabled
@@ -498,6 +521,19 @@ async function deletePreset(index: number): Promise<void> {
 
 const editingPresetName = ref(false)
 const editPresetNameValue = ref('')
+const showCustomAsrModel = ref(false)
+const showCustomPolishModel = ref(false)
+const showCustomAssistantModel = ref(false)
+
+function isCustomModel(model: string, presets: readonly string[]): boolean {
+  return !presets.includes(model)
+}
+
+function syncCustomModelState(): void {
+  showCustomAsrModel.value = isCustomModel(store.asrModel, ASR_MODEL_PRESETS)
+  showCustomPolishModel.value = isCustomModel(store.polishModel, TEXT_MODEL_PRESETS)
+  showCustomAssistantModel.value = isCustomModel(store.assistantModel, TEXT_MODEL_PRESETS)
+}
 
 function startEditPresetName(index: number): void {
   editingPresetName.value = true
@@ -547,6 +583,24 @@ async function savePolishModel(): Promise<void> {
 async function saveAssistantModel(): Promise<void> {
   await store.saveSetting('assistantModel', store.assistantModel)
   showSaveMessage('助手模型已保存')
+}
+
+async function selectAsrModel(model: string): Promise<void> {
+  store.asrModel = model
+  showCustomAsrModel.value = false
+  await saveAsrModel()
+}
+
+async function selectPolishModel(model: string): Promise<void> {
+  store.polishModel = model
+  showCustomPolishModel.value = false
+  await savePolishModel()
+}
+
+async function selectAssistantModel(model: string): Promise<void> {
+  store.assistantModel = model
+  showCustomAssistantModel.value = false
+  await saveAssistantModel()
 }
 
 async function savePolishBaseUrl(): Promise<void> {
@@ -693,6 +747,7 @@ async function copyRecord(record: TranscriptionRecord): Promise<void> {
 onMounted(async () => {
   try {
     await store.loadSettings()
+    syncCustomModelState()
     asrApiKeyInput.value = store.asrApiKey
     polishApiKeyInput.value = store.polishApiKey
     version.value = await window.electronAPI.getVersion()
@@ -1146,13 +1201,28 @@ onUnmounted(() => {
         <h2 class="section-title">语音识别</h2>
           <div class="setting-group">
             <label class="setting-label">识别模型</label>
-            <p class="setting-description">选择语音识别阶段使用的 ASR 模型，可直接输入自定义模型名。</p>
-            <div class="setting-row">
+            <p class="setting-description">直接选择常用 ASR 模型；如果需要，也可以展开自定义模型名。</p>
+            <div class="model-chip-list">
+              <button
+                v-for="model in ASR_MODEL_PRESETS"
+                :key="model"
+                :class="['preset-chip', { active: store.asrModel === model && !showCustomAsrModel }]"
+                @click="selectAsrModel(model)"
+              >
+                {{ model }}
+              </button>
+              <button
+                :class="['preset-chip', 'preset-add', { active: showCustomAsrModel }]"
+                @click="showCustomAsrModel = !showCustomAsrModel"
+              >
+                + 自定义
+              </button>
+            </div>
+            <div v-if="showCustomAsrModel" class="setting-row model-custom-row">
               <input
                 v-model="store.asrModel"
-                list="asr-model-presets"
                 class="input-field"
-                placeholder="qwen3-asr-flash-realtime"
+                placeholder="输入自定义 ASR 模型名"
               />
               <button class="btn btn-primary" @click="saveAsrModel">保存</button>
             </div>
@@ -1161,12 +1231,27 @@ onUnmounted(() => {
           <div class="setting-group">
             <label class="setting-label">润色模型</label>
             <p class="setting-description">当启用 AI 润色时，使用这个模型处理最终文本。</p>
-            <div class="setting-row">
+            <div class="model-chip-list">
+              <button
+                v-for="model in TEXT_MODEL_PRESETS"
+                :key="model"
+                :class="['preset-chip', { active: store.polishModel === model && !showCustomPolishModel }]"
+                @click="selectPolishModel(model)"
+              >
+                {{ model }}
+              </button>
+              <button
+                :class="['preset-chip', 'preset-add', { active: showCustomPolishModel }]"
+                @click="showCustomPolishModel = !showCustomPolishModel"
+              >
+                + 自定义
+              </button>
+            </div>
+            <div v-if="showCustomPolishModel" class="setting-row model-custom-row">
               <input
                 v-model="store.polishModel"
-                list="text-model-presets"
                 class="input-field"
-                placeholder="qwen3.5-flash"
+                placeholder="输入自定义润色模型名"
               />
               <button class="btn btn-primary" @click="savePolishModel">保存</button>
             </div>
@@ -1245,15 +1330,80 @@ onUnmounted(() => {
         <h2 class="section-title">语音助手</h2>
           <div class="setting-group">
             <label class="setting-label">助手模型</label>
-            <p class="setting-description">选择语音助手回答时使用的模型，可直接输入自定义模型名。</p>
-            <div class="setting-row">
+            <p class="setting-description">选择语音助手回答时使用的模型，也可以展开自定义模型名。</p>
+            <div class="model-chip-list">
+              <button
+                v-for="model in TEXT_MODEL_PRESETS"
+                :key="model"
+                :class="['preset-chip', { active: store.assistantModel === model && !showCustomAssistantModel }]"
+                @click="selectAssistantModel(model)"
+              >
+                {{ model }}
+              </button>
+              <button
+                :class="['preset-chip', 'preset-add', { active: showCustomAssistantModel }]"
+                @click="showCustomAssistantModel = !showCustomAssistantModel"
+              >
+                + 自定义
+              </button>
+            </div>
+            <div v-if="showCustomAssistantModel" class="setting-row model-custom-row">
               <input
                 v-model="store.assistantModel"
-                list="text-model-presets"
                 class="input-field"
-                placeholder="qwen3.5-flash"
+                placeholder="输入自定义助手模型名"
               />
               <button class="btn btn-primary" @click="saveAssistantModel">保存</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">能力选项</label>
+            <div class="toggle-stack">
+              <div class="toggle-row">
+                <div>
+                  <div class="setting-label toggle-title">深度思考</div>
+                  <div class="setting-description toggle-description">
+                    {{ store.assistantEnableCodeInterpreter
+                      ? '只对语音助手生效。代码解释器模式依赖思考能力，所以这里会自动保持开启。'
+                      : '只对语音助手生效。打开后通常回答更完整，但等待时间也会更长。'
+                    }}
+                  </div>
+                </div>
+                <button
+                  :class="['toggle', { active: store.assistantEnableThinking, disabled: store.assistantEnableCodeInterpreter }]"
+                  :disabled="store.assistantEnableCodeInterpreter"
+                  @click="toggleAssistantThinking"
+                >
+                  <span class="toggle-thumb"></span>
+                </button>
+              </div>
+
+              <div class="toggle-row">
+                <div>
+                  <div class="setting-label toggle-title">联网搜索</div>
+                  <div class="setting-description toggle-description">只对语音助手生效。仅当当前模型支持联网搜索时才会真正生效。</div>
+                </div>
+                <button
+                  :class="['toggle', { active: store.assistantEnableSearch }]"
+                  @click="toggleAssistantSearch"
+                >
+                  <span class="toggle-thumb"></span>
+                </button>
+              </div>
+
+              <div class="toggle-row">
+                <div>
+                  <div class="setting-label toggle-title">Python 解释器</div>
+                  <div class="setting-description toggle-description">只对语音助手生效。打开后会改用工具调用模式，支持执行 Python 代码，并在结果弹窗中展示工具次数和 Token 消耗。</div>
+                </div>
+                <button
+                  :class="['toggle', { active: store.assistantEnableCodeInterpreter }]"
+                  @click="toggleAssistantCodeInterpreter"
+                >
+                  <span class="toggle-thumb"></span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1404,13 +1554,6 @@ onUnmounted(() => {
           <p class="about-author">作者：梦北</p>
         </div>
       </div>
-
-      <datalist id="asr-model-presets">
-        <option v-for="model in ASR_MODEL_PRESETS" :key="model" :value="model" />
-      </datalist>
-      <datalist id="text-model-presets">
-        <option v-for="model in TEXT_MODEL_PRESETS" :key="model" :value="model" />
-      </datalist>
     </main>
   </div>
 </template>
@@ -1619,6 +1762,21 @@ onUnmounted(() => {
   border-radius: var(--radius);
 }
 
+.toggle-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toggle-title {
+  margin-bottom: 2px;
+}
+
+.toggle-description {
+  margin-bottom: 0;
+  max-width: 540px;
+}
+
 .toggle {
   position: relative;
   width: 44px;
@@ -1723,6 +1881,16 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.model-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-custom-row {
+  margin-top: 10px;
 }
 
 .preset-chip {

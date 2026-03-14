@@ -30,6 +30,9 @@ interface StoreSchema {
   assistantPrePolish: boolean
   assistantOutputMode: AssistantOutputMode
   assistantModel: string
+  assistantEnableThinking: boolean
+  assistantEnableSearch: boolean
+  assistantEnableCodeInterpreter: boolean
   assistantPrompt: string
   assistantPresets: PolishPreset[]
   assistantActivePresetIndex: number
@@ -91,6 +94,9 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantPrePolish: DEFAULT_CONFIG.assistantPrePolish,
       assistantOutputMode: DEFAULT_CONFIG.assistantOutputMode,
       assistantModel: DEFAULT_CONFIG.assistantModel,
+      assistantEnableThinking: DEFAULT_CONFIG.assistantEnableThinking,
+      assistantEnableSearch: DEFAULT_CONFIG.assistantEnableSearch,
+      assistantEnableCodeInterpreter: DEFAULT_CONFIG.assistantEnableCodeInterpreter,
       assistantPrompt: DEFAULT_CONFIG.assistantPrompt,
       assistantPresets: DEFAULT_CONFIG.assistantPresets,
       assistantActivePresetIndex: DEFAULT_CONFIG.assistantActivePresetIndex,
@@ -188,6 +194,9 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantPrePolish: s.get('assistantPrePolish') ?? DEFAULT_CONFIG.assistantPrePolish,
     assistantOutputMode: s.get('assistantOutputMode') ?? DEFAULT_CONFIG.assistantOutputMode,
     assistantModel: s.get('assistantModel') ?? s.get('polishModel') ?? DEFAULT_CONFIG.assistantModel,
+    assistantEnableThinking: s.get('assistantEnableThinking') ?? DEFAULT_CONFIG.assistantEnableThinking,
+    assistantEnableSearch: s.get('assistantEnableSearch') ?? DEFAULT_CONFIG.assistantEnableSearch,
+    assistantEnableCodeInterpreter: s.get('assistantEnableCodeInterpreter') ?? DEFAULT_CONFIG.assistantEnableCodeInterpreter,
     assistantPrompt: s.get('assistantPrompt') ?? DEFAULT_CONFIG.assistantPrompt,
     assistantPresets: s.get('assistantPresets') ?? DEFAULT_CONFIG.assistantPresets,
     assistantActivePresetIndex: s.get('assistantActivePresetIndex') ?? DEFAULT_CONFIG.assistantActivePresetIndex,

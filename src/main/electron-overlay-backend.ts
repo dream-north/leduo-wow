@@ -65,7 +65,10 @@ export class ElectronOverlayBackend implements OverlayBackend {
   showResult(payload: OverlayResultPayload): void {
     const assistantResultWindow = this.getOrCreateAssistantResultWindow()
     if (!assistantResultWindow || assistantResultWindow.isDestroyed()) return
-    showAssistantResultWindow(assistantResultWindow, payload.text)
+    showAssistantResultWindow(assistantResultWindow, {
+      text: payload.text,
+      detailsMarkdown: payload.detailsMarkdown
+    })
   }
 
   hideResult(): void {

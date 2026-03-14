@@ -2,8 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 
 const assistantResultAPI = {
-  onUpdate: (callback: (data: { text: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { text: string }) => callback(data)
+  onUpdate: (callback: (data: { text: string; detailsMarkdown?: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { text: string; detailsMarkdown?: string }) => callback(data)
     ipcRenderer.on(IPC.ASSISTANT_RESULT_UPDATE, handler)
     return () => ipcRenderer.removeListener(IPC.ASSISTANT_RESULT_UPDATE, handler)
   },

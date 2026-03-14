@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 declare global {
   interface Window {
     assistantResultAPI: {
-      onUpdate: (callback: (data: { text: string }) => void) => () => void
+      onUpdate: (callback: (data: { text: string; detailsMarkdown?: string }) => void) => () => void
       onHide: (callback: () => void) => () => void
       copyToClipboard: (text: string) => void
       closeWindow: () => void
@@ -13,6 +13,7 @@ declare global {
 }
 
 const text = ref('')
+const detailsMarkdown = ref('')
 const copied = ref(false)
 let cleanupUpdate: (() => void) | null = null
 let cleanupHide: (() => void) | null = null
@@ -44,6 +45,7 @@ function handleClose(): void {
 onMounted(() => {
   cleanupUpdate = window.assistantResultAPI.onUpdate((data) => {
     text.value = data.text
+    detailsMarkdown.value = data.detailsMarkdown ?? ''
     copied.value = false
     clearCopiedTimer()
   })
@@ -77,6 +79,9 @@ onUnmounted(() => {
 
       <div class="result-body">
         <pre class="result-text">{{ text }}</pre>
+        <div v-if="detailsMarkdown" class="result-meta">
+          <pre class="result-meta-text">{{ detailsMarkdown }}</pre>
+        </div>
       </div>
     </div>
   </div>
@@ -161,6 +166,21 @@ h1 {
   color: #0f172a;
   font-size: 14px;
   line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.result-meta {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.result-meta-text {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;

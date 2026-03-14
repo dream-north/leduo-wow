@@ -3,6 +3,7 @@ import { EventEmitter } from 'events'
 import { writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { join } from 'path'
 import { PipelineStatus, VoiceMode } from '../shared/types'
+import type { OverlayResultStat } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { ASRClient } from './asr-client'
 import { LLMPolisher } from './llm-polisher'
@@ -23,6 +24,8 @@ export class Pipeline extends EventEmitter {
   private isProcessingComplete: boolean = false
   private screenshotActive: boolean = false
   private appCheckTimer: ReturnType<typeof setInterval> | null = null
+  private latestAssistantDetailsMarkdown: string | undefined
+  private latestAssistantStats: OverlayResultStat[] | undefined
 
   constructor(overlay: OverlayBackend, configStore: ConfigStore) {
     super()
@@ -232,6 +235,8 @@ export class Pipeline extends EventEmitter {
 
     const config = getConfig(this.configStore)
     let outputText = text
+    this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantStats = undefined
 
     if (this.currentMode === 'transcription' && config.polishEnabled) {
       const apiKey = config.polishApiKey
@@ -303,16 +308,39 @@ export class Pipeline extends EventEmitter {
           }
 
           const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
-          outputText = await polisher.polishStream(
-            userPrompt,
-            config.assistantPrompt,
-            this.screenshotBase64 || undefined,
-            () => {
-              if (this.status === PipelineStatus.POLISHING) {
-                this.showHud('正在思考...', 'processing')
+          if (config.assistantEnableCodeInterpreter) {
+            const assistantResult = await polisher.respondWithTools(
+              userPrompt,
+              config.assistantPrompt,
+              this.screenshotBase64 || undefined,
+              {
+                enableThinking: config.assistantEnableThinking,
+                enableSearch: config.assistantEnableSearch,
+                enableCodeInterpreter: config.assistantEnableCodeInterpreter
               }
-            }
-          )
+            )
+            outputText = assistantResult.text
+            this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+            this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+          } else {
+            const assistantResult = await polisher.polishStreamWithMetadata(
+              userPrompt,
+              config.assistantPrompt,
+              this.screenshotBase64 || undefined,
+              () => {
+                if (this.status === PipelineStatus.POLISHING) {
+                  this.showHud('正在思考...', 'processing')
+                }
+              },
+              {
+                enableThinking: config.assistantEnableThinking,
+                enableSearch: config.assistantEnableSearch
+              }
+            )
+            outputText = assistantResult.text
+            this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+            this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+          }
         } catch (err) {
           console.error('Assistant error:', err)
           outputText = text
@@ -328,7 +356,9 @@ export class Pipeline extends EventEmitter {
       if (this.currentMode === 'assistant' && config.assistantOutputMode === 'window') {
         this.overlay.showResult({
           text: outputText,
-          format: 'markdown'
+          format: 'markdown',
+          detailsMarkdown: this.latestAssistantDetailsMarkdown,
+          stats: this.latestAssistantStats
         })
       } else {
         const inputter = new TextInputter()
@@ -369,6 +399,8 @@ export class Pipeline extends EventEmitter {
     this.partialText = ''
     this.screenshotBase64 = ''
     this.screenshotActive = false
+    this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantStats = undefined
     this.isProcessingComplete = false
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
@@ -384,6 +416,8 @@ export class Pipeline extends EventEmitter {
     }
     this.partialText = ''
     this.screenshotActive = false
+    this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantStats = undefined
     this.isProcessingComplete = true
     this.broadcastToWindows(IPC.AUDIO_STOP)
     this.setStatus(PipelineStatus.IDLE)
@@ -404,6 +438,109 @@ export class Pipeline extends EventEmitter {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  private buildAssistantDetailsMarkdown(usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    reasoningTokens?: number
+    reasoningContent?: string
+    tools?: {
+      codeInterpreterCount?: number
+      webSearchCount?: number
+      webExtractorCount?: number
+    }
+  }): string | undefined {
+    if (!usage) return undefined
+
+    const lines: string[] = ['---', '## 运行信息']
+
+    if (usage.totalTokens != null || usage.inputTokens != null || usage.outputTokens != null) {
+      lines.push('')
+      if (usage.totalTokens != null) lines.push(`- 总 Token：${usage.totalTokens}`)
+      if (usage.inputTokens != null) lines.push(`- 输入 Token：${usage.inputTokens}`)
+      if (usage.outputTokens != null) lines.push(`- 输出 Token：${usage.outputTokens}`)
+      if (usage.reasoningTokens != null) lines.push(`- 思考 Token：${usage.reasoningTokens}`)
+    }
+
+    const toolLines = [
+      usage.tools?.codeInterpreterCount != null ? `- 代码解释器调用次数：${usage.tools.codeInterpreterCount}` : null,
+      usage.tools?.webSearchCount != null ? `- 联网搜索调用次数：${usage.tools.webSearchCount}` : null,
+      usage.tools?.webExtractorCount != null ? `- 网页提取调用次数：${usage.tools.webExtractorCount}` : null
+    ].filter(Boolean) as string[]
+
+    if (toolLines.length > 0) {
+      lines.push('', '### 工具调用')
+      lines.push(...toolLines)
+    }
+
+    if (usage.reasoningContent) {
+      lines.push('', '### 思考过程', usage.reasoningContent)
+    }
+
+    return lines.length > 2 ? lines.join('\n') : undefined
+  }
+
+  private buildAssistantStats(usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    reasoningTokens?: number
+    reasoningContent?: string
+    tools?: {
+      codeInterpreterCount?: number
+      webSearchCount?: number
+      webExtractorCount?: number
+    }
+  }): OverlayResultStat[] | undefined {
+    if (!usage) return undefined
+
+    const stats: OverlayResultStat[] = []
+
+    if (usage.totalTokens != null) {
+      stats.push({
+        kind: 'tokens-total',
+        value: `${usage.totalTokens}`,
+        detail: `总 Token ${usage.totalTokens}${usage.inputTokens != null ? `，输入 ${usage.inputTokens}` : ''}${usage.outputTokens != null ? `，输出 ${usage.outputTokens}` : ''}`
+      })
+    }
+
+    if (usage.reasoningTokens != null) {
+      stats.push({
+        kind: 'tokens-thinking',
+        value: `${usage.reasoningTokens}`,
+        detail: usage.reasoningContent
+          ? `思考 Token ${usage.reasoningTokens}\n\n思考过程：\n${usage.reasoningContent}`
+          : `思考 Token ${usage.reasoningTokens}`
+      })
+    }
+
+    if (usage.tools?.codeInterpreterCount != null) {
+      stats.push({
+        kind: 'code-interpreter',
+        value: `${usage.tools.codeInterpreterCount}`,
+        detail: `代码解释器调用 ${usage.tools.codeInterpreterCount} 次`
+      })
+    }
+
+    if (usage.tools?.webSearchCount != null) {
+      stats.push({
+        kind: 'web-search',
+        value: `${usage.tools.webSearchCount}`,
+        detail: `联网搜索调用 ${usage.tools.webSearchCount} 次`
+      })
+    }
+
+    if (usage.tools?.webExtractorCount != null) {
+      stats.push({
+        kind: 'web-extractor',
+        value: `${usage.tools.webExtractorCount}`,
+        detail: `网页提取调用 ${usage.tools.webExtractorCount} 次`
+      })
+    }
+
+    return stats.length > 0 ? stats : undefined
   }
 
   private startAppCheckPolling(excludedApps: { name: string; bundleId: string }[]): void {

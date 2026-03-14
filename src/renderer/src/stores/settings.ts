@@ -80,6 +80,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantPrePolish = ref(false)
   const assistantOutputMode = ref<AssistantOutputMode>('window')
   const assistantModel = ref('qwen3.5-flash')
+  const assistantEnableThinking = ref(false)
+  const assistantEnableSearch = ref(false)
+  const assistantEnableCodeInterpreter = ref(false)
   const assistantPrompt = ref('')
   const assistantPresets = ref<PolishPreset[]>([...ASSISTANT_BUILTIN_PRESETS])
   const assistantActivePresetIndex = ref(0)
@@ -124,6 +127,9 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantPrePolish.value = config.assistantPrePolish ?? false
       assistantOutputMode.value = config.assistantOutputMode ?? 'window'
       assistantModel.value = config.assistantModel ?? config.polishModel ?? 'qwen3.5-flash'
+      assistantEnableThinking.value = config.assistantEnableThinking ?? false
+      assistantEnableSearch.value = config.assistantEnableSearch ?? false
+      assistantEnableCodeInterpreter.value = config.assistantEnableCodeInterpreter ?? false
       assistantPrompt.value = config.assistantPrompt ?? ''
       assistantPresets.value = config.assistantPresets ?? [...ASSISTANT_BUILTIN_PRESETS]
       assistantActivePresetIndex.value = config.assistantActivePresetIndex ?? 0
@@ -182,6 +188,9 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantPrePolish,
     assistantOutputMode,
     assistantModel,
+    assistantEnableThinking,
+    assistantEnableSearch,
+    assistantEnableCodeInterpreter,
     assistantPrompt,
     assistantPresets,
     assistantActivePresetIndex,

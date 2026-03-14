@@ -1,6 +1,32 @@
 import OpenAI from 'openai'
 import { POLISH_DEFAULT_BASE_URL } from '../shared/types'
 
+interface LLMRequestOptions {
+  enableThinking?: boolean
+  enableSearch?: boolean
+  enableCodeInterpreter?: boolean
+}
+
+interface AssistantToolUsage {
+  codeInterpreterCount?: number
+  webSearchCount?: number
+  webExtractorCount?: number
+}
+
+interface AssistantResponseUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  reasoningTokens?: number
+  reasoningContent?: string
+  tools?: AssistantToolUsage
+}
+
+export interface AssistantResponseResult {
+  text: string
+  usage?: AssistantResponseUsage
+}
+
 export class LLMPolisher {
   private client: OpenAI
   private model: string
@@ -30,10 +56,32 @@ export class LLMPolisher {
     return text
   }
 
-  async polish(text: string, systemPrompt: string, screenshotBase64?: string): Promise<string> {
+  private buildRequestOptions(options?: LLMRequestOptions): { enable_thinking: boolean; enable_search: boolean } {
+    return {
+      enable_thinking: Boolean(options?.enableThinking || options?.enableCodeInterpreter),
+      enable_search: options?.enableSearch ?? false
+    }
+  }
+
+  private buildResponsesBaseUrl(): string {
+    if (this.baseUrl.includes('/api/v2/apps/protocols/compatible-mode/v1')) {
+      return this.baseUrl
+    }
+    if (this.baseUrl === POLISH_DEFAULT_BASE_URL) {
+      return 'https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1'
+    }
+    return this.baseUrl
+  }
+
+  async polish(
+    text: string,
+    systemPrompt: string,
+    screenshotBase64?: string,
+    options?: LLMRequestOptions
+  ): Promise<string> {
     const startTime = Date.now()
     try {
-      // Use raw POST to guarantee enable_thinking: false is sent
+      // Use raw POST to guarantee extra body params are sent
       // The OpenAI SDK may silently drop unknown body params
       const response = await this.client.post('/chat/completions', {
         body: {
@@ -43,7 +91,7 @@ export class LLMPolisher {
             { role: 'user', content: this.buildUserContent(text, screenshotBase64) }
           ],
           temperature: 0.3,
-          enable_thinking: false
+          ...this.buildRequestOptions(options)
         }
       }) as OpenAI.Chat.Completions.ChatCompletion
 
@@ -60,8 +108,26 @@ export class LLMPolisher {
     text: string,
     systemPrompt: string,
     screenshotBase64: string | undefined,
-    onToken: (partialText: string) => void
+    onToken: (partialText: string) => void,
+    options?: LLMRequestOptions
   ): Promise<string> {
+    const result = await this.polishStreamWithMetadata(
+      text,
+      systemPrompt,
+      screenshotBase64,
+      onToken,
+      options
+    )
+    return result.text
+  }
+
+  async polishStreamWithMetadata(
+    text: string,
+    systemPrompt: string,
+    screenshotBase64: string | undefined,
+    onToken: (partialText: string) => void,
+    options?: LLMRequestOptions
+  ): Promise<AssistantResponseResult> {
     const startTime = Date.now()
     try {
       const hasImage = !!screenshotBase64
@@ -81,7 +147,10 @@ export class LLMPolisher {
           ],
           temperature: 0.3,
           stream: true,
-          enable_thinking: false
+          stream_options: {
+            include_usage: true
+          },
+          ...this.buildRequestOptions(options)
         })
       })
 
@@ -100,6 +169,8 @@ export class LLMPolisher {
       let buffer = ''
       let tokenCount = 0
       let firstTokenTime = 0
+      let reasoningContent = ''
+      let usage: AssistantResponseUsage | undefined
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
 
@@ -119,6 +190,24 @@ export class LLMPolisher {
 
           try {
             const parsed = JSON.parse(data)
+            if (!parsed.choices?.length) {
+              if (parsed.usage) {
+                usage = {
+                  inputTokens: parsed.usage.input_tokens,
+                  outputTokens: parsed.usage.output_tokens,
+                  totalTokens: parsed.usage.total_tokens,
+                  reasoningTokens: parsed.usage.output_tokens_details?.reasoning_tokens,
+                  reasoningContent: reasoningContent || undefined
+                }
+              }
+              continue
+            }
+
+            const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || ''
+            if (reasoningDelta) {
+              reasoningContent += reasoningDelta
+            }
+
             const delta = parsed.choices?.[0]?.delta?.content || ''
             if (delta) {
               tokenCount++
@@ -136,9 +225,82 @@ export class LLMPolisher {
       }
 
       console.log(`[LLMPolisher] Stream completed in ${Date.now() - startTime}ms, tokens=${tokenCount}, firstToken=${firstTokenTime}ms`)
-      return result.trim() || text
+      return {
+        text: result.trim() || text,
+        usage: usage ?? (reasoningContent
+          ? {
+              reasoningContent
+            }
+          : undefined)
+      }
     } catch (err) {
       console.error(`[LLMPolisher] Stream error after ${Date.now() - startTime}ms:`, err)
+      throw err
+    }
+  }
+
+  async respondWithTools(
+    text: string,
+    systemPrompt: string,
+    screenshotBase64: string | undefined,
+    options?: LLMRequestOptions
+  ): Promise<AssistantResponseResult> {
+    const startTime = Date.now()
+    const responseClient = new OpenAI({
+      apiKey: this.apiKey,
+      baseURL: this.buildResponsesBaseUrl()
+    })
+
+    const tools: Array<{ type: 'code_interpreter' | 'web_search' | 'web_extractor' }> = []
+    if (options?.enableCodeInterpreter) {
+      tools.push({ type: 'code_interpreter' })
+    }
+    if (options?.enableSearch) {
+      tools.push({ type: 'web_search' }, { type: 'web_extractor' })
+    }
+
+    const userContent: Array<{ type: 'input_text' | 'input_image'; text?: string; image_url?: string }> = [
+      { type: 'input_text', text }
+    ]
+
+    if (screenshotBase64) {
+      userContent.push({
+        type: 'input_image',
+        image_url: `data:image/jpeg;base64,${screenshotBase64}`
+      })
+    }
+
+    try {
+      const response = await responseClient.responses.create({
+        model: this.model,
+        input: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent }
+        ] as any,
+        tools,
+        enable_thinking: Boolean(options?.enableThinking || options?.enableCodeInterpreter)
+      } as any)
+
+      const usage = (response as any).usage
+      const xTools = usage?.x_tools
+      console.log(`[LLMPolisher] Responses completed in ${Date.now() - startTime}ms`)
+
+      return {
+        text: ((response as any).output_text as string | undefined)?.trim() || text,
+        usage: usage ? {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          totalTokens: usage.total_tokens,
+          reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
+          tools: {
+            codeInterpreterCount: xTools?.code_interpreter?.count,
+            webSearchCount: xTools?.web_search?.count,
+            webExtractorCount: xTools?.web_extractor?.count
+          }
+        } : undefined
+      }
+    } catch (err) {
+      console.error(`[LLMPolisher] Responses error after ${Date.now() - startTime}ms:`, err)
       throw err
     }
   }
