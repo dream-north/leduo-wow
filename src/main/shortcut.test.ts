@@ -127,7 +127,7 @@ describe('ShortcutService', () => {
     expect(status.modes.assistant.reason).toBe('unsupported_without_accessibility')
   })
 
-  it('starts the native backend when accessibility is granted', () => {
+  it('starts the native backend when accessibility is granted', async () => {
     mockState.accessibilityGranted = true
 
     const service = new ShortcutService({} as never, {
@@ -135,19 +135,20 @@ describe('ShortcutService', () => {
       cancel: vi.fn()
     } as never)
 
+    // refresh() alone won't start native backend - need ensureNativeBackendReady
     const status = service.refresh()
 
-    expect(mockState.keyboardListenerMock.start).toHaveBeenCalledTimes(1)
-    expect(mockState.keyboardListenerMock.setShortcuts).toHaveBeenCalledWith([
-      { id: 'transcription', shortcut: 'RightCommand' },
-      { id: 'assistant', shortcut: 'RightOption' }
-    ])
-    expect(status.backendState).toBe('native')
-    expect(status.modes.transcription.backendState).toBe('native')
-    expect(status.modes.assistant.backendState).toBe('native')
+    // Should be disabled since RightCommand/RightOption are not fallback-compatible
+    // and native backend isn't started yet
+    expect(status.backendState).toBe('disabled')
+
+    // Now explicitly ensure native backend is ready
+    const ready = await service.ensureNativeBackendReady(1, 10)
+    expect(ready).toBe(true)
+    expect(mockState.keyboardListenerMock.forceRestart).toHaveBeenCalled()
   })
 
-  it('hot-switches to the native backend during accessibility polling', () => {
+  it('hot-switches to the native backend during accessibility polling', async () => {
     mockState.currentConfig = {
       transcriptionShortcut: 'Command+Space',
       assistantShortcut: 'RightOption'
@@ -167,13 +168,17 @@ describe('ShortcutService', () => {
 
     const status = service.getStatus()
 
-    expect(mockState.keyboardListenerMock.start).toHaveBeenCalled()
+    // refresh() during polling should stop native backend if not ready
+    // and use fallback instead
     expect(status.permissionState).toBe('granted')
-    expect(status.backendState).toBe('native')
+    // Native backend needs ensureNativeBackendReady to start
+    expect(status.backendState).toBe('fallback')
+
+    vi.useRealTimers()
   })
 
 
-  it('restarts native listener when accessibility changes from missing to granted', () => {
+  it('restarts native listener when accessibility changes from missing to granted', async () => {
     const service = new ShortcutService({} as never, {
       toggle: vi.fn(),
       cancel: vi.fn()
@@ -186,8 +191,14 @@ describe('ShortcutService', () => {
     mockState.accessibilityGranted = true
     const status = service.refresh()
 
-    // When accessibility is granted, native backend should be started (via restart -> start)
-    expect(mockState.keyboardListenerMock.start).toHaveBeenCalledTimes(1)
-    expect(status.backendState).toBe('native')
+    // refresh() won't auto-start native backend, needs ensureNativeBackendReady
+    expect(mockState.keyboardListenerMock.forceRestart).not.toHaveBeenCalled()
+    // RightCommand/RightOption are not fallback-compatible, so backend is disabled
+    expect(status.backendState).toBe('disabled')
+
+    // Now explicitly start via ensureNativeBackendReady
+    const ready = await service.ensureNativeBackendReady(1, 10)
+    expect(ready).toBe(true)
+    expect(mockState.keyboardListenerMock.forceRestart).toHaveBeenCalled()
   })
 })

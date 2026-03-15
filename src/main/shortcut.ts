@@ -160,10 +160,10 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
       return true
     }
 
-    // If started but event tap not ready, force restart
-    if (this.started && !keyboardListener.isReady()) {
-      console.log('[MacNativeShortcutBackend] Started but event tap not ready, force restarting...')
-      return this.forceRestart()
+    // If started but event tap not ready, return false (caller should decide whether to restart)
+    if (this.started) {
+      console.log('[MacNativeShortcutBackend] Started but event tap not ready')
+      return false
     }
 
     // Not started yet, start fresh
@@ -338,11 +338,7 @@ export class ShortcutService extends EventEmitter {
     const config = getConfig(this.configStore)
     const permissions = checkPermissions()
     const hasAccessibility = permissions.accessibility
-    const accessibilityJustGranted = hasAccessibility && !this.wasAccessibilityGranted
     this.wasAccessibilityGranted = hasAccessibility
-
-    // Don't auto-restart here - let ensureNativeBackendReady handle it
-    // This prevents multiple processes from being spawned
 
     const shortcuts: ShortcutRegistration[] = [
       { id: 'transcription', shortcut: config.transcriptionShortcut || 'RightCommand' },
@@ -358,38 +354,32 @@ export class ShortcutService extends EventEmitter {
       this.fallbackBackend.stop()
 
       // If native backend was already confirmed ready, just update shortcuts
-      if (this.nativeBackendReady) {
+      if (this.nativeBackendReady && this.nativeBackend.isAvailable()) {
         this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
         backendState = 'native'
         reason = 'ready'
       } else {
-        // Try to start native backend
-        const started = this.nativeBackend.start()
-        // Check if the event tap is actually ready (not just process started)
-        if (started && this.nativeBackend.isAvailable()) {
-          this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
-          backendState = 'native'
-          reason = 'ready'
-        } else {
-          // Native backend started but event tap not ready yet, or failed to start
-          this.nativeBackend.stop()
-          const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
-          if (fallbackShortcuts.length > 0) {
-            this.fallbackBackend.start()
-            this.fallbackBackend.setShortcuts(fallbackShortcuts)
-            registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
-            if (registeredFallbackModes.size > 0) {
-              backendState = 'fallback'
-              reason = 'ready'
-            } else {
-              reason = 'backend_failed'
-            }
+        // Native backend not ready yet - don't start here, let ensureNativeBackendReady handle it
+        // Just use fallback for now
+        const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
+        if (fallbackShortcuts.length > 0) {
+          this.fallbackBackend.start()
+          this.fallbackBackend.setShortcuts(fallbackShortcuts)
+          registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
+          if (registeredFallbackModes.size > 0) {
+            backendState = 'fallback'
+            reason = 'ready'
+          } else {
+            reason = 'backend_failed'
           }
         }
       }
     } else {
+      // No accessibility permission - ensure native backend is stopped
       this.nativeBackendReady = false
       this.nativeBackend.stop()
+      this.stopAccessibilityPolling()
+
       const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
       if (fallbackShortcuts.length > 0) {
         this.fallbackBackend.start()
