@@ -15,9 +15,9 @@ interface OverlayManagerOptions {
 
 export class OverlayManager implements OverlayBackend {
   readonly id: string
-  private readonly activeBackend: OverlayBackend
-  private readonly nativeBackend?: OverlayBackend
-  private readonly fallbackBackend: OverlayBackend
+  private nativeBackend?: OverlayBackend
+  private fallbackBackend: OverlayBackend
+  private _activeBackend: OverlayBackend
 
   constructor(options: OverlayManagerOptions) {
     const platform = options.platform ?? process.platform
@@ -28,12 +28,18 @@ export class OverlayManager implements OverlayBackend {
       setAssistantResultWindow: options.setAssistantResultWindow
     })
 
-    const nativeReady = this.nativeBackend?.start() ?? false
-    this.activeBackend = nativeReady ? this.nativeBackend! : this.fallbackBackend
-    if (!nativeReady) {
-      this.fallbackBackend.start()
+    // Start with fallback, will switch to native when available
+    this.fallbackBackend.start()
+    this._activeBackend = this.fallbackBackend
+    this.id = this._activeBackend.id
+  }
+
+  private get activeBackend(): OverlayBackend {
+    // Check if native backend is now available (ShortcutService started it)
+    if (this.nativeBackend?.isAvailable() && this._activeBackend !== this.nativeBackend) {
+      this._activeBackend = this.nativeBackend
     }
-    this.id = this.activeBackend.id
+    return this._activeBackend
   }
 
   start(): boolean {
@@ -41,10 +47,10 @@ export class OverlayManager implements OverlayBackend {
   }
 
   destroy(): void {
-    if (this.nativeBackend && this.nativeBackend !== this.activeBackend) {
+    if (this.nativeBackend && this.nativeBackend !== this._activeBackend) {
       this.nativeBackend.destroy()
     }
-    this.activeBackend.destroy()
+    this._activeBackend.destroy()
   }
 
   isAvailable(): boolean {
