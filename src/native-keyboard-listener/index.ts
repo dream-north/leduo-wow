@@ -43,12 +43,14 @@ class SwiftKeyboardListener extends EventEmitter {
   private buffer: string = ''
   private refCount = 0
   private stopping = false
+  private eventTapReady: boolean = false
 
   private resetProcessState(): void {
     this.running = false
     this.process = null
     this.refCount = 0
     this.stopping = false
+    this.eventTapReady = false
   }
 
   /**
@@ -179,6 +181,37 @@ class SwiftKeyboardListener extends EventEmitter {
   }
 
   /**
+   * Force restart regardless of current state.
+   * This ensures the process is killed and restarted fresh.
+   */
+  forceRestart(): boolean {
+    console.log('[SwiftKeyboardListener] Force restarting...')
+
+    const preservedRefCount = Math.max(1, this.refCount)
+
+    // Force kill any existing process
+    if (this.process) {
+      try {
+        this.stopping = true
+        this.sendCommand({ command: 'stop' })
+        this.process.stdin?.end()
+        this.process.kill('SIGKILL')
+      } catch (err) {
+        console.error('[SwiftKeyboardListener] Error killing process:', err)
+      }
+    }
+
+    this.resetProcessState()
+
+    // Wait a bit for the process to fully terminate
+    const restarted = this.start()
+    if (restarted) {
+      this.refCount = preservedRefCount
+    }
+    return restarted
+  }
+
+  /**
    * Stop the Swift keyboard listener
    */
   stop(): void {
@@ -291,6 +324,20 @@ class SwiftKeyboardListener extends EventEmitter {
    * Process parsed event from Swift
    */
   private processEvent(event: Record<string, unknown>): void {
+    // Handle status responses (from start/stop commands)
+    if ('status' in event) {
+      const status = event.status as string
+      if (status === 'ok') {
+        this.eventTapReady = true
+        this.emit('start-success')
+      } else if (status === 'error') {
+        console.error('[SwiftKeyboardListener] Swift reported error status')
+        this.eventTapReady = false
+        this.emit('start-error')
+      }
+      return
+    }
+
     const type = event.type as string
 
     if (type === 'keydown') {
@@ -406,6 +453,15 @@ class SwiftKeyboardListener extends EventEmitter {
    */
   isRunning(): boolean {
     return this.running
+  }
+
+  /**
+   * Check if the event tap is ready (successfully started)
+   * This is different from isRunning() - the process may be running
+   * but the event tap may have failed to create due to permission issues
+   */
+  isReady(): boolean {
+    return this.running && this.eventTapReady
   }
 }
 

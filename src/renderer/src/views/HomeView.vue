@@ -20,6 +20,7 @@ const shortcuts = ref({
   assistant: 'RightOption'
 })
 const mustCompleteOnboarding = ref(false)
+const isEnsuringBackend = ref(false)
 let initialized = false
 
 const hasRequiredPermissions = computed(() => permissions.value.microphone && permissions.value.accessibility)
@@ -55,8 +56,22 @@ async function requestPermission(type: 'microphone' | 'accessibility' | 'screen'
   await refreshState()
 }
 
-function continueToSettings(): void {
+async function continueToSettings(): Promise<void> {
   if (!hasRequiredPermissions.value) return
+
+  // Ensure native backend is ready before continuing
+  if (permissions.value.accessibility) {
+    isEnsuringBackend.value = true
+    try {
+      const ready = await window.electronAPI.ensureNativeBackendReady()
+      if (!ready) {
+        console.warn('[HomeView] Native backend not ready after multiple attempts')
+      }
+    } finally {
+      isEnsuringBackend.value = false
+    }
+  }
+
   mustCompleteOnboarding.value = false
 }
 
@@ -82,6 +97,7 @@ onUnmounted(() => {
     v-else-if="showOnboarding"
     :permissions="permissions"
     :shortcuts="shortcuts"
+    :is-ensuring-backend="isEnsuringBackend"
     @request-permission="requestPermission"
     @refresh="refreshState"
     @continue="continueToSettings"
@@ -92,8 +108,6 @@ onUnmounted(() => {
 <style scoped>
 .home-loading {
   min-height: 100vh;
-  background:
-    linear-gradient(120deg, rgba(0, 113, 227, 0.06), transparent 30%),
-    var(--bg-primary);
+  background: #f5f5f7;
 }
 </style>

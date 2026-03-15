@@ -55,6 +55,9 @@ class SwiftKeyboardListener {
   getModifiers(): string[]
   getCurrentKeys(): string[]
   isRunning(): boolean
+  isReady(): boolean
+  on(event: 'start-success' | 'start-error', handler: () => void): void
+  on(event: string, handler: (...args: unknown[]) => void): void
 }
 
 export const keyboardListener: SwiftKeyboardListener

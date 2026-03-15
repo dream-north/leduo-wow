@@ -64,7 +64,8 @@ describe('HomeView', () => {
           }
         }
       })),
-      requestPermission: vi.fn(async () => false)
+      requestPermission: vi.fn(async () => false),
+      ensureNativeBackendReady: vi.fn(async () => true)
     } as never
   })
 

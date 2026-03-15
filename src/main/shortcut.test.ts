@@ -15,10 +15,13 @@ const mockState = vi.hoisted(() => ({
     stop: vi.fn(),
     setShortcuts: vi.fn(),
     isRunning: vi.fn(() => true),
+    isReady: vi.fn(() => true),
     onShortcut: vi.fn(),
     onKeyDown: vi.fn(),
     onExit: vi.fn(),
-    restart: vi.fn(() => true)
+    restart: vi.fn(() => true),
+    forceRestart: vi.fn(() => true),
+    on: vi.fn()
   }
 }))
 
@@ -94,9 +97,14 @@ describe('ShortcutService', () => {
     mockState.keyboardListenerMock.stop.mockReset()
     mockState.keyboardListenerMock.restart.mockReset()
     mockState.keyboardListenerMock.restart.mockReturnValue(true)
+    mockState.keyboardListenerMock.forceRestart.mockReset()
+    mockState.keyboardListenerMock.forceRestart.mockReturnValue(true)
     mockState.keyboardListenerMock.setShortcuts.mockReset()
     mockState.keyboardListenerMock.isRunning.mockReset()
     mockState.keyboardListenerMock.isRunning.mockReturnValue(true)
+    mockState.keyboardListenerMock.isReady.mockReset()
+    mockState.keyboardListenerMock.isReady.mockReturnValue(true)
+    mockState.keyboardListenerMock.on.mockReset()
     vi.useRealTimers()
   })
 
@@ -172,12 +180,14 @@ describe('ShortcutService', () => {
     } as never)
 
     service.start()
-    expect(mockState.keyboardListenerMock.restart).not.toHaveBeenCalled()
+    // When started without accessibility, native backend is not started
+    expect(mockState.keyboardListenerMock.start).not.toHaveBeenCalled()
 
     mockState.accessibilityGranted = true
     const status = service.refresh()
 
-    expect(mockState.keyboardListenerMock.restart).toHaveBeenCalledTimes(1)
+    // When accessibility is granted, native backend should be started (via restart -> start)
+    expect(mockState.keyboardListenerMock.start).toHaveBeenCalledTimes(1)
     expect(status.backendState).toBe('native')
   })
 })

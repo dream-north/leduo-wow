@@ -1,9 +1,29 @@
 import { resolve } from 'path'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, Plugin } from 'vitest/config'
+
+// Mock static assets in tests
+function mockAssets(): Plugin {
+  return {
+    name: 'mock-assets',
+    enforce: 'pre',
+    resolveId(id) {
+      if (id === '/icon.png' || id.endsWith('.png')) {
+        return id
+      }
+      return null
+    },
+    load(id) {
+      if (id === '/icon.png' || id.endsWith('.png')) {
+        return 'export default ""'
+      }
+      return null
+    }
+  }
+}
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [mockAssets(), vue()],
   resolve: {
     alias: {
       '@main': resolve('src/main'),

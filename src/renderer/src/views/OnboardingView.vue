@@ -13,6 +13,7 @@ const props = defineProps<{
     transcription: string
     assistant: string
   }
+  isEnsuringBackend?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,7 +22,7 @@ const emit = defineEmits<{
   continue: []
 }>()
 
-const canContinue = computed(() => props.permissions.microphone && props.permissions.accessibility)
+const canContinue = computed(() => props.permissions.microphone && props.permissions.accessibility && !props.isEnsuringBackend)
 const requiredGrantedCount = computed(() => Number(props.permissions.microphone) + Number(props.permissions.accessibility))
 const permissionHint = ref('')
 let clearHintTimer: ReturnType<typeof setTimeout> | null = null
@@ -79,9 +80,11 @@ function continueToSettings(): void {
   <div class="onboarding-shell">
     <div class="onboarding-card">
       <div class="onboarding-header">
-        <div class="app-mark" aria-hidden="true">🐶</div>
+        <div class="app-mark" aria-hidden="true">
+          <img src="/icon.png" alt="" />
+        </div>
         <div class="onboarding-hero">
-          <p class="eyebrow">首次使用引导</p>
+          <p class="eyebrow">欢迎使用乐多汪汪</p>
           <h1>授予权限后即可开始语音输入</h1>
           <p class="lead">建议先完成必需权限，后续截图相关能力可以按需开启。</p>
         </div>
@@ -155,7 +158,8 @@ function continueToSettings(): void {
         <div class="footer-actions">
           <button class="btn btn-secondary" @click="emit('refresh')">重新检测权限</button>
           <button class="btn btn-primary" :disabled="!canContinue" @click="continueToSettings">
-            继续进入设置
+            <span v-if="props.isEnsuringBackend" class="btn-loading"></span>
+            {{ props.isEnsuringBackend ? '正在初始化...' : '继续进入设置' }}
           </button>
         </div>
         <p v-if="permissionHint" class="permission-hint">{{ permissionHint }}</p>
@@ -174,22 +178,18 @@ function continueToSettings(): void {
   padding-right: 16px;
   padding-bottom: 24px;
   padding-left: calc(env(titlebar-area-x, 0px) + 28px);
-  background:
-    radial-gradient(circle at top left, rgba(0, 113, 227, 0.12), transparent 34%),
-    radial-gradient(circle at bottom right, rgba(52, 199, 89, 0.09), transparent 30%),
-    linear-gradient(180deg, #f5f5f7, #ececf2);
+  background: #f5f5f7;
 }
 
 .onboarding-card {
   width: min(880px, 100%);
   max-height: calc(100dvh - env(titlebar-area-height, 0px) - 68px);
   padding: 20px 18px 16px;
-  border-radius: 18px;
+  border-radius: 12px;
   overflow: auto;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.06);
 }
 
 .onboarding-header {
@@ -203,24 +203,30 @@ function continueToSettings(): void {
 .app-mark {
   width: 52px;
   height: 52px;
-  border-radius: 14px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
-  font-size: 24px;
-  background: linear-gradient(180deg, #ffffff, #f2f3f8);
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.app-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .setup-progress {
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
   padding: 8px 10px;
   min-width: 170px;
-  background: rgba(255, 255, 255, 0.72);
+  background: #fafafa;
 }
 
 .setup-progress.ready {
-  border-color: rgba(52, 199, 89, 0.35);
+  border-color: rgba(52, 199, 89, 0.4);
   background: rgba(52, 199, 89, 0.08);
 }
 
@@ -302,27 +308,27 @@ function continueToSettings(): void {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 248, 252, 0.9));
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fafafa;
 }
 
 .permission-row.required {
-  border-color: rgba(0, 113, 227, 0.12);
+  border-color: rgba(0, 113, 227, 0.15);
 }
 
 .permission-row.optional {
   border-style: dashed;
-  border-color: rgba(110, 110, 115, 0.18);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 .permission-icon {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
-  background: rgba(15, 23, 42, 0.05);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .permission-copy {
@@ -385,6 +391,22 @@ function continueToSettings(): void {
   color: var(--warning-color);
   font-size: 12px;
   align-self: flex-start;
+}
+
+.btn-loading {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 720px) {
