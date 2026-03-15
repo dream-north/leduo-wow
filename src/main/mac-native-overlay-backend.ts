@@ -4,58 +4,48 @@ import type { OverlayBackend } from './overlay-backend'
 
 export class MacNativeOverlayBackend implements OverlayBackend {
   readonly id = 'native-mac'
-  private active = false
 
   start(): boolean {
-    this.active = keyboardListener.start()
-    return this.active
+    // Don't start the process here - ShortcutService manages the lifecycle
+    // Just check if it's running
+    return keyboardListener.isRunning()
   }
 
   destroy(): void {
-    this.dismissAll()
-    if (this.active) {
-      keyboardListener.stop()
-    }
-    this.active = false
+    // Don't stop the process here - ShortcutService manages the lifecycle
   }
 
   isAvailable(): boolean {
-    return this.active && keyboardListener.isRunning()
+    return keyboardListener.isRunning()
   }
 
   showHud(payload: OverlayHudPayload): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.showOverlayHud(payload)
   }
 
   updateHud(payload: OverlayHudPayload): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.updateOverlayHud(payload)
   }
 
   hideHud(): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.hideOverlayHud()
   }
 
   showResult(payload: OverlayResultPayload): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.showOverlayResult(payload)
   }
 
   hideResult(): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.hideOverlayResult()
   }
 
   dismissAll(): void {
-    if (!this.ensureActive()) return
+    if (!this.isAvailable()) return
     keyboardListener.dismissAllOverlays()
-  }
-
-  private ensureActive(): boolean {
-    if (this.isAvailable()) return true
-    this.active = keyboardListener.start()
-    return this.active
   }
 }

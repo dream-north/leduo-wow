@@ -40,10 +40,17 @@ async function refreshState(): Promise<void> {
       assistant: config.assistantShortcut ?? 'RightOption'
     }
 
+    // If accessibility is granted on first load, ensure native backend is ready
+    if (nextPermissions.accessibility && !initialized) {
+      await window.electronAPI.ensureNativeBackendReady()
+      // Refresh status after backend is ready
+      await window.electronAPI.refreshShortcutStatus()
+    }
+
     if (!initialized) {
       initialized = true
-      mustCompleteOnboarding.value = !hasRequiredPermissions.value
-    } else if (!hasRequiredPermissions.value) {
+      mustCompleteOnboarding.value = !(nextPermissions.microphone && nextPermissions.accessibility)
+    } else if (!(nextPermissions.microphone && nextPermissions.accessibility)) {
       mustCompleteOnboarding.value = true
     }
   } finally {

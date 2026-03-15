@@ -328,9 +328,7 @@ export class ShortcutService extends EventEmitter {
     this.refresh()
 
     // If accessibility is granted on start, ensure native backend is ready
-    if (hasAccessibility) {
-      void this.ensureNativeBackendReady()
-    }
+    // Don't start here - let ensureNativeBackendReady handle it
   }
 
   destroy(): void {
@@ -505,13 +503,18 @@ export class ShortcutService extends EventEmitter {
       return false
     }
 
-    // Force restart to ensure clean state (kills any existing process)
+    // Already ready?
+    if (this.nativeBackendReady && this.nativeBackend.isAvailable()) {
+      console.log('[ShortcutService] Native backend already ready')
+      return true
+    }
+
     this.nativeBackendReady = false
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      console.log(`[ShortcutService] Attempt ${attempt + 1}/${maxAttempts}: Force restarting native backend...`)
+      console.log(`[ShortcutService] Attempt ${attempt + 1}/${maxAttempts}: Starting native backend...`)
 
-      // Force restart to ensure only one process
+      // Use forceRestart to ensure only one process
       this.nativeBackend.forceRestart()
 
       // Wait for Swift process to respond
@@ -536,7 +539,7 @@ export class ShortcutService extends EventEmitter {
         return true
       }
 
-      // Event tap not ready, will retry with forceRestart
+      // Event tap not ready, will retry
       console.log('[ShortcutService] Event tap not ready, retrying...')
     }
 
