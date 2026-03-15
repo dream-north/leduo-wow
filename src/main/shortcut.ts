@@ -199,8 +199,8 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
   }
 
   stop(): void {
-    if (!this.started) return
     this.started = false
+    // Always stop the underlying process if running
     if (keyboardListener.isRunning()) {
       keyboardListener.setShortcuts([])
       keyboardListener.stop()
@@ -323,8 +323,14 @@ export class ShortcutService extends EventEmitter {
   }
 
   start(): void {
-    this.wasAccessibilityGranted = checkPermissions().accessibility
+    const hasAccessibility = checkPermissions().accessibility
+    this.wasAccessibilityGranted = hasAccessibility
     this.refresh()
+
+    // If accessibility is granted on start, ensure native backend is ready
+    if (hasAccessibility) {
+      void this.ensureNativeBackendReady()
+    }
   }
 
   destroy(): void {
@@ -356,6 +362,12 @@ export class ShortcutService extends EventEmitter {
       // If native backend was already confirmed ready, just update shortcuts
       if (this.nativeBackendReady && this.nativeBackend.isAvailable()) {
         this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
+        backendState = 'native'
+        reason = 'ready'
+      } else if (this.nativeBackend.isAvailable()) {
+        // Native backend is available (event tap ready), apply shortcuts
+        this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
+        this.nativeBackendReady = true
         backendState = 'native'
         reason = 'ready'
       } else {
