@@ -17,7 +17,8 @@ const mockState = vi.hoisted(() => ({
     isRunning: vi.fn(() => true),
     onShortcut: vi.fn(),
     onKeyDown: vi.fn(),
-    onExit: vi.fn()
+    onExit: vi.fn(),
+    restart: vi.fn(() => true)
   }
 }))
 
@@ -91,6 +92,8 @@ describe('ShortcutService', () => {
     mockState.keyboardListenerMock.start.mockReset()
     mockState.keyboardListenerMock.start.mockReturnValue(true)
     mockState.keyboardListenerMock.stop.mockReset()
+    mockState.keyboardListenerMock.restart.mockReset()
+    mockState.keyboardListenerMock.restart.mockReturnValue(true)
     mockState.keyboardListenerMock.setShortcuts.mockReset()
     mockState.keyboardListenerMock.isRunning.mockReset()
     mockState.keyboardListenerMock.isRunning.mockReturnValue(true)
@@ -158,6 +161,23 @@ describe('ShortcutService', () => {
 
     expect(mockState.keyboardListenerMock.start).toHaveBeenCalled()
     expect(status.permissionState).toBe('granted')
+    expect(status.backendState).toBe('native')
+  })
+
+
+  it('restarts native listener when accessibility changes from missing to granted', () => {
+    const service = new ShortcutService({} as never, {
+      toggle: vi.fn(),
+      cancel: vi.fn()
+    } as never)
+
+    service.start()
+    expect(mockState.keyboardListenerMock.restart).not.toHaveBeenCalled()
+
+    mockState.accessibilityGranted = true
+    const status = service.refresh()
+
+    expect(mockState.keyboardListenerMock.restart).toHaveBeenCalledTimes(1)
     expect(status.backendState).toBe('native')
   })
 })

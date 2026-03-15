@@ -155,6 +155,19 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
     return started
   }
 
+  restart(): boolean {
+    if (!this.started) {
+      return this.start()
+    }
+
+    const restarted = keyboardListener.restart()
+    this.started = restarted
+    if (restarted) {
+      this.applyShortcuts()
+    }
+    return restarted
+  }
+
   stop(): void {
     if (!this.started) return
     this.started = false
@@ -260,6 +273,7 @@ export class ShortcutService extends EventEmitter {
   private readonly debounceMs = 300
   private accessibilityPollTimer: ReturnType<typeof setInterval> | null = null
   private accessibilityPollAttempts = 0
+  private wasAccessibilityGranted = false
 
   constructor(configStore: ConfigStore, pipeline: Pipeline) {
     super()
@@ -277,6 +291,7 @@ export class ShortcutService extends EventEmitter {
   }
 
   start(): void {
+    this.wasAccessibilityGranted = checkPermissions().accessibility
     this.refresh()
   }
 
@@ -290,6 +305,12 @@ export class ShortcutService extends EventEmitter {
     const config = getConfig(this.configStore)
     const permissions = checkPermissions()
     const hasAccessibility = permissions.accessibility
+    const accessibilityJustGranted = hasAccessibility && !this.wasAccessibilityGranted
+    this.wasAccessibilityGranted = hasAccessibility
+
+    if (accessibilityJustGranted) {
+      this.nativeBackend.restart()
+    }
 
     const shortcuts: ShortcutRegistration[] = [
       { id: 'transcription', shortcut: config.transcriptionShortcut || 'RightCommand' },

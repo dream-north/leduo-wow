@@ -151,6 +151,34 @@ class SwiftKeyboardListener extends EventEmitter {
   }
 
   /**
+   * Force restart the Swift listener process while keeping reference count.
+   * Useful when macOS permissions change and event taps need to be re-created.
+   */
+  restart(): boolean {
+    if (!this.running) {
+      return this.start()
+    }
+
+    const preservedRefCount = Math.max(1, this.refCount)
+
+    try {
+      this.stopping = true
+      this.sendCommand({ command: 'stop' })
+      this.process?.stdin?.end()
+      this.process?.kill()
+    } catch (err) {
+      console.error('[SwiftKeyboardListener] Failed to restart (stop phase):', err)
+    }
+
+    this.resetProcessState()
+    const restarted = this.start()
+    if (restarted) {
+      this.refCount = preservedRefCount
+    }
+    return restarted
+  }
+
+  /**
    * Stop the Swift keyboard listener
    */
   stop(): void {
