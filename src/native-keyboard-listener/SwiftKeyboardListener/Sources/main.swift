@@ -998,6 +998,9 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private var statDetailHeightConstraint: NSLayoutConstraint?
     private var copyResetWorkItem: DispatchWorkItem?
     private var keyMonitor: Any?
+    private var isInitialPageLoaded = false
+    private var pendingUpdateWorkItem: DispatchWorkItem?
+    private var streamingGeneration: UInt64 = 0
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -1183,7 +1186,13 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
         updateStats(stats)
-        loadMarkdown(currentDisplayMarkdown)
+
+        if isInitialPageLoaded {
+            scheduleIncrementalUpdate()
+        } else {
+            loadMarkdown(currentDisplayMarkdown)
+        }
+
         if !wasVisible {
             applyPanelSize(savedSize: size)
             positionPanel(savedPosition: position)
@@ -1192,6 +1201,10 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     }
 
     func hide() {
+        pendingUpdateWorkItem?.cancel()
+        pendingUpdateWorkItem = nil
+        streamingGeneration &+= 1
+        isInitialPageLoaded = false
         copyResetWorkItem?.cancel()
         panel.orderOut(nil)
     }
@@ -1239,6 +1252,26 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
             codeCollapsed: currentCodeCollapsed
         )
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    private func scheduleIncrementalUpdate() {
+        pendingUpdateWorkItem?.cancel()
+        let generation = streamingGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.streamingGeneration == generation else { return }
+            let bodyHTML = MarkdownTemplateRenderer.renderBody(
+                self.currentDisplayMarkdown,
+                sources: self.currentSources,
+                reasoningMarkdown: self.currentReasoningMarkdown,
+                reasoningCollapsed: self.currentReasoningCollapsed,
+                codeMarkdown: self.currentCodeMarkdown,
+                codeCollapsed: self.currentCodeCollapsed
+            )
+            let escaped = MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
+            self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
+        }
+        pendingUpdateWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
     }
 
     private func updateStats(_ stats: [[String: String]]) {
@@ -1350,6 +1383,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        isInitialPageLoaded = true
         panel.makeFirstResponder(webView)
         webView.evaluateJavaScript("""
           document.body.tabIndex = 0;
@@ -1390,6 +1424,14 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 // MARK: - Markdown Rendering
 
 enum MarkdownTemplateRenderer {
+    // Pre-compiled regex patterns to avoid expensive ICU compilation on every call
+    private static let orderedListRegex = try! NSRegularExpression(pattern: #"^\d+\.\s+(.+)$"#)
+    private static let citationRefRegex = try! NSRegularExpression(pattern: #"\[ref_(\d+)\]"#)
+    private static let inlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
+    private static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#)
+    private static let boldRegex = try! NSRegularExpression(pattern: #"\*\*([^*]+)\*\*"#)
+    private static let italicRegex = try! NSRegularExpression(pattern: #"\*([^*]+)\*"#)
+
     static func render(
         _ markdown: String,
         sources: [[String: Any]] = [],
@@ -1398,15 +1440,14 @@ enum MarkdownTemplateRenderer {
         codeMarkdown: String = "",
         codeCollapsed: Bool = true
     ) -> String {
-        let trimmedMarkdown = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reasoningSection = renderReasoning(reasoningMarkdown, collapsed: reasoningCollapsed)
-        let codeSection = renderCodeSection(codeMarkdown, collapsed: codeCollapsed)
-        let mainContent = trimmedMarkdown.isEmpty
-            ? (reasoningSection.isEmpty && codeSection.isEmpty ? "<p class=\"placeholder\">正在生成...</p>" : "")
-            : renderBlocks(trimmedMarkdown)
-        let body = [reasoningSection, codeSection, mainContent, renderSources(sources)]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+        let body = renderBody(
+            markdown,
+            sources: sources,
+            reasoningMarkdown: reasoningMarkdown,
+            reasoningCollapsed: reasoningCollapsed,
+            codeMarkdown: codeMarkdown,
+            codeCollapsed: codeCollapsed
+        )
         return """
         <!doctype html>
         <html lang="zh-CN">
@@ -1596,6 +1637,35 @@ enum MarkdownTemplateRenderer {
         <body>\(body)</body>
         </html>
         """
+    }
+
+    static func renderBody(
+        _ markdown: String,
+        sources: [[String: Any]] = [],
+        reasoningMarkdown: String = "",
+        reasoningCollapsed: Bool = false,
+        codeMarkdown: String = "",
+        codeCollapsed: Bool = true
+    ) -> String {
+        let trimmedMarkdown = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reasoningSection = renderReasoning(reasoningMarkdown, collapsed: reasoningCollapsed)
+        let codeSection = renderCodeSection(codeMarkdown, collapsed: codeCollapsed)
+        let mainContent = trimmedMarkdown.isEmpty
+            ? (reasoningSection.isEmpty && codeSection.isEmpty ? "<p class=\"placeholder\">正在生成...</p>" : "")
+            : renderBlocks(trimmedMarkdown)
+        return [reasoningSection, codeSection, mainContent, renderSources(sources)]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    static func escapeForJSString(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 
     private static func renderReasoning(_ markdown: String, collapsed: Bool) -> String {
@@ -1812,9 +1882,8 @@ enum MarkdownTemplateRenderer {
     }
 
     private static func orderedListItem(_ line: String) -> (number: Int, text: String)? {
-        let regex = try? NSRegularExpression(pattern: #"^\d+\.\s+(.+)$"#)
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
-        guard let match = regex?.firstMatch(in: line, range: range),
+        guard let match = orderedListRegex.firstMatch(in: line, range: range),
               let fullRange = Range(match.range(at: 0), in: line),
               let textRange = Range(match.range(at: 1), in: line) else {
             return nil
@@ -1826,19 +1895,19 @@ enum MarkdownTemplateRenderer {
 
     private static func renderInline<S: StringProtocol>(_ source: S) -> String {
         var html = escapeHTML(String(source))
-        html = replaceRegex(#"\[ref_(\d+)\]"#, in: html) { groups in
+        html = replaceRegex(citationRefRegex, in: html) { groups in
             "<sup class=\"citation\"><a href=\"#ref-\(groups[1])\">\(groups[1])</a></sup>"
         }
-        html = replaceRegex(#"`([^`]+)`"#, in: html) { groups in
+        html = replaceRegex(inlineCodeRegex, in: html) { groups in
             "<code>\(groups[1])</code>"
         }
-        html = replaceRegex(#"\[([^\]]+)\]\(([^)]+)\)"#, in: html) { groups in
+        html = replaceRegex(linkRegex, in: html) { groups in
             "<a href=\"\(groups[2])\">\(groups[1])</a>"
         }
-        html = replaceRegex(#"\*\*([^*]+)\*\*"#, in: html) { groups in
+        html = replaceRegex(boldRegex, in: html) { groups in
             "<strong>\(groups[1])</strong>"
         }
-        html = replaceRegex(#"\*([^*]+)\*"#, in: html) { groups in
+        html = replaceRegex(italicRegex, in: html) { groups in
             "<em>\(groups[1])</em>"
         }
         return html
@@ -1854,14 +1923,10 @@ enum MarkdownTemplateRenderer {
     }
 
     private static func replaceRegex(
-        _ pattern: String,
+        _ regex: NSRegularExpression,
         in source: String,
         transform: ([String]) -> String
     ) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return source
-        }
-
         let matches = regex.matches(in: source, options: [], range: NSRange(source.startIndex..<source.endIndex, in: source))
         guard !matches.isEmpty else { return source }
 
@@ -1913,6 +1978,10 @@ enum MarkdownTemplateRenderer {
 final class OverlayCoordinator {
     private let hudController = RecordingHUDPanelController()
     private let resultController = AssistantResultPanelController()
+
+    // Layer 2: Async payload merging for overlayResultShow
+    private var pendingResultPayload: [String: Any]?
+    private let resultLock = NSLock()
 
     func showHud(payload: [String: Any]) {
         guard let text = payload["text"] as? String,
@@ -1976,12 +2045,41 @@ final class OverlayCoordinator {
     }
 
     func hideResult() {
+        clearPendingResult()
         resultController.hide()
     }
 
     func dismissAll() {
+        clearPendingResult()
         hudController.hide()
         resultController.hide()
+    }
+
+    /// Called from stdin reader thread. Stores the latest payload and schedules
+    /// an async drain on the main thread. Multiple rapid calls will coalesce —
+    /// only the most recent payload is rendered.
+    func enqueueShowResult(payload: [String: Any]) {
+        resultLock.lock()
+        pendingResultPayload = payload
+        resultLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            self?.drainAndShowResult()
+        }
+    }
+
+    private func drainAndShowResult() {
+        resultLock.lock()
+        let payload = pendingResultPayload
+        pendingResultPayload = nil
+        resultLock.unlock()
+        guard let payload else { return }
+        showResult(payload: payload)
+    }
+
+    private func clearPendingResult() {
+        resultLock.lock()
+        pendingResultPayload = nil
+        resultLock.unlock()
     }
 }
 
@@ -2054,7 +2152,7 @@ func processCommand(_ command: [String: Any]) {
 
     case "overlayResultShow":
         if let payload = command["payload"] as? [String: Any] {
-            runOnMain { overlayCoordinator.showResult(payload: payload) }
+            overlayCoordinator.enqueueShowResult(payload: payload)
             outputStatus("ok")
         } else {
             outputStatus("error")

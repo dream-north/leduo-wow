@@ -33,3 +33,4 @@ mac:
 dmg:
   artifactName: leduo-wow-${version}.${ext}
   title: "Leduo Wow ${version}"
+  writeUpdateInfo: false
