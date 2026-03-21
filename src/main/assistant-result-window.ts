@@ -1,15 +1,29 @@
-import { app, BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { IPC } from '../shared/ipc-channels'
-import type { OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
+import type { OverlayResultStat, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 import { applyFloatingWindowBehavior } from './floating-window'
 
-const defaultWindowWidth = 620
-const defaultWindowHeight = 468
-const minWindowWidth = 520
-const minWindowHeight = 360
+const defaultWindowWidth = 700
+const defaultWindowHeight = 560
+const minWindowWidth = 560
+const minWindowHeight = 420
 let isQuitting = false
+const latestPayloadByWindow = new WeakMap<BrowserWindow, AssistantResultPayload>()
+
+export interface AssistantResultPayload {
+  text: string
+  position?: OverlayWindowPosition
+  size?: OverlayWindowSize
+  detailsMarkdown?: string
+  stats?: OverlayResultStat[]
+  sources?: Array<{ index: number; title: string; url: string }>
+  reasoningMarkdown?: string
+  reasoningCollapsed?: boolean
+  codeMarkdown?: string
+  codeCollapsed?: boolean
+}
 
 app.on('before-quit', () => {
   isQuitting = true
@@ -27,6 +41,7 @@ export function createAssistantResultWindow(): BrowserWindow {
     show: false,
     frame: false,
     transparent: true,
+    hasShadow: false,
     resizable: true,
     maximizable: false,
     minimizable: false,
@@ -42,6 +57,13 @@ export function createAssistantResultWindow(): BrowserWindow {
     }
   })
   win.setMinimumSize(minWindowWidth, minWindowHeight)
+  latestPayloadByWindow.set(win, {
+    text: ''
+  })
+  win.webContents.setWindowOpenHandler((details) => {
+    void shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
 
   applyFloatingWindowBehavior(win, 'screen-saver')
 
@@ -49,6 +71,10 @@ export function createAssistantResultWindow(): BrowserWindow {
     if (isQuitting) return
     event.preventDefault()
     hideAssistantResultWindow(win)
+  })
+
+  win.on('closed', () => {
+    latestPayloadByWindow.delete(win)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -114,18 +140,10 @@ function positionAssistantResultWindow(
 
 export function showAssistantResultWindow(
   win: BrowserWindow,
-  payload: {
-    text: string
-    position?: OverlayWindowPosition
-    size?: OverlayWindowSize
-    detailsMarkdown?: string
-    sources?: Array<{ index: number; title: string; url: string }>
-    reasoningMarkdown?: string
-    reasoningCollapsed?: boolean
-    codeMarkdown?: string
-    codeCollapsed?: boolean
-  }
+  payload: AssistantResultPayload
 ): void {
+  latestPayloadByWindow.set(win, payload)
+
   const showWindow = (): void => {
     const wasVisible = win.isVisible()
     win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, payload)
@@ -148,4 +166,8 @@ export function showAssistantResultWindow(
 export function hideAssistantResultWindow(win: BrowserWindow): void {
   win.webContents.send(IPC.ASSISTANT_RESULT_HIDE)
   win.hide()
+}
+
+export function getLatestAssistantResultPayload(win: BrowserWindow): AssistantResultPayload | null {
+  return latestPayloadByWindow.get(win) ?? null
 }

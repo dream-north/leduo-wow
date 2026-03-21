@@ -6,10 +6,12 @@ const mockState = vi.hoisted(() => ({
   accessibilityGranted: false,
   winServerExists: true,
   windowsListenerConfig: null as Record<string, unknown> | null,
+  windowsListenerHandler: null as ((event: Record<string, unknown>, down?: unknown) => boolean) | null,
   currentConfig: {
     transcriptionShortcut: 'RightCommand',
     assistantShortcut: 'RightOption'
   },
+  matchShortcutMock: vi.fn(() => false),
   registerMock: vi.fn(() => true),
   unregisterMock: vi.fn(),
   keyboardListenerMock: {
@@ -25,7 +27,9 @@ const mockState = vi.hoisted(() => ({
     on: vi.fn()
   },
   windowsListenerInstance: {
-    addListener: vi.fn(),
+    addListener: vi.fn((handler: (event: Record<string, unknown>, down?: unknown) => boolean) => {
+      mockState.windowsListenerHandler = handler
+    }),
     removeListener: vi.fn(),
     kill: vi.fn()
   }
@@ -82,17 +86,19 @@ vi.mock('fs', async () => {
   }
 })
 
-vi.mock('node-global-key-listener', () => ({
-  GlobalKeyboardListener: vi.fn((config?: Record<string, unknown>) => {
-    mockState.windowsListenerConfig = config ?? null
-    return mockState.windowsListenerInstance
-  })
+vi.mock('./windows-global-key-listener', () => ({
+  WindowsGlobalKeyboardListener: class MockWindowsGlobalKeyboardListener {
+    constructor(config?: Record<string, unknown>) {
+      mockState.windowsListenerConfig = config ?? null
+      return mockState.windowsListenerInstance
+    }
+  }
 }))
 
 vi.mock('../native-keyboard-listener', () => ({
   keyboardListener: mockState.keyboardListenerMock,
   parseShortcut,
-  matchShortcut: vi.fn(() => false)
+  matchShortcut: mockState.matchShortcutMock
 }))
 
 vi.mock('./config-store', () => ({
@@ -114,12 +120,15 @@ describe('ShortcutService', () => {
     mockState.accessibilityGranted = false
     mockState.winServerExists = true
     mockState.windowsListenerConfig = null
+    mockState.windowsListenerHandler = null
     mockState.currentConfig = {
       transcriptionShortcut: 'RightCommand',
       assistantShortcut: 'RightOption'
     }
     mockState.registerMock.mockReset()
     mockState.unregisterMock.mockReset()
+    mockState.matchShortcutMock.mockReset()
+    mockState.matchShortcutMock.mockReturnValue(false)
     mockState.registerMock.mockReturnValue(true)
     mockState.keyboardListenerMock.start.mockReset()
     mockState.keyboardListenerMock.start.mockReturnValue(true)
@@ -232,6 +241,32 @@ describe('ShortcutService', () => {
     expect(status.backendState).toBe('native')
     expect(status.modes.transcription.canTriggerGlobally).toBe(true)
     expect(status.modes.assistant.canTriggerGlobally).toBe(true)
+  })
+
+  it('suppresses registered modifier-only RightAlt and RightControl events on Windows', () => {
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'RightAlt',
+      assistantShortcut: 'RightControl'
+    }
+
+    const service = new ShortcutService({} as never, {
+      toggle: vi.fn(),
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    service.refresh()
+
+    const nativeBackend = (service as unknown as { nativeBackend?: { handleKeyEvent?: (event: Record<string, unknown>, down?: unknown) => boolean } }).nativeBackend
+
+    expect(nativeBackend?.handleKeyEvent).toBeDefined()
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT ALT' })).toBe(true)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT ALT' })).toBe(true)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'A' })).toBe(false)
+
+    service.destroy()
   })
 
 })

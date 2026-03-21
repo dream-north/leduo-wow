@@ -244,7 +244,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   // 双模式配置 - 语音助手
   assistantShortcut: getDefaultAssistantShortcut(),
   assistantEnabled: true,
-  assistantPrePolish: false,  // 默认不先润色
+  assistantPrePolish: true,  // 默认先润色再处理
   assistantOutputMode: 'window',
   assistantModel: 'qwen3.5-flash',
   assistantEnableThinking: false,

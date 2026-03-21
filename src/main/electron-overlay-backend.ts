@@ -70,6 +70,7 @@ export class ElectronOverlayBackend implements OverlayBackend {
       position: payload.position,
       size: payload.size,
       detailsMarkdown: payload.detailsMarkdown,
+      stats: payload.stats,
       sources: payload.sources,
       reasoningMarkdown: payload.reasoningMarkdown,
       reasoningCollapsed: payload.reasoningCollapsed,

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from 'fs'
 import { globalShortcut } from 'electron'
 import { join } from 'path'
 import { keyboardListener, KeyInfo, matchShortcut, parseShortcut } from '../native-keyboard-listener'
+import { WindowsGlobalKeyboardListener } from './windows-global-key-listener'
 import { ConfigStore, getConfig } from './config-store'
 import { Pipeline } from './pipeline'
 import { checkPermissions } from './permissions'
@@ -250,14 +251,15 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
   private started = false
   private shortcuts: ShortcutRegistration[] = []
   private parsedShortcuts = new Map<VoiceMode, ParsedShortcut>()
+  private blockedModifierOnlyKeys = new Set<string>()
   private currentModifiers = new Set<string>()
   private currentKeys = new Set<string>()
   private listener: {
-    addListener: (handler: (event: Record<string, unknown>, down?: unknown) => void) => Promise<void> | void
-    removeListener?: (handler: (event: Record<string, unknown>, down?: unknown) => void) => void
+    addListener: (handler: (event: Record<string, unknown>, down?: unknown) => boolean) => Promise<void> | void
+    removeListener?: (handler: (event: Record<string, unknown>, down?: unknown) => boolean) => void
     kill?: () => void
   } | null = null
-  private keyHandler: ((event: Record<string, unknown>, down?: unknown) => void) | null = null
+  private keyHandler: ((event: Record<string, unknown>, down?: unknown) => boolean) | null = null
 
   start(): boolean {
     if (this.started) return true
@@ -269,10 +271,17 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
         return false
       }
 
-      const { GlobalKeyboardListener } = require('node-global-key-listener')
-      const listener = new GlobalKeyboardListener({
-        windows: {
-          serverPath
+      const listener = new WindowsGlobalKeyboardListener({
+        serverPath,
+        onInfo: (message) => {
+          const text = message.trim()
+          if (text) {
+            console.log(`[WindowsNativeShortcutBackend] ${text}`)
+          }
+        },
+        onError: (code) => {
+          console.warn('[WindowsNativeShortcutBackend] Listener exited:', code)
+          this.handleStartupFailure()
         }
       })
       const keyHandler = (event: Record<string, unknown>, down?: unknown) => this.handleKeyEvent(event, down)
@@ -321,24 +330,33 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
 
   private applyShortcuts(): void {
     this.parsedShortcuts.clear()
+    this.blockedModifierOnlyKeys.clear()
     for (const shortcut of this.shortcuts) {
-      this.parsedShortcuts.set(shortcut.id, parseShortcut(shortcut.shortcut))
+      const parsedShortcut = parseShortcut(shortcut.shortcut)
+      this.parsedShortcuts.set(shortcut.id, parsedShortcut)
+
+      const blockedKey = this.getBlockedModifierOnlyKey(parsedShortcut)
+      if (blockedKey) {
+        this.blockedModifierOnlyKeys.add(blockedKey)
+      }
     }
   }
 
-  private handleKeyEvent(event: Record<string, unknown>, down?: unknown): void {
-    if (!this.started) return
+  private handleKeyEvent(event: Record<string, unknown>, down?: unknown): boolean {
+    if (!this.started) return false
 
     const state = String(event.state ?? '').toUpperCase()
     const isKeyDown = state === 'DOWN' || state === 'KEY_DOWN' || down === true
     const isKeyUp = state === 'UP' || state === 'KEY_UP' || down === false
 
-    if (!isKeyDown && !isKeyUp) return
+    if (!isKeyDown && !isKeyUp) return false
 
     const normalized = this.normalizeEventKey(event)
-    if (!normalized) return
+    if (!normalized) return false
 
     if (isKeyDown) {
+      let stopPropagation = this.blockedModifierOnlyKeys.has(normalized.key)
+
       if (normalized.isEscape) {
         this.emit('escape')
       }
@@ -354,16 +372,19 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
 
         if (matchShortcut(Array.from(this.currentModifiers), Array.from(this.currentKeys), parsed, normalized.key)) {
           this.emit('trigger', shortcut.id, shortcut.shortcut)
+          stopPropagation = true
         }
       }
 
-      return
+      return stopPropagation
     }
 
     if (normalized.modifierName) {
       this.currentModifiers.delete(normalized.modifierName)
     }
     this.currentKeys.delete(normalized.key)
+
+    return this.blockedModifierOnlyKeys.has(normalized.key)
   }
 
   private normalizeEventKey(event: Record<string, unknown>): { key: string; modifierName?: string; isEscape?: boolean } | null {
@@ -418,17 +439,7 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
 
   private resolveServerPath(): string | null {
     const bundledServerPath = resolveBundledWindowsKeyServerPath()
-    if (existsSync(bundledServerPath)) {
-      return bundledServerPath
-    }
-
-    try {
-      const packageJsonPath = require.resolve('node-global-key-listener/package.json')
-      const packageServerPath = join(packageJsonPath, '..', 'bin', 'WinKeyServer.exe')
-      return existsSync(packageServerPath) ? packageServerPath : null
-    } catch {
-      return null
-    }
+    return existsSync(bundledServerPath) ? bundledServerPath : null
   }
 
   private handleStartupFailure(): void {
@@ -442,7 +453,18 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
     this.currentModifiers.clear()
     this.currentKeys.clear()
     this.parsedShortcuts.clear()
+    this.blockedModifierOnlyKeys.clear()
     this.emit('exit', null)
+  }
+
+  private getBlockedModifierOnlyKey(parsedShortcut: ParsedShortcut): string | null {
+    if (parsedShortcut.key || parsedShortcut.modifiers.length !== 1 || parsedShortcut.side === 'any') {
+      return null
+    }
+
+    const modifier = parsedShortcut.modifiers[0]
+    const side = parsedShortcut.side.charAt(0).toUpperCase() + parsedShortcut.side.slice(1)
+    return `${modifier}${side}`
   }
 }
 

@@ -3,8 +3,8 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { applyFloatingWindowBehavior } from './floating-window'
 
-const winWidth = 400
-const winHeight = 120
+const winWidth = 454
+const winHeight = 152
 const hiddenWindowBounds = {
   x: -10000,
   y: -10000,
@@ -24,6 +24,7 @@ export function createOverlayWindow(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
+    backgroundColor: '#00000000',
     resizable: false,
     focusable: false,
     fullscreenable: false,
@@ -58,7 +59,7 @@ export function positionOverlayAtCursor(win: BrowserWindow): void {
 
   // 计算新位置：屏幕底部中央
   const x = currentDisplay.bounds.x + Math.round((screenWidth - winWidth) / 2)
-  const y = currentDisplay.bounds.y + screenHeight - winHeight - 80
+  const y = currentDisplay.bounds.y + screenHeight - winHeight - 68
 
   win.setBounds({ x, y, width: winWidth, height: winHeight })
 }

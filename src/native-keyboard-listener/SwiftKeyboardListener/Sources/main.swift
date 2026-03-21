@@ -1423,6 +1423,9 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 
 // MARK: - Markdown Rendering
 
+// Keep the shared markdown fixtures in src/shared/assistant-result-markdown-fixtures.json
+// aligned with this renderer so the Electron fallback and native macOS result window
+// preserve the same assistant result semantics.
 enum MarkdownTemplateRenderer {
     // Pre-compiled regex patterns to avoid expensive ICU compilation on every call
     private static let orderedListRegex = try! NSRegularExpression(pattern: #"^\d+\.\s+(.+)$"#)

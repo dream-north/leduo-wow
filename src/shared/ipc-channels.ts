@@ -23,6 +23,7 @@ export const IPC = {
   OVERLAY_UPDATE: 'overlay:update',
   ASSISTANT_RESULT_UPDATE: 'assistant-result:update',
   ASSISTANT_RESULT_HIDE: 'assistant-result:hide',
+  ASSISTANT_RESULT_GET_LATEST: 'assistant-result:get-latest',
   ASSISTANT_RESULT_COPY: 'assistant-result:copy',
   ASSISTANT_RESULT_CLOSE: 'assistant-result:close',
   OPEN_SETTINGS: 'open:settings',

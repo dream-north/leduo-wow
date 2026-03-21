@@ -1,4 +1,6 @@
 const { execSync } = require('child_process')
+const { existsSync, rmSync } = require('fs')
+const { join } = require('path')
 
 function run(command) {
   execSync(command, {
@@ -15,6 +17,22 @@ function canLoadRobotJs() {
     return false
   }
 }
+
+function pruneUnusedKeyListenerBinaries() {
+  if (process.platform !== 'win32') {
+    return
+  }
+
+  const packageDir = join(process.cwd(), 'node_modules', 'node-global-key-listener')
+  if (!existsSync(packageDir)) {
+    return
+  }
+
+  rmSync(packageDir, { force: true, recursive: true })
+  console.log(`[postinstall] Removed unused package: ${packageDir}`)
+}
+
+pruneUnusedKeyListenerBinaries()
 
 if (process.platform === 'win32' && canLoadRobotJs()) {
   console.log('[postinstall] Skipping electron-builder install-app-deps on Windows because @jitsi/robotjs already loads')

@@ -1,6 +1,6 @@
 {
   "name": "leduo-wow",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "description": "Mac voice input app powered by Qwen ASR and LLM",
   "main": "./out/main/index.js",
   "scripts": {
@@ -19,7 +19,6 @@
   "dependencies": {
     "@jitsi/robotjs": "^0.6.21",
     "electron-store": "^8.2.0",
-    "node-global-key-listener": "^0.3.0",
     "openai": "^4.77.0",
     "ws": "^8.18.0"
   },

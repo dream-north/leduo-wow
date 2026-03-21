@@ -1,10 +1,24 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
+import type { OverlayResultStat } from '../shared/types'
 
 const assistantResultAPI = {
+  getLatestPayload: () =>
+    ipcRenderer.invoke(IPC.ASSISTANT_RESULT_GET_LATEST) as Promise<{
+      text: string
+      detailsMarkdown?: string
+      stats?: OverlayResultStat[]
+      sources?: Array<{ index: number; title: string; url: string }>
+      reasoningMarkdown?: string
+      reasoningCollapsed?: boolean
+      codeMarkdown?: string
+      codeCollapsed?: boolean
+    } | null>,
+
   onUpdate: (callback: (data: {
     text: string
     detailsMarkdown?: string
+    stats?: OverlayResultStat[]
     sources?: Array<{ index: number; title: string; url: string }>
     reasoningMarkdown?: string
     reasoningCollapsed?: boolean
@@ -16,6 +30,7 @@ const assistantResultAPI = {
       data: {
         text: string
         detailsMarkdown?: string
+        stats?: OverlayResultStat[]
         sources?: Array<{ index: number; title: string; url: string }>
         reasoningMarkdown?: string
         reasoningCollapsed?: boolean

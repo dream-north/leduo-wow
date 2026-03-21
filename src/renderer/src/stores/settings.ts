@@ -98,7 +98,7 @@ export const useSettingsStore = defineStore('settings', () => {
   // 双模式配置 - 语音助手
   const assistantShortcut = ref(defaultAssistantShortcut)
   const assistantEnabled = ref(true)
-  const assistantPrePolish = ref(false)
+  const assistantPrePolish = ref(true)
   const assistantOutputMode = ref<AssistantOutputMode>('window')
   const assistantModel = ref('qwen3.5-flash')
   const assistantEnableThinking = ref(false)
@@ -146,7 +146,7 @@ export const useSettingsStore = defineStore('settings', () => {
       // 双模式配置 - 语音助手
       assistantShortcut.value = config.assistantShortcut ?? defaultAssistantShortcut
       assistantEnabled.value = config.assistantEnabled ?? true
-      assistantPrePolish.value = config.assistantPrePolish ?? false
+      assistantPrePolish.value = config.assistantPrePolish ?? true
       assistantOutputMode.value = config.assistantOutputMode ?? 'window'
       assistantModel.value = config.assistantModel ?? config.polishModel ?? 'qwen3.5-flash'
       assistantEnableThinking.value = config.assistantEnableThinking ?? false

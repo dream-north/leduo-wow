@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 declare global {
   interface Window {
@@ -15,18 +15,65 @@ declare global {
 }
 
 const text = ref('')
-const mode = ref('') // recording, processing, success, error
+const mode = ref('')
 const voiceMode = ref<'transcription' | 'assistant'>('transcription')
 const screenshotActive = ref(false)
 
-// Audio recording
 let mediaStream: MediaStream | null = null
 let audioContext: AudioContext | null = null
 let scriptProcessor: ScriptProcessorNode | null = null
 let isCapturing = false
-let volumeThreshold = 10 // RMS threshold 0-100, default 10
+let volumeThreshold = 10
 
-// Calculate RMS volume of a Float32 audio buffer, returns 0-100
+const modeLabel = computed(() => (voiceMode.value === 'assistant' ? '语音助手' : '语音识别'))
+const statusTitle = computed(() => {
+  if (mode.value === 'recording') {
+    return '正在聆听'
+  }
+  if (mode.value === 'processing') {
+    if (text.value.includes('工具')) return '正在调用工具'
+    if (text.value.includes('思考')) return '正在思考'
+    return voiceMode.value === 'assistant' ? '正在生成回答' : '正在处理中'
+  }
+  if (mode.value === 'success') {
+    return '已完成'
+  }
+  if (mode.value === 'error') {
+    return '出现问题'
+  }
+  return '等待开始'
+})
+const statusText = computed(() => {
+  if (text.value.trim()) {
+    return text.value
+  }
+  if (mode.value === 'recording') {
+    return voiceMode.value === 'assistant'
+      ? '继续说话，松开快捷键后会直接生成回答。'
+      : '继续说话，松开快捷键后会开始识别。'
+  }
+  if (mode.value === 'processing') {
+    return voiceMode.value === 'assistant'
+      ? '模型正在整理内容，结果会很快出现。'
+      : '正在收尾并整理转写结果。'
+  }
+  if (mode.value === 'success') {
+    return '这次语音任务已经顺利完成。'
+  }
+  if (mode.value === 'error') {
+    return '本次任务没有完成，请检查权限、网络或模型配置。'
+  }
+  return '按下快捷键后，这里会显示当前状态。'
+})
+const phaseBadge = computed(() => {
+  if (mode.value === 'recording') return '录音中'
+  if (mode.value === 'processing') return '处理中'
+  if (mode.value === 'success') return '完成'
+  if (mode.value === 'error') return '错误'
+  return '待命'
+})
+const showCancelHint = computed(() => mode.value === 'recording')
+
 function calcRMS(buffer: Float32Array): number {
   let sum = 0
   for (let i = 0; i < buffer.length; i++) {
@@ -36,14 +83,11 @@ function calcRMS(buffer: Float32Array): number {
 }
 
 async function startAudioCapture(threshold: number, microphoneId: string): Promise<void> {
-  // Prevent duplicate capture — stop existing one first
   if (isCapturing) {
-    console.log('[Overlay] Already capturing, stopping previous before restart')
     stopAudioCapture()
   }
   isCapturing = true
   volumeThreshold = threshold
-  console.log(`[Overlay] startAudioCapture, volumeThreshold=${volumeThreshold}, mic=${microphoneId || 'default'}`)
 
   try {
     const audioConstraints: MediaTrackConstraints = {
@@ -59,45 +103,38 @@ async function startAudioCapture(threshold: number, microphoneId: string): Promi
 
     audioContext = new AudioContext({ sampleRate: 16000 })
     const source = audioContext.createMediaStreamSource(mediaStream)
-
-    // Use ScriptProcessorNode for compatibility (AudioWorklet would be better but more complex)
     scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
 
     scriptProcessor.onaudioprocess = (event) => {
-      if (!isCapturing) return  // Skip if capture was stopped
+      if (!isCapturing) return
       const inputData = event.inputBuffer.getChannelData(0)
-
-      // Volume gate: skip frames below threshold to filter background noise
       const rms = calcRMS(inputData)
       if (rms < volumeThreshold) return
 
-      // Convert Float32 to Int16 PCM
       const pcmData = new Int16Array(inputData.length)
       for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]))
-        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+        const sample = Math.max(-1, Math.min(1, inputData[i]))
+        pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
       }
       window.overlayAPI.sendAudioChunk(pcmData.buffer)
     }
 
     source.connect(scriptProcessor)
     scriptProcessor.connect(audioContext.destination)
-  } catch (err) {
-    console.error('Failed to start audio capture:', err)
+  } catch (error) {
     isCapturing = false
-    window.overlayAPI.sendAudioError(err instanceof Error ? err.message : String(err))
+    window.overlayAPI?.sendAudioError(error instanceof Error ? error.message : String(error))
   }
 }
 
 function stopAudioCapture(): void {
-  console.log('[Overlay] stopAudioCapture called, isCapturing:', isCapturing)
   isCapturing = false
   if (scriptProcessor) {
     scriptProcessor.disconnect()
     scriptProcessor = null
   }
   if (audioContext) {
-    audioContext.close()
+    void audioContext.close()
     audioContext = null
   }
   if (mediaStream) {
@@ -106,13 +143,20 @@ function stopAudioCapture(): void {
   }
 }
 
-// Cleanup functions for IPC listeners
 let cleanupUpdate: (() => void) | null = null
 let cleanupAudioStart: (() => void) | null = null
 let cleanupAudioStop: (() => void) | null = null
 let cleanupThreshold: (() => void) | null = null
 
 onMounted(() => {
+  if (!window.overlayAPI) {
+    mode.value = 'recording'
+    voiceMode.value = 'assistant'
+    screenshotActive.value = true
+    text.value = '这是 HUD 的示例态，用来检查 Windows 下的视觉效果。'
+    return
+  }
+
   cleanupUpdate = window.overlayAPI.onUpdate((data) => {
     text.value = data.text
     mode.value = data.mode
@@ -124,21 +168,19 @@ onMounted(() => {
     }
   })
 
-  cleanupAudioStart = window.overlayAPI.onAudioStart((threshold, microphoneId, mode) => {
-    if (mode) {
-      voiceMode.value = mode
+  cleanupAudioStart = window.overlayAPI.onAudioStart((threshold, microphoneId, nextMode) => {
+    if (nextMode) {
+      voiceMode.value = nextMode
     }
-    startAudioCapture(threshold, microphoneId)
+    void startAudioCapture(threshold, microphoneId)
   })
 
   cleanupAudioStop = window.overlayAPI.onAudioStop(() => {
     stopAudioCapture()
   })
 
-  // Real-time threshold update from settings slider
   cleanupThreshold = window.overlayAPI.onThresholdUpdate((threshold) => {
     volumeThreshold = threshold
-    console.log(`[Overlay] Threshold updated in real-time: ${threshold}`)
   })
 })
 
@@ -152,201 +194,370 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div :class="['overlay-container', mode, voiceMode]">
-    <div class="overlay-content">
-      <!-- Screenshot badge -->
-      <div v-if="screenshotActive" class="screenshot-badge">📷</div>
-
-      <!-- Recording indicator -->
-      <div v-if="mode === 'recording'" class="recording-indicator">
-        <div class="pulse-ring"></div>
-        <div class="mic-icon">{{ voiceMode === 'assistant' ? '🤖' : '🎤' }}</div>
+  <div :class="['overlay-container', mode || 'idle', voiceMode]">
+    <div class="overlay-panel">
+      <div class="panel-topline">
+        <span class="mode-chip">{{ modeLabel }}</span>
+        <span class="phase-chip">{{ phaseBadge }}</span>
+        <span v-if="screenshotActive" class="context-chip">截图上下文</span>
+        <span v-if="showCancelHint" class="cancel-pill" aria-label="按 Esc 取消">
+          <span class="cancel-pill-label">取消</span>
+          <span class="cancel-pill-key">Esc</span>
+        </span>
       </div>
 
-      <!-- Processing spinner -->
-      <div v-if="mode === 'processing'" class="processing-indicator">
-        <div class="spinner"></div>
+      <div class="panel-main">
+        <div class="indicator" aria-hidden="true">
+          <div v-if="mode === 'recording'" class="indicator-bars">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div v-else-if="mode === 'processing'" class="indicator-spinner"></div>
+          <div v-else-if="mode === 'success'" class="indicator-symbol success-symbol"></div>
+          <div v-else-if="mode === 'error'" class="indicator-symbol error-symbol"></div>
+          <div v-else class="indicator-idle"></div>
+        </div>
+
+        <div class="copy-block">
+          <p class="status-title">{{ statusTitle }}</p>
+          <p class="status-text">{{ statusText }}</p>
+        </div>
       </div>
-
-      <!-- Success check -->
-      <div v-if="mode === 'success'" class="success-indicator">✓</div>
-
-      <!-- Error icon -->
-      <div v-if="mode === 'error'" class="error-indicator">✕</div>
-
-      <!-- Text display -->
-      <div class="overlay-text">{{ text }}</div>
     </div>
   </div>
 </template>
 
 <style>
-* {
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
   margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+  background: transparent;
+  overflow: hidden;
 }
 
 body {
-  background: transparent;
-  overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'Aptos', 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 .overlay-container {
+  --panel-top: rgba(52, 60, 74, 0.9);
+  --panel-bottom: rgba(35, 43, 58, 0.84);
+  --panel-glow: rgba(130, 144, 164, 0.18);
+  --mode-chip-bg: rgba(255, 255, 255, 0.05);
+  --mode-chip-border: rgba(255, 255, 255, 0.12);
+  --accent: #f97316;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100vw;
   height: 100vh;
-  padding: 12px;
+  padding: 1px;
+  background: transparent;
 }
 
-.overlay-content {
+.overlay-container.transcription {
+  --panel-top: rgba(52, 60, 74, 0.9);
+  --panel-bottom: rgba(35, 43, 58, 0.84);
+  --panel-glow: rgba(130, 144, 164, 0.18);
+  --mode-chip-bg: rgba(249, 115, 22, 0.08);
+  --mode-chip-border: rgba(249, 115, 22, 0.18);
+}
+
+.overlay-container.assistant {
+  --panel-top: rgba(24, 53, 76, 0.9);
+  --panel-bottom: rgba(16, 37, 57, 0.84);
+  --panel-glow: rgba(74, 168, 236, 0.2);
+  --mode-chip-bg: rgba(14, 165, 233, 0.12);
+  --mode-chip-border: rgba(56, 189, 248, 0.22);
+  --accent: #0ea5e9;
+}
+
+.overlay-container.success {
+  --accent: #10b981;
+}
+
+.overlay-container.error {
+  --accent: #ef4444;
+}
+
+.overlay-panel {
   position: relative;
+  width: 100%;
+  max-width: none;
+  padding: 16px 18px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, var(--panel-glow), transparent 32%),
+    linear-gradient(180deg, var(--panel-top), var(--panel-bottom));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.overlay-panel::after {
+  display: none;
+}
+
+.panel-topline {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 24px;
-  border-radius: 16px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  background: rgba(20, 20, 20, 0.92);
-  color: white;
-  font-size: 14px;
-  max-width: 380px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
 
-.screenshot-badge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
+.mode-chip,
+.phase-chip,
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--mode-chip-border);
+  color: rgba(241, 245, 249, 0.95);
   font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--mode-chip-bg);
+}
+
+.phase-chip {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  background: rgba(249, 115, 22, 0.22);
+}
+
+.overlay-container.assistant .phase-chip {
+  background: rgba(14, 165, 233, 0.22);
+}
+
+.overlay-container.success .phase-chip {
+  background: rgba(16, 185, 129, 0.22);
+}
+
+.overlay-container.error .phase-chip {
+  background: rgba(239, 68, 68, 0.22);
+}
+
+.context-chip {
+  color: #dbeafe;
+  background: rgba(56, 189, 248, 0.18);
+}
+
+.cancel-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 26px;
+  padding: 0 6px 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cancel-pill-label {
   line-height: 1;
-  background: rgba(40, 40, 40, 0.95);
-  border-radius: 8px;
-  padding: 3px 4px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-/* 语音识别模式 - 蓝色主题 (默认) */
-.overlay-container.recording .overlay-content {
-  border: 1px solid rgba(255, 59, 48, 0.4);
+.cancel-pill-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
 }
 
-.overlay-container.processing .overlay-content {
-  border: 1px solid rgba(0, 113, 227, 0.4);
+.panel-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
-.overlay-container.success .overlay-content {
-  border: 1px solid rgba(52, 199, 89, 0.4);
-}
-
-.overlay-container.error .overlay-content {
-  border: 1px solid rgba(255, 59, 48, 0.4);
-}
-
-/* 语音助手模式 - 紫色主题 */
-.overlay-container.assistant.recording .overlay-content {
-  border: 1px solid rgba(175, 82, 222, 0.5);
-  box-shadow: 0 8px 32px rgba(175, 82, 222, 0.15);
-}
-
-.overlay-container.assistant.processing .overlay-content {
-  border: 1px solid rgba(175, 82, 222, 0.5);
-  box-shadow: 0 8px 32px rgba(175, 82, 222, 0.15);
-}
-
-.overlay-container.assistant.success .overlay-content {
-  border: 1px solid rgba(175, 82, 222, 0.4);
-}
-
-.overlay-container.assistant.error .overlay-content {
-  border: 1px solid rgba(175, 82, 222, 0.4);
-}
-
-/* 语音助手模式 - 紫色脉冲动画 */
-.overlay-container.assistant .pulse-ring {
-  background: rgba(175, 82, 222, 0.3);
-}
-
-/* 语音助手模式 - 紫色spinner */
-.overlay-container.assistant .spinner {
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: rgba(175, 82, 222, 0.9);
-}
-
-/* 语音助手模式 - 紫色成功指示器 */
-.overlay-container.assistant .success-indicator {
-  color: #af52de;
-}
-
-.recording-indicator {
+.indicator {
   position: relative;
-  width: 28px;
-  height: 28px;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
-.pulse-ring {
+.indicator::before {
+  content: '';
   position: absolute;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: rgba(255, 59, 48, 0.3);
-  animation: pulse 1.5s ease-in-out infinite;
+  inset: 8px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, rgba(255, 255, 255, 0.12));
+  opacity: 0.7;
 }
 
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.4); opacity: 0; }
-}
-
-.mic-icon {
-  font-size: 16px;
+.indicator-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 24px;
   position: relative;
   z-index: 1;
 }
 
-.processing-indicator {
-  flex-shrink: 0;
+.indicator-bars span {
+  width: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 72%, white), var(--accent));
+  animation: bounce 1s ease-in-out infinite;
 }
 
-.spinner {
-  width: 20px;
+.indicator-bars span:nth-child(1) {
+  height: 12px;
+  animation-delay: 0s;
+}
+
+.indicator-bars span:nth-child(2) {
+  height: 22px;
+  animation-delay: 0.12s;
+}
+
+.indicator-bars span:nth-child(3) {
+  height: 16px;
+  animation-delay: 0.24s;
+}
+
+.indicator-spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  border-right-color: color-mix(in srgb, var(--accent) 60%, white);
+  animation: spin 0.85s linear infinite;
+}
+
+.indicator-symbol,
+.indicator-idle {
+  width: 24px;
+  height: 24px;
+  position: relative;
+}
+
+.success-symbol::before,
+.success-symbol::after,
+.error-symbol::before,
+.error-symbol::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 76%, white);
+}
+
+.success-symbol::before {
+  left: 6px;
+  top: 12px;
+  width: 5px;
+  height: 12px;
+  transform: rotate(38deg);
+}
+
+.success-symbol::after {
+  left: 12px;
+  top: 8px;
+  width: 5px;
+  height: 18px;
+  transform: rotate(-42deg);
+}
+
+.error-symbol::before,
+.error-symbol::after {
+  left: 11px;
+  top: 2px;
+  width: 4px;
   height: 20px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+}
+
+.error-symbol::before {
+  transform: rotate(45deg);
+}
+
+.error-symbol::after {
+  transform: rotate(-45deg);
+}
+
+.indicator-idle {
+  border-radius: 999px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 75%, white), color-mix(in srgb, var(--accent) 35%, transparent));
+  box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.06);
+}
+
+.copy-block {
+  min-width: 0;
+}
+
+.status-title,
+.status-text {
+  margin: 0;
+}
+
+.status-title {
+  color: #f8fafc;
+  font-family: 'Segoe UI Variable Display', 'Aptos Display', 'Aptos', sans-serif;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.status-text {
+  margin-top: 6px;
+  color: rgba(226, 232, 240, 0.86);
+  font-size: 13px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+@keyframes bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.success-indicator {
-  color: #34c759;
-  font-size: 20px;
-  font-weight: bold;
-  flex-shrink: 0;
-}
-
-.error-indicator {
-  color: #ff3b30;
-  font-size: 20px;
-  font-weight: bold;
-  flex-shrink: 0;
-}
-
-.overlay-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
