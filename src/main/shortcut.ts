@@ -556,6 +556,7 @@ export class ShortcutService extends EventEmitter {
   private accessibilityPollTimer: ReturnType<typeof setInterval> | null = null
   private accessibilityPollAttempts = 0
   private nativeBackendReady = false
+  private shortcutCaptureActive = false
 
   constructor(configStore: ConfigStore, pipeline: Pipeline, platform: NodeJS.Platform = process.platform) {
     super()
@@ -573,7 +574,11 @@ export class ShortcutService extends EventEmitter {
     }
 
     this.nativeBackend?.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
-    this.nativeBackend?.on('escape', () => this.pipeline.cancel())
+    this.nativeBackend?.on('escape', () => {
+      if (!this.shortcutCaptureActive) {
+        this.pipeline.cancel()
+      }
+    })
     this.nativeBackend?.on('exit', () => {
       this.nativeBackendReady = false
       this.refresh()
@@ -686,6 +691,7 @@ export class ShortcutService extends EventEmitter {
       modes
     }
 
+    this.applyShortcutCaptureState()
     this.emit('status-changed', { status: this.status } satisfies ShortcutStatusChangedEvent)
     return this.status
   }
@@ -696,6 +702,13 @@ export class ShortcutService extends EventEmitter {
 
   updateShortcut(_mode: VoiceMode, _shortcut: string): ShortcutServiceStatus {
     return this.refresh()
+  }
+
+  setShortcutCaptureActive(active: boolean): void {
+    if (this.shortcutCaptureActive === active) return
+
+    this.shortcutCaptureActive = active
+    this.applyShortcutCaptureState()
   }
 
   beginAccessibilityPolling(): void {
@@ -759,11 +772,32 @@ export class ShortcutService extends EventEmitter {
   }
 
   private handleShortcutTriggered(mode: VoiceMode): void {
+    if (this.shortcutCaptureActive) return
+
     const now = Date.now()
     if (now - this.lastTriggerTime < this.debounceMs) return
 
     this.lastTriggerTime = now
     void this.pipeline.toggle(mode)
+  }
+
+  private applyShortcutCaptureState(): void {
+    if (this.shortcutCaptureActive) {
+      this.nativeBackend?.setShortcuts([])
+      if (this.fallbackBackend.isAvailable()) {
+        this.fallbackBackend.setShortcuts([])
+      }
+      return
+    }
+
+    const shortcuts = this.buildShortcutRegistrations(getConfig(this.configStore))
+    if (this.status.backendState === 'native' && this.nativeBackend?.isAvailable()) {
+      this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
+    }
+
+    if (this.status.backendState === 'fallback' && this.fallbackBackend.isAvailable()) {
+      this.fallbackBackend.setShortcuts(shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut)))
+    }
   }
 
   private buildShortcutRegistrations(config: ReturnType<typeof getConfig>): ShortcutRegistration[] {

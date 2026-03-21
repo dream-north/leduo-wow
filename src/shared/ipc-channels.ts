@@ -10,6 +10,7 @@ export const IPC = {
   SHORTCUT_STATUS_CHANGED: 'shortcut:status-changed',
   SHORTCUT_REFRESH: 'shortcut:refresh',
   SHORTCUT_ENSURE_NATIVE_READY: 'shortcut:ensure-native-ready',
+  SHORTCUT_CAPTURE_SET: 'shortcut:capture-set',
   PERMISSIONS_CHECK: 'permissions:check',
   PERMISSIONS_REQUEST: 'permissions:request',
   APP_GET_VERSION: 'app:get-version',

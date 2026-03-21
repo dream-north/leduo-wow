@@ -31,6 +31,7 @@ declare global {
       getShortcutStatus: () => Promise<ShortcutServiceStatus>
       refreshShortcutStatus: () => Promise<ShortcutServiceStatus>
       ensureNativeBackendReady: () => Promise<boolean>
+      setShortcutCaptureActive: (active: boolean) => Promise<boolean>
       onPipelineStatus: (callback: (status: string) => void) => () => void
       onPartialText: (callback: (text: string) => void) => () => void
       onFinalText: (callback: (text: string) => void) => () => void

@@ -59,15 +59,17 @@ const polishApiKeyVisible = ref(false)
 const polishApiKeyInput = ref('')
 
 async function saveAsrApiKey(): Promise<void> {
+  if (asrApiKeyInput.value === store.asrApiKey) return
   await store.saveSetting('asrApiKey', asrApiKeyInput.value)
   store.asrApiKey = asrApiKeyInput.value
-  showSaveMessage('语音识别 API Key 已保存')
+  showSaveMessage('语音识别 API Key 已自动保存')
 }
 
 async function savePolishApiKey(): Promise<void> {
+  if (polishApiKeyInput.value === store.polishApiKey) return
   await store.saveSetting('polishApiKey', polishApiKeyInput.value)
   store.polishApiKey = polishApiKeyInput.value
-  showSaveMessage('润色 API Key 已保存')
+  showSaveMessage('润色 API Key 已自动保存')
 }
 
 async function saveAsrBaseUrl(): Promise<void> {
@@ -95,6 +97,7 @@ const pendingShortcut = ref('')  // Captured shortcut waiting to be saved
 let shortcutKeyHandler: ((e: KeyboardEvent) => void) | null = null
 let shortcutKeyUpHandler: ((e: KeyboardEvent) => void) | null = null
 let capturedKeys: string[] = []  // Accumulated keys during shortcut recording
+let shortcutCaptureSuspended = false
 
 // Map e.code to a readable key name for Electron's globalShortcut
 // On macOS, Alt+key produces special unicode chars in e.key (e.g. Alt+/ → «),
@@ -136,8 +139,8 @@ function isModifierCode(code: string): boolean {
 }
 
 function isValidShortcutText(shortcut: string): boolean {
-  const parts = shortcut.split('+').filter(Boolean)
-  return parts.some((part) => part.includes('Command') || part.includes('Control') || part.includes('Option') || part === 'Ctrl' || part === 'Alt' || part === 'Shift' || part === 'Meta')
+  const parts = shortcut.split('+').map((part) => part.trim()).filter(Boolean)
+  return parts.some((part) => /^(Left|Right)?(Command|Control|Option|Alt|Shift|Ctrl|Meta)$/.test(part))
 }
 
 function resetRecordingState(): void {
@@ -248,6 +251,8 @@ function handleShortcutKeyUp(e: KeyboardEvent): void {
 async function startRecordShortcut(mode: VoiceMode): Promise<void> {
   stopShortcutListeners()
   resetRecordingState()
+  await window.electronAPI.setShortcutCaptureActive(true)
+  shortcutCaptureSuspended = true
   recordingShortcut.value = mode
   shortcutKeyHandler = handleShortcutKeyDown
   shortcutKeyUpHandler = handleShortcutKeyUp
@@ -283,15 +288,23 @@ async function confirmShortcut(): Promise<void> {
     store.transcriptionShortcut = pendingShortcut.value
   }
 
-  await window.electronAPI.refreshShortcutStatus()
-  showSaveMessage('快捷键已保存')
   stopShortcutListeners()
   resetRecordingState()
+  if (shortcutCaptureSuspended) {
+    await window.electronAPI.setShortcutCaptureActive(false)
+    shortcutCaptureSuspended = false
+  }
+  await window.electronAPI.refreshShortcutStatus()
+  showSaveMessage('快捷键已保存')
 }
 
 async function cancelShortcut(): Promise<void> {
   stopShortcutListeners()
   resetRecordingState()
+  if (shortcutCaptureSuspended) {
+    await window.electronAPI.setShortcutCaptureActive(false)
+    shortcutCaptureSuspended = false
+  }
 }
 
 // Reset to default shortcut
@@ -811,6 +824,10 @@ onUnmounted(() => {
     unsubscribeShortcutStatus()
   }
   stopShortcutListeners()
+  if (shortcutCaptureSuspended) {
+    shortcutCaptureSuspended = false
+    void window.electronAPI.setShortcutCaptureActive(false)
+  }
 })
 </script>
 
@@ -1145,18 +1162,19 @@ onUnmounted(() => {
 
           <div class="setting-group">
             <label class="setting-label">API Key</label>
-            <p class="setting-hint">默认使用阿里云百炼平台，推荐在百炼控制台获取 API Key。</p>
+            <p class="setting-hint">默认使用阿里云百炼平台，推荐在百炼控制台获取 API Key。失去焦点后会自动保存。</p>
             <div class="api-key-row">
               <input
                 v-model="asrApiKeyInput"
                 :type="asrApiKeyVisible ? 'text' : 'password'"
                 class="input-field"
                 placeholder="sk-..."
+                @blur="saveAsrApiKey"
+                @keydown.enter.prevent="saveAsrApiKey"
               />
               <button class="btn btn-secondary" @click="asrApiKeyVisible = !asrApiKeyVisible">
                 {{ asrApiKeyVisible ? '隐藏' : '显示' }}
               </button>
-              <button class="btn btn-primary" @click="saveAsrApiKey">保存</button>
             </div>
           </div>
 
@@ -1186,18 +1204,19 @@ onUnmounted(() => {
 
           <div class="setting-group">
             <label class="setting-label">API Key</label>
-            <p class="setting-hint">默认使用阿里云百炼平台，也可替换为任何 OpenAI 兼容的接口。</p>
+            <p class="setting-hint">默认使用阿里云百炼平台，也可替换为任何 OpenAI 兼容的接口。失去焦点后会自动保存。</p>
             <div class="api-key-row">
               <input
                 v-model="polishApiKeyInput"
                 :type="polishApiKeyVisible ? 'text' : 'password'"
                 class="input-field"
                 placeholder="sk-..."
+                @blur="savePolishApiKey"
+                @keydown.enter.prevent="savePolishApiKey"
               />
               <button class="btn btn-secondary" @click="polishApiKeyVisible = !polishApiKeyVisible">
                 {{ polishApiKeyVisible ? '隐藏' : '显示' }}
               </button>
-              <button class="btn btn-primary" @click="savePolishApiKey">保存</button>
             </div>
           </div>
 

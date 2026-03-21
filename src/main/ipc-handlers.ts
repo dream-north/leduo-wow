@@ -86,6 +86,11 @@ export function registerIpcHandlers(
     return await shortcutService.ensureNativeBackendReady()
   })
 
+  ipcMain.handle(IPC.SHORTCUT_CAPTURE_SET, (_event, active: boolean) => {
+    shortcutService.setShortcutCaptureActive(active)
+    return true
+  })
+
   // Pipeline status listener
   pipeline.on('status', (status) => {
     updateTrayMenu(status)

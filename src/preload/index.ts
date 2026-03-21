@@ -11,6 +11,7 @@ const electronAPI = {
   getShortcutStatus: () => ipcRenderer.invoke(IPC.SHORTCUT_STATUS_GET),
   refreshShortcutStatus: () => ipcRenderer.invoke(IPC.SHORTCUT_REFRESH),
   ensureNativeBackendReady: () => ipcRenderer.invoke(IPC.SHORTCUT_ENSURE_NATIVE_READY) as Promise<boolean>,
+  setShortcutCaptureActive: (active: boolean) => ipcRenderer.invoke(IPC.SHORTCUT_CAPTURE_SET, active) as Promise<boolean>,
 
   // Permissions
   checkPermissions: () => ipcRenderer.invoke(IPC.PERMISSIONS_CHECK),
