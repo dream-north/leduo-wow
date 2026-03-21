@@ -23,6 +23,7 @@ interface AssistantResultPayload {
 declare global {
   interface Window {
     assistantResultAPI?: {
+      notifyReady: () => void
       getLatestPayload: () => Promise<AssistantResultPayload | null>
       onUpdate: (callback: (data: AssistantResultPayload) => void) => () => void
       onHide: (callback: () => void) => () => void
@@ -147,6 +148,8 @@ onMounted(() => {
     hoveredStatDetail.value = ''
     clearCopiedTimer()
   })
+
+  window.assistantResultAPI.notifyReady()
 
   void window.assistantResultAPI.getLatestPayload().then((payload) => {
     if (payload && !receivedLiveUpdate) {

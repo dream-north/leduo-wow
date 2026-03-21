@@ -3,6 +3,10 @@ import { IPC } from '../shared/ipc-channels'
 import type { OverlayResultStat } from '../shared/types'
 
 const assistantResultAPI = {
+  notifyReady: () => {
+    ipcRenderer.send(IPC.ASSISTANT_RESULT_READY)
+  },
+
   getLatestPayload: () =>
     ipcRenderer.invoke(IPC.ASSISTANT_RESULT_GET_LATEST) as Promise<{
       text: string

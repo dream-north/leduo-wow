@@ -8,7 +8,7 @@ import { updateTrayMenu } from './tray'
 import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
 import type { ShortcutServiceStatus } from '../shared/types'
-import { getLatestAssistantResultPayload } from './assistant-result-window'
+import { getLatestAssistantResultPayload, markAssistantResultWindowReady } from './assistant-result-window'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
@@ -158,6 +158,15 @@ export function registerIpcHandlers(
 
   ipcMain.on(IPC.ASSISTANT_RESULT_COPY, (_event, text: string) => {
     clipboard.writeText(text)
+  })
+
+  ipcMain.on(IPC.ASSISTANT_RESULT_READY, (event) => {
+    const assistantResultWindow = BrowserWindow.fromWebContents(event.sender)
+    if (!assistantResultWindow || assistantResultWindow.isDestroyed()) {
+      return
+    }
+
+    markAssistantResultWindowReady(assistantResultWindow)
   })
 
   ipcMain.handle(IPC.ASSISTANT_RESULT_GET_LATEST, () => {

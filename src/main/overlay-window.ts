@@ -36,7 +36,9 @@ export function createOverlayWindow(): BrowserWindow {
     }
   })
 
-  applyFloatingWindowBehavior(win, 'screen-saver')
+  applyFloatingWindowBehavior(win, 'screen-saver', {
+    windowsLevel: 'screen-saver'
+  })
   win.setIgnoreMouseEvents(true)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {

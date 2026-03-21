@@ -5,12 +5,17 @@ export type FloatingWindowLike = Pick<
   'setAlwaysOnTop' | 'setVisibleOnAllWorkspaces' | 'moveTop' | 'setHiddenInMissionControl'
 >
 
+interface FloatingWindowBehaviorOptions {
+  windowsLevel?: 'floating' | 'screen-saver' | 'pop-up-menu'
+}
+
 export function applyFloatingWindowBehavior(
   win: FloatingWindowLike,
-  level: 'floating' | 'screen-saver'
+  level: 'floating' | 'screen-saver',
+  options?: FloatingWindowBehaviorOptions
 ): void {
   const isMac = process.platform === 'darwin'
-  const topLevel = isMac ? level : 'pop-up-menu'
+  const topLevel = isMac ? level : (options?.windowsLevel ?? 'pop-up-menu')
   win.setAlwaysOnTop(true, topLevel, 1)
   if (isMac) {
     win.setVisibleOnAllWorkspaces(true, {

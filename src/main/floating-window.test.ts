@@ -48,4 +48,27 @@ describe('applyFloatingWindowBehavior', () => {
 
     Object.defineProperty(process, 'platform', { value: originalPlatform })
   })
+
+  it('can opt into the higher screen-saver level on Windows for passive HUD windows', () => {
+    const originalPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+
+    const win = {
+      setAlwaysOnTop: vi.fn(),
+      setVisibleOnAllWorkspaces: vi.fn(),
+      setHiddenInMissionControl: vi.fn(),
+      moveTop: vi.fn()
+    }
+
+    applyFloatingWindowBehavior(win as never, 'screen-saver', {
+      windowsLevel: 'screen-saver'
+    })
+
+    expect(win.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver', 1)
+    expect(win.setVisibleOnAllWorkspaces).not.toHaveBeenCalled()
+    expect(win.setHiddenInMissionControl).not.toHaveBeenCalled()
+    expect(win.moveTop).toHaveBeenCalled()
+
+    Object.defineProperty(process, 'platform', { value: originalPlatform })
+  })
 })

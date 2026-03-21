@@ -9,8 +9,16 @@ const defaultWindowWidth = 700
 const defaultWindowHeight = 560
 const minWindowWidth = 560
 const minWindowHeight = 420
+const hiddenWindowBounds = {
+  x: -10000,
+  y: -10000,
+  width: 1,
+  height: 1
+}
 let isQuitting = false
 const latestPayloadByWindow = new WeakMap<BrowserWindow, AssistantResultPayload>()
+const rendererReadyByWindow = new WeakMap<BrowserWindow, boolean>()
+const pendingShowByWindow = new WeakMap<BrowserWindow, boolean>()
 
 export interface AssistantResultPayload {
   text: string
@@ -30,14 +38,11 @@ app.on('before-quit', () => {
 })
 
 export function createAssistantResultWindow(): BrowserWindow {
-  const display = screen.getPrimaryDisplay()
-  const { x, y, width, height } = display.workArea
-
   const win = new BrowserWindow({
-    width: defaultWindowWidth,
-    height: defaultWindowHeight,
-    x: Math.round(x + (width - defaultWindowWidth) / 2),
-    y: Math.round(y + (height - defaultWindowHeight) / 2),
+    width: hiddenWindowBounds.width,
+    height: hiddenWindowBounds.height,
+    x: hiddenWindowBounds.x,
+    y: hiddenWindowBounds.y,
     show: false,
     frame: false,
     transparent: true,
@@ -57,6 +62,9 @@ export function createAssistantResultWindow(): BrowserWindow {
     }
   })
   win.setMinimumSize(minWindowWidth, minWindowHeight)
+  win.setIgnoreMouseEvents(true)
+  rendererReadyByWindow.set(win, false)
+  pendingShowByWindow.set(win, false)
   latestPayloadByWindow.set(win, {
     text: ''
   })
@@ -64,9 +72,6 @@ export function createAssistantResultWindow(): BrowserWindow {
     void shell.openExternal(details.url)
     return { action: 'deny' }
   })
-
-  applyFloatingWindowBehavior(win, 'screen-saver')
-
   win.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
@@ -75,6 +80,8 @@ export function createAssistantResultWindow(): BrowserWindow {
 
   win.on('closed', () => {
     latestPayloadByWindow.delete(win)
+    rendererReadyByWindow.delete(win)
+    pendingShowByWindow.delete(win)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -84,6 +91,22 @@ export function createAssistantResultWindow(): BrowserWindow {
   }
 
   return win
+}
+
+function dispatchAssistantResultPayload(
+  win: BrowserWindow,
+  payload: AssistantResultPayload
+): void {
+  const wasVisible = win.isVisible()
+  win.setIgnoreMouseEvents(false)
+  win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, payload)
+
+  if (!wasVisible) {
+    positionAssistantResultWindow(win, payload.position, payload.size)
+    applyFloatingWindowBehavior(win, 'screen-saver')
+    win.showInactive()
+    win.moveTop()
+  }
 }
 
 export function positionAssistantResultWindowAtCursor(win: BrowserWindow): void {
@@ -143,31 +166,40 @@ export function showAssistantResultWindow(
   payload: AssistantResultPayload
 ): void {
   latestPayloadByWindow.set(win, payload)
-
-  const showWindow = (): void => {
-    const wasVisible = win.isVisible()
-    win.webContents.send(IPC.ASSISTANT_RESULT_UPDATE, payload)
-    if (!wasVisible) {
-      positionAssistantResultWindow(win, payload.position, payload.size)
-      applyFloatingWindowBehavior(win, 'screen-saver')
-      win.showInactive()
-      win.moveTop()
-    }
-  }
-
-  if (win.webContents.isLoadingMainFrame()) {
-    win.webContents.once('did-finish-load', showWindow)
+  if (!rendererReadyByWindow.get(win)) {
+    pendingShowByWindow.set(win, true)
     return
   }
 
-  showWindow()
+  dispatchAssistantResultPayload(win, payload)
 }
 
 export function hideAssistantResultWindow(win: BrowserWindow): void {
-  win.webContents.send(IPC.ASSISTANT_RESULT_HIDE)
+  pendingShowByWindow.set(win, false)
+  if (rendererReadyByWindow.get(win)) {
+    win.webContents.send(IPC.ASSISTANT_RESULT_HIDE)
+  }
+  win.setIgnoreMouseEvents(true)
   win.hide()
+  win.setBounds(hiddenWindowBounds)
 }
 
 export function getLatestAssistantResultPayload(win: BrowserWindow): AssistantResultPayload | null {
   return latestPayloadByWindow.get(win) ?? null
+}
+
+export function markAssistantResultWindowReady(win: BrowserWindow): void {
+  rendererReadyByWindow.set(win, true)
+
+  if (!pendingShowByWindow.get(win)) {
+    return
+  }
+
+  pendingShowByWindow.set(win, false)
+  const latestPayload = latestPayloadByWindow.get(win)
+  if (!latestPayload) {
+    return
+  }
+
+  dispatchAssistantResultPayload(win, latestPayload)
 }

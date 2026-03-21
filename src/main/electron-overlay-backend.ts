@@ -3,6 +3,7 @@ import { IPC } from '../shared/ipc-channels'
 import type { OverlayHudPayload, OverlayResultPayload } from '../shared/types'
 import type { OverlayBackend } from './overlay-backend'
 import { parkOverlayWindow, positionOverlayAtCursor } from './overlay-window'
+import { applyFloatingWindowBehavior } from './floating-window'
 import {
   createAssistantResultWindow,
   hideAssistantResultWindow,
@@ -42,9 +43,10 @@ export class ElectronOverlayBackend implements OverlayBackend {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
     positionOverlayAtCursor(overlayWindow)
-    overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? 'screen-saver' : 'pop-up-menu', 1)
+    applyFloatingWindowBehavior(overlayWindow, 'screen-saver', {
+      windowsLevel: 'screen-saver'
+    })
     overlayWindow.showInactive()
-    overlayWindow.moveTop()
     overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, payload)
   }
 

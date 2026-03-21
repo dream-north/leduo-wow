@@ -13,7 +13,8 @@ import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 import { keyboardListener } from '../native-keyboard-listener'
-import { createAssistantResultWindow } from './assistant-result-window'
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -227,7 +228,30 @@ export function updateDockIconVisibility(hideDockIcon: boolean): void {
   }, 30)
 }
 
-app.whenReady().then(async () => {
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const focusExistingInstance = (): void => {
+      if (settingsWindow?.isMinimized()) {
+        settingsWindow.restore()
+      }
+
+      showSettingsWindow()
+      shortcutService?.refresh()
+    }
+
+    if (app.isReady()) {
+      focusExistingInstance()
+      return
+    }
+
+    void app.whenReady().then(() => {
+      focusExistingInstance()
+    })
+  })
+
+  app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.leduowow.app')
 
   if (process.platform !== 'darwin') {
@@ -260,12 +284,13 @@ app.whenReady().then(async () => {
   // Create windows
   settingsWindow = createSettingsWindow()
   overlayWindow = createOverlayWindow()
-  assistantResultWindow = createAssistantResultWindow()
-  attachWindowDebugLogging(assistantResultWindow, 'assistant-result')
   overlayManager = new OverlayManager({
     overlayWindow,
     getAssistantResultWindow: () => assistantResultWindow,
     setAssistantResultWindow: (window) => {
+      if (window && window !== assistantResultWindow) {
+        attachWindowDebugLogging(window, 'assistant-result')
+      }
       assistantResultWindow = window
     }
   })
@@ -308,7 +333,8 @@ app.whenReady().then(async () => {
   app.on('browser-window-focus', () => {
     shortcutService?.refresh()
   })
-})
+  })
+}
 
 app.on('before-quit', () => {
   isQuitting = true
