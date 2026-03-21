@@ -28,6 +28,13 @@ let isQuitting = false
 let lastDockState: boolean | null = null
 let dockUpdateTimeout: NodeJS.Timeout | null = null
 
+function getWindowsWindowIconPath(): string | undefined {
+  if (process.platform !== 'win32') return undefined
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icon.ico')
+    : join(__dirname, '../../build/icon.ico')
+}
+
 function attachWindowDebugLogging(win: BrowserWindow, name: string): void {
   if (!is.dev) return
 
@@ -84,6 +91,7 @@ function createSettingsWindow(): BrowserWindow {
     show: false,
     resizable: true,
     autoHideMenuBar: process.platform !== 'darwin',
+    icon: getWindowsWindowIconPath(),
     title: '乐多汪汪 设置',
     ...(process.platform === 'darwin'
       ? {
@@ -319,4 +327,5 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   // Keep app running even when all windows closed (menubar app)
 })
+
 

@@ -1,8 +1,8 @@
 {
   "name": "leduo-wow",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "author": "DreamNorth",
-  "description": "Mac voice input app powered by Qwen ASR and LLM",
+  "description": "Cross-platform voice input and assistant app powered by Qwen ASR and LLM",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -44,3 +44,4 @@
     "vue-tsc": "^2.2.0"
   }
 }
+

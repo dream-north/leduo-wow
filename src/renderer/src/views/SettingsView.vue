@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import {
@@ -1609,7 +1609,7 @@ onUnmounted(() => {
           <div class="about-english-name">Leduo Wow</div>
           <div class="about-version">版本 {{ version || '0.1.0' }}</div>
           <p class="about-description">
-            Mac 语音输入工具，按下快捷键即可语音输入，AI 自动润色后输入到任意应用中。
+            多平台语音输入与语音助手工具，按下快捷键即可语音输入，AI 自动润色或回答后输出到任意应用中。
           </p>
           <p class="about-author">作者：梦北</p>
         </div>
