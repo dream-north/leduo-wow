@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
+import { existsSync, readdirSync, statSync } from 'fs'
 import { globalShortcut } from 'electron'
-import { keyboardListener, KeyInfo, parseShortcut } from '../native-keyboard-listener'
+import { join } from 'path'
+import { keyboardListener, KeyInfo, matchShortcut, parseShortcut } from '../native-keyboard-listener'
 import { ConfigStore, getConfig } from './config-store'
 import { Pipeline } from './pipeline'
 import { checkPermissions } from './permissions'
@@ -11,6 +13,7 @@ import type {
   ShortcutStatusReason,
   VoiceMode
 } from '../shared/types'
+import { getDefaultAssistantShortcut, getDefaultTranscriptionShortcut } from '../shared/types'
 
 interface ShortcutRegistration {
   id: VoiceMode
@@ -36,6 +39,8 @@ interface ShortcutBackend extends EventEmitter {
 interface ShortcutStatusChangedEvent {
   status: ShortcutServiceStatus
 }
+
+type ParsedShortcut = ReturnType<typeof parseShortcut>
 
 const ESCAPE_KEYS = new Set(['Escape', 'Esc'])
 
@@ -111,6 +116,36 @@ function toElectronAccelerator(shortcut: string): string | null {
   return [...modifiers, key].join('+')
 }
 
+function resolveBundledWindowsKeyServerPath(): string {
+  if (process.env.NODE_ENV === 'production' || __dirname.includes('app.asar')) {
+    return join(process.resourcesPath, 'WinKeyServer.exe')
+  }
+
+  const buildDir = __dirname.includes(join('out', 'main'))
+    ? join(__dirname, '..', '..', 'src', 'native-keyboard-listener', 'WinKeyServer', 'build')
+    : join(__dirname, '..', 'native-keyboard-listener', 'WinKeyServer', 'build')
+
+  const candidateNames = existsSync(buildDir)
+    ? readdirSync(buildDir).filter((name) => /^WinKeyServer(?:-\d+)?\.exe$/i.test(name))
+    : []
+
+  if (candidateNames.length > 0) {
+    const newestPath = candidateNames
+      .map((name) => join(buildDir, name))
+      .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)[0]
+
+    if (newestPath) {
+      return newestPath
+    }
+  }
+
+  if (__dirname.includes(join('out', 'main'))) {
+    return join(__dirname, '..', '..', 'src', 'native-keyboard-listener', 'WinKeyServer', 'build', 'WinKeyServer.exe')
+  }
+
+  return join(__dirname, '..', 'native-keyboard-listener', 'WinKeyServer', 'build', 'WinKeyServer.exe')
+}
+
 class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
   readonly id: ShortcutBackendState = 'native'
   readonly capabilities: ShortcutBackendCapabilities = {
@@ -144,29 +179,22 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
       this.emit('exit', code)
     })
 
-    // Handle start error from Swift process (EventTap creation failed)
     keyboardListener.on('start-error', () => {
-      console.warn('[MacNativeShortcutBackend] Swift EventTap creation failed')
-      if (this.started) {
-        this.started = false
-        this.emit('exit', null)
-      }
+      if (!this.started) return
+      this.started = false
+      this.emit('exit', null)
     })
   }
 
   start(): boolean {
-    // If already started and event tap is ready, just return
     if (this.started && keyboardListener.isReady()) {
       return true
     }
 
-    // If started but event tap not ready, return false (caller should decide whether to restart)
     if (this.started) {
-      console.log('[MacNativeShortcutBackend] Started but event tap not ready')
       return false
     }
 
-    // Not started yet, start fresh
     const started = keyboardListener.start()
     if (started) {
       this.started = true
@@ -175,21 +203,7 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
     return started
   }
 
-  restart(): boolean {
-    if (!this.started) {
-      return this.start()
-    }
-
-    const restarted = keyboardListener.restart()
-    this.started = restarted
-    if (restarted) {
-      this.applyShortcuts()
-    }
-    return restarted
-  }
-
   forceRestart(): boolean {
-    console.log('[MacNativeShortcutBackend] Force restarting...')
     const restarted = keyboardListener.forceRestart()
     this.started = restarted
     if (restarted) {
@@ -200,7 +214,6 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
 
   stop(): void {
     this.started = false
-    // Always stop the underlying process if running
     if (keyboardListener.isRunning()) {
       keyboardListener.setShortcuts([])
       keyboardListener.stop()
@@ -225,6 +238,214 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
   }
 }
 
+class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
+  readonly id: ShortcutBackendState = 'native'
+  readonly capabilities: ShortcutBackendCapabilities = {
+    global: true,
+    sideAware: true,
+    supportsModifierOnly: true,
+    requiresAccessibility: false
+  }
+
+  private started = false
+  private shortcuts: ShortcutRegistration[] = []
+  private parsedShortcuts = new Map<VoiceMode, ParsedShortcut>()
+  private currentModifiers = new Set<string>()
+  private currentKeys = new Set<string>()
+  private listener: {
+    addListener: (handler: (event: Record<string, unknown>, down?: unknown) => void) => Promise<void> | void
+    removeListener?: (handler: (event: Record<string, unknown>, down?: unknown) => void) => void
+    kill?: () => void
+  } | null = null
+  private keyHandler: ((event: Record<string, unknown>, down?: unknown) => void) | null = null
+
+  start(): boolean {
+    if (this.started) return true
+
+    try {
+      const serverPath = this.resolveServerPath()
+      if (!serverPath) {
+        console.warn('[WindowsNativeShortcutBackend] WinKeyServer.exe is missing; native shortcut backend unavailable')
+        return false
+      }
+
+      const { GlobalKeyboardListener } = require('node-global-key-listener')
+      const listener = new GlobalKeyboardListener({
+        windows: {
+          serverPath
+        }
+      })
+      const keyHandler = (event: Record<string, unknown>, down?: unknown) => this.handleKeyEvent(event, down)
+      this.listener = listener
+      this.keyHandler = keyHandler
+      this.started = true
+      this.applyShortcuts()
+
+      void Promise.resolve(listener.addListener(keyHandler)).catch((error) => {
+        console.warn('[WindowsNativeShortcutBackend] Failed to start listener:', error)
+        this.handleStartupFailure()
+      })
+
+      return true
+    } catch (error) {
+      console.warn('[WindowsNativeShortcutBackend] Failed to start:', error)
+      this.handleStartupFailure()
+      return false
+    }
+  }
+
+  stop(): void {
+    if (this.listener?.removeListener && this.keyHandler) {
+      this.listener.removeListener(this.keyHandler)
+    }
+    if (this.listener?.kill) {
+      this.listener.kill()
+    }
+
+    this.started = false
+    this.listener = null
+    this.keyHandler = null
+    this.currentModifiers.clear()
+    this.currentKeys.clear()
+    this.parsedShortcuts.clear()
+  }
+
+  setShortcuts(shortcuts: ShortcutRegistration[]): void {
+    this.shortcuts = shortcuts
+    this.applyShortcuts()
+  }
+
+  isAvailable(): boolean {
+    return this.started
+  }
+
+  private applyShortcuts(): void {
+    this.parsedShortcuts.clear()
+    for (const shortcut of this.shortcuts) {
+      this.parsedShortcuts.set(shortcut.id, parseShortcut(shortcut.shortcut))
+    }
+  }
+
+  private handleKeyEvent(event: Record<string, unknown>, down?: unknown): void {
+    if (!this.started) return
+
+    const state = String(event.state ?? '').toUpperCase()
+    const isKeyDown = state === 'DOWN' || state === 'KEY_DOWN' || down === true
+    const isKeyUp = state === 'UP' || state === 'KEY_UP' || down === false
+
+    if (!isKeyDown && !isKeyUp) return
+
+    const normalized = this.normalizeEventKey(event)
+    if (!normalized) return
+
+    if (isKeyDown) {
+      if (normalized.isEscape) {
+        this.emit('escape')
+      }
+
+      if (normalized.modifierName) {
+        this.currentModifiers.add(normalized.modifierName)
+      }
+      this.currentKeys.add(normalized.key)
+
+      for (const shortcut of this.shortcuts) {
+        const parsed = this.parsedShortcuts.get(shortcut.id)
+        if (!parsed) continue
+
+        if (matchShortcut(Array.from(this.currentModifiers), Array.from(this.currentKeys), parsed, normalized.key)) {
+          this.emit('trigger', shortcut.id, shortcut.shortcut)
+        }
+      }
+
+      return
+    }
+
+    if (normalized.modifierName) {
+      this.currentModifiers.delete(normalized.modifierName)
+    }
+    this.currentKeys.delete(normalized.key)
+  }
+
+  private normalizeEventKey(event: Record<string, unknown>): { key: string; modifierName?: string; isEscape?: boolean } | null {
+    const raw = String(event.name ?? event.key ?? '').toUpperCase().trim()
+    if (!raw) return null
+
+    const mappedModifiers: Record<string, { key: string; modifierName: string }> = {
+      'RIGHT CTRL': { key: 'ControlRight', modifierName: 'Control' },
+      'RIGHT CONTROL': { key: 'ControlRight', modifierName: 'Control' },
+      'LEFT CTRL': { key: 'ControlLeft', modifierName: 'Control' },
+      'LEFT CONTROL': { key: 'ControlLeft', modifierName: 'Control' },
+      'RIGHT ALT': { key: 'AltRight', modifierName: 'Alt' },
+      'LEFT ALT': { key: 'AltLeft', modifierName: 'Alt' },
+      'RIGHT SHIFT': { key: 'ShiftRight', modifierName: 'Shift' },
+      'LEFT SHIFT': { key: 'ShiftLeft', modifierName: 'Shift' },
+      'RIGHT WIN': { key: 'MetaRight', modifierName: 'Meta' },
+      'RIGHT WINDOWS': { key: 'MetaRight', modifierName: 'Meta' },
+      'LEFT WIN': { key: 'MetaLeft', modifierName: 'Meta' },
+      'LEFT WINDOWS': { key: 'MetaLeft', modifierName: 'Meta' }
+    }
+
+    if (raw in mappedModifiers) {
+      return mappedModifiers[raw]
+    }
+
+    if (raw === 'ESC' || raw === 'ESCAPE') {
+      return { key: 'Escape', isEscape: true }
+    }
+
+    if (raw.length === 1) {
+      return { key: raw }
+    }
+
+    if (/^F\d+$/.test(raw)) {
+      return { key: raw }
+    }
+
+    const mappedKeys: Record<string, string> = {
+      SPACE: 'Space',
+      ENTER: 'Return',
+      TAB: 'Tab',
+      BACKSPACE: 'Backspace',
+      DELETE: 'Delete',
+      UP: 'Up',
+      DOWN: 'Down',
+      LEFT: 'Left',
+      RIGHT: 'Right'
+    }
+
+    return { key: mappedKeys[raw] || raw }
+  }
+
+  private resolveServerPath(): string | null {
+    const bundledServerPath = resolveBundledWindowsKeyServerPath()
+    if (existsSync(bundledServerPath)) {
+      return bundledServerPath
+    }
+
+    try {
+      const packageJsonPath = require.resolve('node-global-key-listener/package.json')
+      const packageServerPath = join(packageJsonPath, '..', 'bin', 'WinKeyServer.exe')
+      return existsSync(packageServerPath) ? packageServerPath : null
+    } catch {
+      return null
+    }
+  }
+
+  private handleStartupFailure(): void {
+    if (this.listener?.kill) {
+      this.listener.kill()
+    }
+
+    this.started = false
+    this.listener = null
+    this.keyHandler = null
+    this.currentModifiers.clear()
+    this.currentKeys.clear()
+    this.parsedShortcuts.clear()
+    this.emit('exit', null)
+  }
+}
+
 class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBackend {
   readonly id: ShortcutBackendState = 'fallback'
   readonly capabilities: ShortcutBackendCapabilities = {
@@ -238,6 +459,7 @@ class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBack
   private shortcuts: ShortcutRegistration[] = []
   private registeredAccelerators: string[] = []
   private registeredModes = new Set<VoiceMode>()
+  private conflictedModes = new Set<VoiceMode>()
 
   start(): boolean {
     this.started = true
@@ -263,12 +485,17 @@ class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBack
     return new Set(this.registeredModes)
   }
 
+  getConflictedModes(): Set<VoiceMode> {
+    return new Set(this.conflictedModes)
+  }
+
   private unregisterAll(): void {
     for (const accelerator of this.registeredAccelerators) {
       globalShortcut.unregister(accelerator)
     }
     this.registeredAccelerators = []
     this.registeredModes.clear()
+    this.conflictedModes.clear()
   }
 
   private applyShortcuts(): void {
@@ -287,6 +514,7 @@ class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBack
         this.registeredAccelerators.push(accelerator)
         this.registeredModes.add(shortcut.id)
       } else {
+        this.conflictedModes.add(shortcut.id)
         this.emit('register-failed', shortcut)
       }
     }
@@ -294,27 +522,37 @@ class GlobalShortcutFallbackBackend extends EventEmitter implements ShortcutBack
 }
 
 export class ShortcutService extends EventEmitter {
-  private configStore: ConfigStore
-  private pipeline: Pipeline
-  private nativeBackend = new MacNativeShortcutBackend()
-  private fallbackBackend = new GlobalShortcutFallbackBackend()
-  private status: ShortcutServiceStatus = this.buildEmptyStatus()
+  private readonly configStore: ConfigStore
+  private readonly pipeline: Pipeline
+  private readonly platform: NodeJS.Platform
+  private readonly fallbackBackend = new GlobalShortcutFallbackBackend()
+  private readonly nativeBackend?: ShortcutBackend
+  private readonly macNativeBackend?: MacNativeShortcutBackend
+  private status: ShortcutServiceStatus
   private lastTriggerTime = 0
   private readonly debounceMs = 300
   private accessibilityPollTimer: ReturnType<typeof setInterval> | null = null
   private accessibilityPollAttempts = 0
-  private wasAccessibilityGranted = false
-  private nativeBackendReady = false  // Set by ensureNativeBackendReady()
+  private nativeBackendReady = false
 
-  constructor(configStore: ConfigStore, pipeline: Pipeline) {
+  constructor(configStore: ConfigStore, pipeline: Pipeline, platform: NodeJS.Platform = process.platform) {
     super()
     this.configStore = configStore
     this.pipeline = pipeline
+    this.platform = platform
+    this.status = this.buildEmptyStatus()
 
-    this.nativeBackend.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
-    this.nativeBackend.on('escape', () => this.pipeline.cancel())
-    this.nativeBackend.on('exit', () => {
-      console.warn('[ShortcutService] Native backend exited unexpectedly')
+    if (platform === 'darwin') {
+      const backend = new MacNativeShortcutBackend()
+      this.nativeBackend = backend
+      this.macNativeBackend = backend
+    } else if (platform === 'win32') {
+      this.nativeBackend = new WindowsNativeShortcutBackend()
+    }
+
+    this.nativeBackend?.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
+    this.nativeBackend?.on('escape', () => this.pipeline.cancel())
+    this.nativeBackend?.on('exit', () => {
       this.nativeBackendReady = false
       this.refresh()
     })
@@ -323,83 +561,62 @@ export class ShortcutService extends EventEmitter {
   }
 
   start(): void {
-    const hasAccessibility = checkPermissions().accessibility
-    this.wasAccessibilityGranted = hasAccessibility
     this.refresh()
-
-    // If accessibility is granted on start, ensure native backend is ready
-    // Don't start here - let ensureNativeBackendReady handle it
   }
 
   destroy(): void {
     this.stopAccessibilityPolling()
     this.nativeBackendReady = false
-    this.nativeBackend.stop()
+    this.nativeBackend?.stop()
     this.fallbackBackend.stop()
   }
 
   refresh(): ShortcutServiceStatus {
     const config = getConfig(this.configStore)
     const permissions = checkPermissions()
-    const hasAccessibility = permissions.accessibility
-    this.wasAccessibilityGranted = hasAccessibility
-
-    const shortcuts: ShortcutRegistration[] = [
-      { id: 'transcription', shortcut: config.transcriptionShortcut || 'RightCommand' },
-      { id: 'assistant', shortcut: config.assistantShortcut || 'RightOption' }
-    ]
+    const shortcuts = this.buildShortcutRegistrations(config)
+    const nativeRequiresAccessibility = this.nativeBackend?.capabilities.requiresAccessibility ?? false
+    const nativeAllowed = !!this.nativeBackend && (!nativeRequiresAccessibility || permissions.accessibility)
 
     let backendState: ShortcutBackendState = 'disabled'
-    let reason: ShortcutStatusReason = hasAccessibility ? 'backend_failed' : 'permission_missing'
+    let reason: ShortcutStatusReason = permissions.accessibility ? 'backend_failed' : 'permission_missing'
     let registeredFallbackModes = new Set<VoiceMode>()
+    let conflictedFallbackModes = new Set<VoiceMode>()
 
-    if (hasAccessibility) {
+    if (nativeAllowed && this.nativeBackend) {
       this.stopAccessibilityPolling()
       this.fallbackBackend.stop()
 
-      // If native backend was already confirmed ready, just update shortcuts
-      if (this.nativeBackendReady && this.nativeBackend.isAvailable()) {
-        this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
-        backendState = 'native'
-        reason = 'ready'
-      } else if (this.nativeBackend.isAvailable()) {
-        // Native backend is available (event tap ready), apply shortcuts
+      const started = this.nativeBackend.start()
+      if (started && this.nativeBackend.isAvailable()) {
         this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
         this.nativeBackendReady = true
         backendState = 'native'
         reason = 'ready'
       } else {
-        // Native backend not ready yet - don't start here, let ensureNativeBackendReady handle it
-        // Just use fallback for now
-        const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
-        if (fallbackShortcuts.length > 0) {
-          this.fallbackBackend.start()
-          this.fallbackBackend.setShortcuts(fallbackShortcuts)
-          registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
-          if (registeredFallbackModes.size > 0) {
-            backendState = 'fallback'
-            reason = 'ready'
-          } else {
-            reason = 'backend_failed'
-          }
-        }
+        this.nativeBackendReady = false
       }
     } else {
-      // No accessibility permission - ensure native backend is stopped
       this.nativeBackendReady = false
-      this.nativeBackend.stop()
-      this.stopAccessibilityPolling()
+      this.nativeBackend?.stop()
+      if (this.platform === 'darwin') {
+        this.stopAccessibilityPolling()
+      }
+    }
 
+    if (backendState !== 'native') {
       const fallbackShortcuts = shortcuts.filter((shortcut) => isFallbackCompatible(shortcut.shortcut))
       if (fallbackShortcuts.length > 0) {
         this.fallbackBackend.start()
         this.fallbackBackend.setShortcuts(fallbackShortcuts)
         registeredFallbackModes = this.fallbackBackend.getRegisteredModes()
+        conflictedFallbackModes = this.fallbackBackend.getConflictedModes()
+
         if (registeredFallbackModes.size > 0) {
           backendState = 'fallback'
           reason = 'ready'
-        } else {
-          reason = 'backend_failed'
+        } else if (conflictedFallbackModes.size > 0) {
+          reason = 'shortcut_conflict'
         }
       } else {
         this.fallbackBackend.stop()
@@ -409,36 +626,24 @@ export class ShortcutService extends EventEmitter {
     const modes = shortcuts.reduce<Record<VoiceMode, ShortcutModeStatus>>((result, shortcut) => {
       const valid = isValidShortcut(shortcut.shortcut)
       const fallbackCompatible = isFallbackCompatible(shortcut.shortcut)
+      const requiresAccessibility = !!this.nativeBackend?.capabilities.requiresAccessibility && !fallbackCompatible
 
       let modeBackendState: ShortcutBackendState = 'disabled'
-      let modeReason: ShortcutStatusReason = 'backend_failed'
-      let requiresAccessibility = false
+      let modeReason: ShortcutStatusReason = permissions.accessibility ? 'backend_failed' : 'permission_missing'
       let canTriggerGlobally = false
 
-      if (valid && hasAccessibility && backendState === 'native') {
+      if (valid && backendState === 'native' && nativeAllowed) {
         modeBackendState = 'native'
         modeReason = 'ready'
-        requiresAccessibility = true
         canTriggerGlobally = true
-      } else if (valid && fallbackCompatible && backendState === 'fallback' && registeredFallbackModes.has(shortcut.id)) {
+      } else if (valid && backendState === 'fallback' && registeredFallbackModes.has(shortcut.id)) {
         modeBackendState = 'fallback'
         modeReason = 'ready'
-        requiresAccessibility = false
         canTriggerGlobally = true
-      } else if (valid && !fallbackCompatible && !hasAccessibility) {
-        modeBackendState = 'disabled'
+      } else if (conflictedFallbackModes.has(shortcut.id)) {
+        modeReason = 'shortcut_conflict'
+      } else if (valid && requiresAccessibility && !permissions.accessibility) {
         modeReason = 'unsupported_without_accessibility'
-        requiresAccessibility = true
-      } else if (valid && fallbackCompatible && backendState !== 'fallback') {
-        modeBackendState = 'disabled'
-        modeReason = 'backend_failed'
-      } else if (valid && hasAccessibility) {
-        modeBackendState = 'disabled'
-        modeReason = 'backend_failed'
-        requiresAccessibility = true
-      } else {
-        modeBackendState = 'disabled'
-        modeReason = hasAccessibility ? 'backend_failed' : 'permission_missing'
       }
 
       result[shortcut.id] = {
@@ -453,7 +658,7 @@ export class ShortcutService extends EventEmitter {
     }, {} as Record<VoiceMode, ShortcutModeStatus>)
 
     this.status = {
-      permissionState: hasAccessibility ? 'granted' : 'missing',
+      permissionState: permissions.accessibility ? 'granted' : 'missing',
       backendState,
       reason,
       modes
@@ -472,6 +677,7 @@ export class ShortcutService extends EventEmitter {
   }
 
   beginAccessibilityPolling(): void {
+    if (this.platform !== 'darwin') return
     if (this.status.permissionState === 'granted' || this.accessibilityPollTimer) return
 
     this.accessibilityPollAttempts = 0
@@ -492,58 +698,41 @@ export class ShortcutService extends EventEmitter {
     this.accessibilityPollAttempts = 0
   }
 
-  /**
-   * Ensure native backend is ready. This will retry starting the native backend
-   * until it succeeds or max attempts are reached.
-   * Returns true if native backend is ready, false otherwise.
-   */
   async ensureNativeBackendReady(maxAttempts = 15, delayMs = 300): Promise<boolean> {
-    const permissions = checkPermissions()
-    if (!permissions.accessibility) {
+    if (!this.nativeBackend) {
       return false
     }
 
-    // Already ready?
-    if (this.nativeBackendReady && this.nativeBackend.isAvailable()) {
-      console.log('[ShortcutService] Native backend already ready')
+    if (this.platform !== 'darwin') {
+      const started = this.nativeBackend.start()
+      if (started) {
+        this.nativeBackendReady = true
+        this.refresh()
+      }
+      return started
+    }
+
+    if (!checkPermissions().accessibility || !this.macNativeBackend) {
+      return false
+    }
+
+    if (this.nativeBackendReady && this.macNativeBackend.isAvailable()) {
       return true
     }
 
     this.nativeBackendReady = false
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      console.log(`[ShortcutService] Attempt ${attempt + 1}/${maxAttempts}: Starting native backend...`)
+      this.macNativeBackend.forceRestart()
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
 
-      // Use forceRestart to ensure only one process
-      this.nativeBackend.forceRestart()
-
-      // Wait for Swift process to respond
-      await new Promise(resolve => setTimeout(resolve, delayMs))
-
-      // Check if the event tap is actually ready
-      if (this.nativeBackend.isAvailable()) {
-        // Apply shortcuts
-        const config = getConfig(this.configStore)
-        const shortcuts: ShortcutRegistration[] = [
-          { id: 'transcription', shortcut: config.transcriptionShortcut || 'RightCommand' },
-          { id: 'assistant', shortcut: config.assistantShortcut || 'RightOption' }
-        ]
-        this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
-
-        // Mark as ready so subsequent refresh() won't stop it
+      if (this.macNativeBackend.isAvailable()) {
         this.nativeBackendReady = true
-
-        // Update status
         this.refresh()
-        console.log('[ShortcutService] Native backend ready!')
         return true
       }
-
-      // Event tap not ready, will retry
-      console.log('[ShortcutService] Event tap not ready, retrying...')
     }
 
-    console.warn('[ShortcutService] Native backend failed to start after all attempts')
     return false
   }
 
@@ -555,26 +744,42 @@ export class ShortcutService extends EventEmitter {
     void this.pipeline.toggle(mode)
   }
 
+  private buildShortcutRegistrations(config: ReturnType<typeof getConfig>): ShortcutRegistration[] {
+    return [
+      {
+        id: 'transcription',
+        shortcut: config.transcriptionShortcut || getDefaultTranscriptionShortcut(this.platform)
+      },
+      {
+        id: 'assistant',
+        shortcut: config.assistantShortcut || getDefaultAssistantShortcut(this.platform)
+      }
+    ]
+  }
+
   private buildEmptyStatus(): ShortcutServiceStatus {
+    const permissionState = this.platform === 'darwin' ? 'missing' : 'granted'
+    const defaultReason: ShortcutStatusReason = permissionState === 'granted' ? 'backend_failed' : 'permission_missing'
+
     return {
-      permissionState: 'missing',
+      permissionState,
       backendState: 'disabled',
-      reason: 'permission_missing',
+      reason: defaultReason,
       modes: {
         transcription: {
           mode: 'transcription',
-          shortcut: 'RightCommand',
+          shortcut: getDefaultTranscriptionShortcut(this.platform),
           backendState: 'disabled',
-          reason: 'permission_missing',
-          requiresAccessibility: true,
+          reason: defaultReason,
+          requiresAccessibility: this.platform === 'darwin',
           canTriggerGlobally: false
         },
         assistant: {
           mode: 'assistant',
-          shortcut: 'RightOption',
+          shortcut: getDefaultAssistantShortcut(this.platform),
           backendState: 'disabled',
-          reason: 'permission_missing',
-          requiresAccessibility: true,
+          reason: defaultReason,
+          requiresAccessibility: this.platform === 'darwin',
           canTriggerGlobally: false
         }
       }

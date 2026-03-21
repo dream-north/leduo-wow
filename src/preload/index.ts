@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 
 const electronAPI = {
+  platform: process.platform,
   // Config
   getConfig: () => ipcRenderer.invoke(IPC.CONFIG_GET_ALL),
   getConfigValue: (key: string) => ipcRenderer.invoke(IPC.CONFIG_GET, key),

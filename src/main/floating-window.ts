@@ -9,11 +9,15 @@ export function applyFloatingWindowBehavior(
   win: FloatingWindowLike,
   level: 'floating' | 'screen-saver'
 ): void {
-  win.setAlwaysOnTop(true, level, 1)
-  win.setVisibleOnAllWorkspaces(true, {
-    visibleOnFullScreen: true,
-    skipTransformProcessType: true
-  })
-  win.setHiddenInMissionControl(true)
+  const isMac = process.platform === 'darwin'
+  const topLevel = isMac ? level : 'pop-up-menu'
+  win.setAlwaysOnTop(true, topLevel, 1)
+  if (isMac) {
+    win.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true
+    })
+    win.setHiddenInMissionControl(true)
+  }
   win.moveTop()
 }

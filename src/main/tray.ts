@@ -66,6 +66,9 @@ export function destroyTray(): void {
 export function updateTrayMenu(status?: PipelineStatus): void {
   if (!tray) return
 
+  const settingsAccelerator = process.platform === 'darwin' ? 'Command+,' : 'Ctrl+,'
+  const quitAccelerator = process.platform === 'darwin' ? 'Command+Q' : 'Alt+F4'
+
   const statusLabels: Record<PipelineStatus, string> = {
     [PipelineStatus.IDLE]: '就绪',
     [PipelineStatus.RECORDING]: '🎤 录音中...',
@@ -85,13 +88,13 @@ export function updateTrayMenu(status?: PipelineStatus): void {
     { type: 'separator' },
     {
       label: '设置...',
-      accelerator: 'Command+,',
+      accelerator: settingsAccelerator,
       click: () => onShowSettings?.()
     },
     { type: 'separator' },
     {
       label: '退出 乐多汪汪',
-      accelerator: 'Command+Q',
+      accelerator: quitAccelerator,
       click: () => app.exit(0)
     }
   ])

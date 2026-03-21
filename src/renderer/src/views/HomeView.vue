@@ -2,6 +2,9 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import SettingsView from './SettingsView.vue'
 import OnboardingView from './OnboardingView.vue'
+import type { ShortcutServiceStatus } from '../../../shared/types'
+import { getDefaultAssistantShortcut, getDefaultTranscriptionShortcut } from '../../../shared/types'
+import { getRendererPlatform } from '../utils/platform'
 
 interface PermissionState {
   microphone: boolean
@@ -10,47 +13,62 @@ interface PermissionState {
 }
 
 const loading = ref(true)
+const platform = getRendererPlatform()
 const permissions = ref<PermissionState>({
   microphone: false,
   accessibility: false,
   screen: false
 })
 const shortcuts = ref({
-  transcription: 'RightCommand',
-  assistant: 'RightOption'
+  transcription: getDefaultTranscriptionShortcut(platform),
+  assistant: getDefaultAssistantShortcut(platform)
+})
+const shortcutStatus = ref<ShortcutServiceStatus | null>(null)
+const enabledModes = ref({
+  transcription: true,
+  assistant: true
 })
 const mustCompleteOnboarding = ref(false)
 const isEnsuringBackend = ref(false)
 let initialized = false
 
-const hasRequiredPermissions = computed(() => permissions.value.microphone && permissions.value.accessibility)
+const hasGlobalShortcutsReady = computed(() => {
+  if (!shortcutStatus.value) return false
+  if (enabledModes.value.transcription && !shortcutStatus.value.modes.transcription.canTriggerGlobally) return false
+  if (enabledModes.value.assistant && !shortcutStatus.value.modes.assistant.canTriggerGlobally) return false
+  return true
+})
+const hasRequiredPermissions = computed(() => permissions.value.microphone && hasGlobalShortcutsReady.value)
 const showOnboarding = computed(() => !loading.value && (!hasRequiredPermissions.value || mustCompleteOnboarding.value))
 
 async function refreshState(): Promise<void> {
   try {
-    const [nextPermissions, config] = await Promise.all([
+    const [nextPermissions, config, nextShortcutStatus] = await Promise.all([
       window.electronAPI.checkPermissions(),
       window.electronAPI.getConfig(),
       window.electronAPI.refreshShortcutStatus()
     ])
 
     permissions.value = nextPermissions
+    shortcutStatus.value = nextShortcutStatus
+    enabledModes.value = {
+      transcription: config.transcriptionEnabled ?? true,
+      assistant: config.assistantEnabled ?? true
+    }
     shortcuts.value = {
-      transcription: config.transcriptionShortcut ?? config.shortcut ?? 'RightCommand',
-      assistant: config.assistantShortcut ?? 'RightOption'
+      transcription: config.transcriptionShortcut ?? config.shortcut ?? getDefaultTranscriptionShortcut(platform),
+      assistant: config.assistantShortcut ?? getDefaultAssistantShortcut(platform)
     }
 
-    // If accessibility is granted on first load, ensure native backend is ready
-    if (nextPermissions.accessibility && !initialized) {
+    if (!initialized && (platform === 'win32' || nextPermissions.accessibility)) {
       await window.electronAPI.ensureNativeBackendReady()
-      // Refresh status after backend is ready
-      await window.electronAPI.refreshShortcutStatus()
+      shortcutStatus.value = await window.electronAPI.refreshShortcutStatus()
     }
 
     if (!initialized) {
       initialized = true
-      mustCompleteOnboarding.value = !(nextPermissions.microphone && nextPermissions.accessibility)
-    } else if (!(nextPermissions.microphone && nextPermissions.accessibility)) {
+      mustCompleteOnboarding.value = !(nextPermissions.microphone && hasGlobalShortcutsReady.value)
+    } else if (!(nextPermissions.microphone && hasGlobalShortcutsReady.value)) {
       mustCompleteOnboarding.value = true
     }
   } finally {
@@ -66,14 +84,10 @@ async function requestPermission(type: 'microphone' | 'accessibility' | 'screen'
 async function continueToSettings(): Promise<void> {
   if (!hasRequiredPermissions.value) return
 
-  // Ensure native backend is ready before continuing
-  if (permissions.value.accessibility) {
+  if (platform === 'darwin' && permissions.value.accessibility) {
     isEnsuringBackend.value = true
     try {
-      const ready = await window.electronAPI.ensureNativeBackendReady()
-      if (!ready) {
-        console.warn('[HomeView] Native backend not ready after multiple attempts')
-      }
+      await window.electronAPI.ensureNativeBackendReady()
     } finally {
       isEnsuringBackend.value = false
     }
@@ -104,6 +118,8 @@ onUnmounted(() => {
     v-else-if="showOnboarding"
     :permissions="permissions"
     :shortcuts="shortcuts"
+    :shortcut-status="shortcutStatus"
+    :enabled-modes="enabledModes"
     :is-ensuring-backend="isEnsuringBackend"
     @request-permission="requestPermission"
     @refresh="refreshState"

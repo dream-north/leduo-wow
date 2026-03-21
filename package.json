@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "build:native": "cd src/native-keyboard-listener && npm run build",
-    "postinstall": "electron-builder install-app-deps && npm run build:native",
+    "build:native": "npm run build --prefix src/native-keyboard-listener",
+    "postinstall": "node build/postinstall.js",
     "pack": "electron-builder --mac --config",
+    "pack:win": "electron-builder --win nsis --config",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:renderer": "vue-tsc --noEmit -p src/renderer/tsconfig.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:renderer",
@@ -18,6 +19,7 @@
   "dependencies": {
     "@jitsi/robotjs": "^0.6.21",
     "electron-store": "^8.2.0",
+    "node-global-key-listener": "^0.3.0",
     "openai": "^4.77.0",
     "ws": "^8.18.0"
   },

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray } from './tray'
@@ -27,6 +27,48 @@ let isQuitting = false
 let lastDockState: boolean | null = null
 let dockUpdateTimeout: NodeJS.Timeout | null = null
 
+function attachWindowDebugLogging(win: BrowserWindow, name: string): void {
+  if (!is.dev) return
+
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    console.log(`[Window:${name}:console:${level}] ${message} (${sourceId}:${line})`)
+  })
+
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    console.error(`[Window:${name}:did-fail-load] code=${errorCode} mainFrame=${isMainFrame} url=${validatedURL} error=${errorDescription}`)
+  })
+
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[Window:${name}:render-process-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+  })
+
+  win.webContents.on('did-finish-load', () => {
+    const currentUrl = win.webContents.getURL()
+    console.log(`[Window:${name}:did-finish-load] ${currentUrl}`)
+
+    setTimeout(() => {
+      void win.webContents.executeJavaScript(`
+        (() => {
+          const app = document.getElementById('app')
+          return {
+            href: window.location.href,
+            title: document.title,
+            readyState: document.readyState,
+            bodyChildCount: document.body.children.length,
+            appExists: !!app,
+            appChildCount: app ? app.childElementCount : -1,
+            bodyTextLength: (document.body.innerText || '').length
+          }
+        })()
+      `, true).then((snapshot) => {
+        console.log(`[Window:${name}:dom-snapshot] ${JSON.stringify(snapshot)}`)
+      }).catch((error) => {
+        console.error(`[Window:${name}:dom-snapshot-error]`, error)
+      })
+    }, 300)
+  })
+}
+
 // Notify renderer about dock update lock state
 function notifyDockUpdateLock(locked: boolean): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
@@ -40,9 +82,14 @@ function createSettingsWindow(): BrowserWindow {
     height: 600,
     show: false,
     resizable: true,
+    autoHideMenuBar: process.platform !== 'darwin',
     title: '乐多汪汪 设置',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 10 },
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 15, y: 10 }
+        }
+      : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -62,6 +109,13 @@ function createSettingsWindow(): BrowserWindow {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  if (process.platform !== 'darwin') {
+    win.removeMenu()
+    win.setMenuBarVisibility(false)
+  }
+
+  attachWindowDebugLogging(win, 'settings')
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -163,6 +217,10 @@ export function updateDockIconVisibility(hideDockIcon: boolean): void {
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.leduowow.app')
 
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null)
+  }
+
   // Initialize config store first (before creating any windows)
   configStore = initConfigStore()
   const config = getConfig(configStore)
@@ -249,3 +307,4 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   // Keep app running even when all windows closed (menubar app)
 })
+

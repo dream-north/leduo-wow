@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockState = vi.hoisted(() => ({
   accessibilityGranted: false,
+  winServerExists: true,
+  windowsListenerConfig: null as Record<string, unknown> | null,
   currentConfig: {
     transcriptionShortcut: 'RightCommand',
     assistantShortcut: 'RightOption'
@@ -19,9 +21,13 @@ const mockState = vi.hoisted(() => ({
     onShortcut: vi.fn(),
     onKeyDown: vi.fn(),
     onExit: vi.fn(),
-    restart: vi.fn(() => true),
     forceRestart: vi.fn(() => true),
     on: vi.fn()
+  },
+  windowsListenerInstance: {
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    kill: vi.fn()
   }
 }))
 
@@ -63,9 +69,30 @@ vi.mock('electron', () => ({
   }
 }))
 
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs')
+  return {
+    ...actual,
+    existsSync: vi.fn((path: string) => {
+      if (/WinKeyServer(?:-\d+)?\.exe$/i.test(path)) {
+        return mockState.winServerExists
+      }
+      return actual.existsSync(path)
+    })
+  }
+})
+
+vi.mock('node-global-key-listener', () => ({
+  GlobalKeyboardListener: vi.fn((config?: Record<string, unknown>) => {
+    mockState.windowsListenerConfig = config ?? null
+    return mockState.windowsListenerInstance
+  })
+}))
+
 vi.mock('../native-keyboard-listener', () => ({
   keyboardListener: mockState.keyboardListenerMock,
-  parseShortcut
+  parseShortcut,
+  matchShortcut: vi.fn(() => false)
 }))
 
 vi.mock('./config-store', () => ({
@@ -85,6 +112,8 @@ import { ShortcutService } from './shortcut'
 describe('ShortcutService', () => {
   beforeEach(() => {
     mockState.accessibilityGranted = false
+    mockState.winServerExists = true
+    mockState.windowsListenerConfig = null
     mockState.currentConfig = {
       transcriptionShortcut: 'RightCommand',
       assistantShortcut: 'RightOption'
@@ -95,8 +124,6 @@ describe('ShortcutService', () => {
     mockState.keyboardListenerMock.start.mockReset()
     mockState.keyboardListenerMock.start.mockReturnValue(true)
     mockState.keyboardListenerMock.stop.mockReset()
-    mockState.keyboardListenerMock.restart.mockReset()
-    mockState.keyboardListenerMock.restart.mockReturnValue(true)
     mockState.keyboardListenerMock.forceRestart.mockReset()
     mockState.keyboardListenerMock.forceRestart.mockReturnValue(true)
     mockState.keyboardListenerMock.setShortcuts.mockReset()
@@ -105,6 +132,9 @@ describe('ShortcutService', () => {
     mockState.keyboardListenerMock.isReady.mockReset()
     mockState.keyboardListenerMock.isReady.mockReturnValue(true)
     mockState.keyboardListenerMock.on.mockReset()
+    mockState.windowsListenerInstance.addListener.mockReset()
+    mockState.windowsListenerInstance.removeListener.mockReset()
+    mockState.windowsListenerInstance.kill.mockReset()
     vi.useRealTimers()
   })
 
@@ -117,7 +147,7 @@ describe('ShortcutService', () => {
     const service = new ShortcutService({} as never, {
       toggle: vi.fn(),
       cancel: vi.fn()
-    } as never)
+    } as never, 'darwin')
 
     const status = service.refresh()
 
@@ -127,78 +157,81 @@ describe('ShortcutService', () => {
     expect(status.modes.assistant.reason).toBe('unsupported_without_accessibility')
   })
 
-  it('starts the native backend when accessibility is granted', async () => {
+  it('starts the mac native backend when accessibility is granted', () => {
     mockState.accessibilityGranted = true
 
     const service = new ShortcutService({} as never, {
       toggle: vi.fn(),
       cancel: vi.fn()
-    } as never)
+    } as never, 'darwin')
 
-    // refresh() alone won't start native backend - need ensureNativeBackendReady
     const status = service.refresh()
 
-    // Should be disabled since RightCommand/RightOption are not fallback-compatible
-    // and native backend isn't started yet
-    expect(status.backendState).toBe('disabled')
-
-    // Now explicitly ensure native backend is ready
-    const ready = await service.ensureNativeBackendReady(1, 10)
-    expect(ready).toBe(true)
-    expect(mockState.keyboardListenerMock.forceRestart).toHaveBeenCalled()
+    expect(mockState.keyboardListenerMock.start).toHaveBeenCalled()
+    expect(mockState.keyboardListenerMock.setShortcuts).toHaveBeenCalled()
+    expect(status.backendState).toBe('native')
   })
 
-  it('hot-switches to the native backend during accessibility polling', async () => {
+  it('reports shortcut conflicts from the fallback backend', () => {
     mockState.currentConfig = {
       transcriptionShortcut: 'Command+Space',
-      assistantShortcut: 'RightOption'
+      assistantShortcut: 'Ctrl+Shift+A'
     }
-    vi.useFakeTimers()
+    mockState.registerMock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
 
     const service = new ShortcutService({} as never, {
       toggle: vi.fn(),
       cancel: vi.fn()
-    } as never)
+    } as never, 'darwin')
 
-    service.refresh()
-    service.beginAccessibilityPolling()
-
-    mockState.accessibilityGranted = true
-    vi.advanceTimersByTime(1000)
-
-    const status = service.getStatus()
-
-    // refresh() during polling should stop native backend if not ready
-    // and use fallback instead
-    expect(status.permissionState).toBe('granted')
-    // Native backend needs ensureNativeBackendReady to start
-    expect(status.backendState).toBe('fallback')
-
-    vi.useRealTimers()
-  })
-
-
-  it('restarts native listener when accessibility changes from missing to granted', async () => {
-    const service = new ShortcutService({} as never, {
-      toggle: vi.fn(),
-      cancel: vi.fn()
-    } as never)
-
-    service.start()
-    // When started without accessibility, native backend is not started
-    expect(mockState.keyboardListenerMock.start).not.toHaveBeenCalled()
-
-    mockState.accessibilityGranted = true
     const status = service.refresh()
 
-    // refresh() won't auto-start native backend, needs ensureNativeBackendReady
-    expect(mockState.keyboardListenerMock.forceRestart).not.toHaveBeenCalled()
-    // RightCommand/RightOption are not fallback-compatible, so backend is disabled
-    expect(status.backendState).toBe('disabled')
-
-    // Now explicitly start via ensureNativeBackendReady
-    const ready = await service.ensureNativeBackendReady(1, 10)
-    expect(ready).toBe(true)
-    expect(mockState.keyboardListenerMock.forceRestart).toHaveBeenCalled()
+    expect(status.modes.transcription.reason).toBe('shortcut_conflict')
+    expect(status.modes.assistant.backendState).toBe('fallback')
   })
+
+  it('does not crash on Windows when the native key server executable is missing', () => {
+    mockState.accessibilityGranted = true
+    mockState.winServerExists = false
+    mockState.currentConfig = {
+      transcriptionShortcut: 'RightAlt',
+      assistantShortcut: 'RightControl'
+    }
+
+    const service = new ShortcutService({} as never, {
+      toggle: vi.fn(),
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    const status = service.refresh()
+    service.destroy()
+
+    expect(status.backendState).toBe('disabled')
+    expect(status.reason).toBe('backend_failed')
+    expect(status.modes.transcription.canTriggerGlobally).toBe(false)
+    expect(status.modes.assistant.canTriggerGlobally).toBe(false)
+  })
+
+  it('starts the Windows native backend with the bundled helper path', () => {
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'RightAlt',
+      assistantShortcut: 'RightControl'
+    }
+
+    const service = new ShortcutService({} as never, {
+      toggle: vi.fn(),
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    const status = service.refresh()
+    service.destroy()
+
+    expect(status.backendState).toBe('native')
+    expect(status.modes.transcription.canTriggerGlobally).toBe(true)
+    expect(status.modes.assistant.canTriggerGlobally).toBe(true)
+  })
+
 })

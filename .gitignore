@@ -18,3 +18,4 @@ config.json
 history.json
 .claude/
 src/native-keyboard-listener/SwiftKeyboardListener/build/
+src/native-keyboard-listener/WinKeyServer/build/

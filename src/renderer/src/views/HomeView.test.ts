@@ -35,31 +35,34 @@ describe('HomeView', () => {
     }
 
     window.electronAPI = {
+      platform: 'win32',
       checkPermissions: vi.fn(async () => ({ ...permissionState })),
       getConfig: vi.fn(async () => ({
-        shortcut: 'RightCommand',
-        transcriptionShortcut: 'RightCommand',
-        assistantShortcut: 'RightOption'
+        shortcut: 'RightAlt',
+        transcriptionShortcut: 'RightAlt',
+        assistantShortcut: 'RightControl',
+        transcriptionEnabled: true,
+        assistantEnabled: true
       })),
       refreshShortcutStatus: vi.fn(async () => ({
         permissionState: permissionState.accessibility ? 'granted' : 'missing',
         backendState: permissionState.accessibility ? 'native' : 'disabled',
-        reason: permissionState.accessibility ? 'ready' : 'permission_missing',
+        reason: permissionState.accessibility ? 'ready' : 'backend_failed',
         modes: {
           transcription: {
             mode: 'transcription',
-            shortcut: 'RightCommand',
+            shortcut: 'RightAlt',
             backendState: permissionState.accessibility ? 'native' : 'disabled',
-            reason: permissionState.accessibility ? 'ready' : 'unsupported_without_accessibility',
-            requiresAccessibility: true,
+            reason: permissionState.accessibility ? 'ready' : 'backend_failed',
+            requiresAccessibility: false,
             canTriggerGlobally: permissionState.accessibility
           },
           assistant: {
             mode: 'assistant',
-            shortcut: 'RightOption',
+            shortcut: 'RightControl',
             backendState: permissionState.accessibility ? 'native' : 'disabled',
-            reason: permissionState.accessibility ? 'ready' : 'unsupported_without_accessibility',
-            requiresAccessibility: true,
+            reason: permissionState.accessibility ? 'ready' : 'backend_failed',
+            requiresAccessibility: false,
             canTriggerGlobally: permissionState.accessibility
           }
         }

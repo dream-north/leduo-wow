@@ -7,8 +7,11 @@ import {
   POLISH_DEFAULT_BASE_URL,
   ASSISTANT_DEFAULT_PROMPT,
   ASR_MODEL_PRESETS,
-  TEXT_MODEL_PRESETS
+  TEXT_MODEL_PRESETS,
+  getDefaultAssistantShortcut,
+  getDefaultTranscriptionShortcut
 } from '../../../shared/types'
+import { getRendererPlatform } from '../utils/platform'
 import type {
   PolishPreset,
   ShortcutModeStatus,
@@ -18,6 +21,10 @@ import type {
 } from '../../../shared/types'
 
 const store = useSettingsStore()
+const platform = getRendererPlatform()
+const defaultTranscriptionShortcut = getDefaultTranscriptionShortcut(platform)
+const defaultAssistantShortcut = getDefaultAssistantShortcut(platform)
+const altKeyName = platform === 'win32' ? 'Alt' : 'Option'
 const initialTab = sessionStorage.getItem('settings-active-tab')
 const activeTab = ref(initialTab === 'prompt' ? 'prompt-transcription' : (initialTab || 'general'))
 const dockUpdateLocked = ref(false)
@@ -98,7 +105,7 @@ const codeToKey: Record<string, string> = {
   // Modifier keys with side info (for single-key shortcuts like RightCommand)
   MetaLeft: 'LeftCommand', MetaRight: 'RightCommand',
   ControlLeft: 'LeftControl', ControlRight: 'RightControl',
-  AltLeft: 'LeftOption', AltRight: 'RightOption',
+  AltLeft: `Left${altKeyName}`, AltRight: `Right${altKeyName}`,
   ShiftLeft: 'LeftShift', ShiftRight: 'RightShift',
 }
 function keyFromCode(code: string, fallbackKey: string): string {
@@ -169,10 +176,10 @@ function handleShortcutKeyDown(e: KeyboardEvent): void {
   }
 
   if (e.code === 'AltLeft' || e.code === 'AltRight') {
-    capturedKeys.push(e.code === 'AltLeft' ? 'LeftOption' : 'RightOption')
+    capturedKeys.push(e.code === 'AltLeft' ? `Left${altKeyName}` : `Right${altKeyName}`)
   } else if (e.altKey) {
     const side = modifierKeySides.get('Alt')
-    capturedKeys.push(side ? (side === 'Left' ? 'LeftOption' : 'RightOption') : 'Alt')
+    capturedKeys.push(side ? (side === 'Left' ? `Left${altKeyName}` : `Right${altKeyName}`) : 'Alt')
   }
 
   if (e.code === 'MetaLeft' || e.code === 'MetaRight') {
@@ -284,7 +291,7 @@ async function cancelShortcut(): Promise<void> {
 
 // Reset to default shortcut
 async function resetShortcut(mode: VoiceMode): Promise<void> {
-  const defaultShortcut = mode === 'assistant' ? 'RightOption' : 'RightCommand'
+  const defaultShortcut = mode === 'assistant' ? defaultAssistantShortcut : defaultTranscriptionShortcut
   const key = mode === 'assistant' ? 'assistantShortcut' : 'transcriptionShortcut'
   await store.saveSetting(key, defaultShortcut)
 
@@ -699,6 +706,8 @@ function shortcutStatusText(mode: VoiceMode): string {
     case 'unsupported_without_accessibility':
     case 'permission_missing':
       return '需要辅助功能权限'
+    case 'shortcut_conflict':
+      return '快捷键被其他程序占用'
     case 'backend_failed':
       return '快捷键暂不可用'
     default:
@@ -711,6 +720,7 @@ function shortcutStatusClass(mode: VoiceMode): string {
   if (!status) return 'pending'
   if (status.backendState === 'native' || status.backendState === 'fallback') return 'ready'
   if (status.reason === 'unsupported_without_accessibility' || status.reason === 'permission_missing') return 'warning'
+  if (status.reason === 'shortcut_conflict') return 'warning'
   return 'error'
 }
 

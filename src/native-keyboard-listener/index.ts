@@ -537,17 +537,13 @@ export function matchShortcut(
   config: ReturnType<typeof parseShortcut>,
   lastKeyDownKey?: string | null
 ): boolean {
-  console.log('[matchShortcut] config:', config, 'currentModifiers:', currentModifiers, 'currentKeys:', currentKeys, 'lastKeyDownKey:', lastKeyDownKey)
-
   // Check if single key (modifier-only shortcut, like "RightCommand")
   if (!config.key) {
-    console.log('[matchShortcut] Modifier-only shortcut')
     // This is a modifier-only shortcut
     if (config.modifiers.length > 0) {
       // All required modifiers must be pressed
       const hasAllModifiers = config.modifiers.every(m => currentModifiers.includes(m))
       if (!hasAllModifiers) {
-        console.log('[matchShortcut] Missing required modifiers')
         return false
       }
 
@@ -555,11 +551,9 @@ export function matchShortcut(
       // and NO other non-modifier keys are pressed
       if (config.side !== 'any') {
         const sideKey = config.modifiers[0] + config.side.charAt(0).toUpperCase() + config.side.slice(1)
-        console.log('[matchShortcut] Checking for side key:', sideKey, 'lastKeyDownKey:', lastKeyDownKey)
 
         // The last key pressed must be the side-specific modifier
         if (lastKeyDownKey !== sideKey) {
-          console.log('[matchShortcut] Last key down does not match side key')
           return false
         }
 
@@ -569,13 +563,10 @@ export function matchShortcut(
           if (k.endsWith('Left') || k.endsWith('Right')) return false
           return true
         })
-        console.log('[matchShortcut] nonModifierKeys:', nonModifierKeys)
         if (nonModifierKeys.length > 0) {
-          console.log('[matchShortcut] Extra non-modifier keys pressed')
           return false
         }
 
-        console.log('[matchShortcut] Modifier-only shortcut matched')
         return true
       }
 
@@ -585,24 +576,19 @@ export function matchShortcut(
   }
 
   // Combo shortcut (like "LeftOption+1")
-  console.log('[matchShortcut] Combo shortcut')
-
   // The last key pressed should be the non-modifier key
   if (!lastKeyDownKey || lastKeyDownKey === config.modifiers[0]) {
-    console.log('[matchShortcut] Last key is not the main key')
     return false
   }
 
   // Must have the main key pressed (could be the last key or already held)
   if (!currentKeys.includes(config.key) && lastKeyDownKey !== config.key) {
-    console.log('[matchShortcut] Main key not found')
     return false
   }
 
   // Must have all required modifiers pressed
   for (const required of config.modifiers) {
     if (!currentModifiers.includes(required)) {
-      console.log('[matchShortcut] Missing modifier:', required)
       return false
     }
   }
@@ -612,12 +598,10 @@ export function matchShortcut(
     for (const modifier of config.modifiers) {
       const expectedSideKey = modifier + config.side.charAt(0).toUpperCase() + config.side.slice(1)
       if (!currentKeys.includes(expectedSideKey)) {
-        console.log('[matchShortcut] Side key not found:', expectedSideKey)
         return false
       }
     }
   }
 
-  console.log('[matchShortcut] Combo shortcut matched')
   return true
 }

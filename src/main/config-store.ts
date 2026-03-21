@@ -1,6 +1,17 @@
 import Store from 'electron-store'
 import { BrowserWindow } from 'electron'
-import { AppConfig, DEFAULT_CONFIG, PolishPreset, ExcludedApp, ApiProvider, AssistantOutputMode, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
+import {
+  AppConfig,
+  DEFAULT_CONFIG,
+  PolishPreset,
+  ExcludedApp,
+  ApiProvider,
+  AssistantOutputMode,
+  OverlayWindowPosition,
+  OverlayWindowSize,
+  getDefaultAssistantShortcut,
+  getDefaultTranscriptionShortcut
+} from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 
 interface StoreSchema {
@@ -68,6 +79,9 @@ let store: Store<StoreSchema>
 let historyStore: Store<HistorySchema>
 
 export function initConfigStore(): Store<StoreSchema> {
+  const transcriptionShortcutDefault = getDefaultTranscriptionShortcut(process.platform)
+  const assistantShortcutDefault = getDefaultAssistantShortcut(process.platform)
+
   store = new Store<StoreSchema>({
     name: 'config',
     defaults: {
@@ -89,10 +103,10 @@ export function initConfigStore(): Store<StoreSchema> {
       polishPresets: DEFAULT_CONFIG.polishPresets,
       activePresetIndex: DEFAULT_CONFIG.activePresetIndex,
       // 双模式配置 - 语音识别
-      transcriptionShortcut: DEFAULT_CONFIG.transcriptionShortcut,
+      transcriptionShortcut: transcriptionShortcutDefault,
       transcriptionEnabled: DEFAULT_CONFIG.transcriptionEnabled,
       // 双模式配置 - 语音助手
-      assistantShortcut: DEFAULT_CONFIG.assistantShortcut,
+      assistantShortcut: assistantShortcutDefault,
       assistantEnabled: DEFAULT_CONFIG.assistantEnabled,
       assistantPrePolish: DEFAULT_CONFIG.assistantPrePolish,
       assistantOutputMode: DEFAULT_CONFIG.assistantOutputMode,
@@ -107,7 +121,7 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantResultWindowPosition: DEFAULT_CONFIG.assistantResultWindowPosition,
       assistantResultWindowSize: DEFAULT_CONFIG.assistantResultWindowSize,
       // General
-      shortcut: DEFAULT_CONFIG.shortcut,
+      shortcut: transcriptionShortcutDefault,
       inputMethod: DEFAULT_CONFIG.inputMethod,
       selectedMicrophoneId: DEFAULT_CONFIG.selectedMicrophoneId,
       launchAtLogin: DEFAULT_CONFIG.launchAtLogin,
@@ -147,6 +161,9 @@ function readLegacyEncryptedKey(s: Store<StoreSchema>): string {
 }
 
 export function getConfig(s: Store<StoreSchema>): AppConfig {
+  const transcriptionShortcutDefault = getDefaultTranscriptionShortcut(process.platform)
+  const assistantShortcutDefault = getDefaultAssistantShortcut(process.platform)
+
   // Read new plaintext keys
   let asrApiKey = (s.get('asrApiKey') as string) || ''
   let polishApiKey = (s.get('polishApiKey') as string) || ''
@@ -192,10 +209,10 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     polishPresets: s.get('polishPresets') ?? DEFAULT_CONFIG.polishPresets,
     activePresetIndex: s.get('activePresetIndex') ?? 0,
     // 双模式配置 - 语音识别
-    transcriptionShortcut: s.get('transcriptionShortcut') ?? s.get('shortcut') ?? DEFAULT_CONFIG.transcriptionShortcut,
+    transcriptionShortcut: s.get('transcriptionShortcut') ?? s.get('shortcut') ?? transcriptionShortcutDefault,
     transcriptionEnabled: s.get('transcriptionEnabled') ?? DEFAULT_CONFIG.transcriptionEnabled,
     // 双模式配置 - 语音助手
-    assistantShortcut: s.get('assistantShortcut') ?? DEFAULT_CONFIG.assistantShortcut,
+    assistantShortcut: s.get('assistantShortcut') ?? assistantShortcutDefault,
     assistantEnabled: s.get('assistantEnabled') ?? DEFAULT_CONFIG.assistantEnabled,
     assistantPrePolish: s.get('assistantPrePolish') ?? DEFAULT_CONFIG.assistantPrePolish,
     assistantOutputMode: s.get('assistantOutputMode') ?? DEFAULT_CONFIG.assistantOutputMode,

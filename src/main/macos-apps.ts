@@ -15,6 +15,10 @@ function runOsascript(script: string): Promise<string> {
 }
 
 export async function getRunningApps(): Promise<AppInfo[]> {
+  if (process.platform !== 'darwin') {
+    return []
+  }
+
   const script = `
 tell application "System Events"
   set appList to every process whose background only is false
@@ -55,6 +59,10 @@ end tell`
 }
 
 export async function getFrontmostApp(): Promise<AppInfo | null> {
+  if (process.platform !== 'darwin') {
+    return null
+  }
+
   const script = `
 tell application "System Events"
   set frontProc to first process whose frontmost is true

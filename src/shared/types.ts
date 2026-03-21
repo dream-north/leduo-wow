@@ -149,6 +149,7 @@ export type ShortcutStatusReason =
   | 'ready'
   | 'permission_missing'
   | 'unsupported_without_accessibility'
+  | 'shortcut_conflict'
   | 'backend_failed'
 
 export interface ShortcutModeStatus {
@@ -203,9 +204,25 @@ export const ASSISTANT_PRESET_STANDARD: PolishPreset = {
 
 export const ASSISTANT_BUILTIN_PRESETS: PolishPreset[] = [ASSISTANT_PRESET_STANDARD]
 
+function getRuntimePlatform(): NodeJS.Platform {
+  if (typeof process !== 'undefined' && typeof process.platform === 'string') {
+    return process.platform as NodeJS.Platform
+  }
+
+  return 'darwin'
+}
+
+export function getDefaultTranscriptionShortcut(platform: NodeJS.Platform = getRuntimePlatform()): string {
+  return platform === 'win32' ? 'RightAlt' : 'RightCommand'
+}
+
+export function getDefaultAssistantShortcut(platform: NodeJS.Platform = getRuntimePlatform()): string {
+  return platform === 'win32' ? 'RightControl' : 'RightOption'
+}
+
 export const DEFAULT_CONFIG: AppConfig = {
   apiKey: '',
-  shortcut: 'RightCommand',
+  shortcut: getDefaultTranscriptionShortcut(),
   inputMethod: 'clipboard',
   // ASR
   asrProvider: 'dashscope',
@@ -222,10 +239,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   polishPresets: [...BUILTIN_PRESETS],
   activePresetIndex: 0,
   // 双模式配置 - 语音识别
-  transcriptionShortcut: 'RightCommand',
+  transcriptionShortcut: getDefaultTranscriptionShortcut(),
   transcriptionEnabled: true,
   // 双模式配置 - 语音助手
-  assistantShortcut: 'RightOption',
+  assistantShortcut: getDefaultAssistantShortcut(),
   assistantEnabled: true,
   assistantPrePolish: false,  // 默认不先润色
   assistantOutputMode: 'window',

@@ -42,7 +42,7 @@ export class ElectronOverlayBackend implements OverlayBackend {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
 
     positionOverlayAtCursor(overlayWindow)
-    overlayWindow.setAlwaysOnTop(true, 'screen-saver', 1)
+    overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? 'screen-saver' : 'pop-up-menu', 1)
     overlayWindow.showInactive()
     overlayWindow.moveTop()
     overlayWindow.webContents.send(IPC.OVERLAY_UPDATE, payload)

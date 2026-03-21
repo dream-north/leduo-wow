@@ -7,6 +7,7 @@ describe('settings store assistant output mode', () => {
     setActivePinia(createPinia())
 
     window.electronAPI = {
+      platform: 'darwin',
       getConfig: vi.fn(async () => ({
         apiKey: '',
         shortcut: 'RightCommand',

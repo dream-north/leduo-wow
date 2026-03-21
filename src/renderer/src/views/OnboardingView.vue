@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { ShortcutServiceStatus } from '../../../shared/types'
+import { getRendererPlatform } from '../utils/platform'
 
 interface PermissionState {
   microphone: boolean
@@ -13,6 +15,11 @@ const props = defineProps<{
     transcription: string
     assistant: string
   }
+  shortcutStatus: ShortcutServiceStatus | null
+  enabledModes: {
+    transcription: boolean
+    assistant: boolean
+  }
   isEnsuringBackend?: boolean
 }>()
 
@@ -22,16 +29,31 @@ const emit = defineEmits<{
   continue: []
 }>()
 
-const canContinue = computed(() => props.permissions.microphone && props.permissions.accessibility && !props.isEnsuringBackend)
-const requiredGrantedCount = computed(() => Number(props.permissions.microphone) + Number(props.permissions.accessibility))
+const shortcutsReady = computed(() => {
+  if (!props.shortcutStatus) return false
+  if (props.enabledModes.transcription && !props.shortcutStatus.modes.transcription.canTriggerGlobally) return false
+  if (props.enabledModes.assistant && !props.shortcutStatus.modes.assistant.canTriggerGlobally) return false
+  return true
+})
+
+const requiresAccessibility = computed(() => {
+  if (!props.shortcutStatus) return false
+  if (props.enabledModes.transcription && props.shortcutStatus.modes.transcription.requiresAccessibility) return true
+  if (props.enabledModes.assistant && props.shortcutStatus.modes.assistant.requiresAccessibility) return true
+  return false
+})
+
+const canContinue = computed(() => props.permissions.microphone && shortcutsReady.value && !props.isEnsuringBackend)
+const requiredGrantedCount = computed(() => Number(props.permissions.microphone) + Number(shortcutsReady.value))
 const permissionHint = ref('')
+const platform = getRendererPlatform()
 let clearHintTimer: ReturnType<typeof setTimeout> | null = null
 
 const codeToShortcut: Record<string, string> = {
   MetaLeft: 'LeftCommand',
   MetaRight: 'RightCommand',
-  AltLeft: 'LeftOption',
-  AltRight: 'RightOption',
+  AltLeft: platform === 'win32' ? 'LeftAlt' : 'LeftOption',
+  AltRight: platform === 'win32' ? 'RightAlt' : 'RightOption',
   ControlLeft: 'LeftControl',
   ControlRight: 'RightControl',
   ShiftLeft: 'LeftShift',
@@ -39,7 +61,9 @@ const codeToShortcut: Record<string, string> = {
 }
 
 function showPermissionHint(): void {
-  permissionHint.value = '当前快捷键需要辅助功能权限。授权后返回应用，无需重启。'
+  permissionHint.value = requiresAccessibility.value
+    ? '当前快捷键需要辅助功能权限。授权后返回应用，无需重启。'
+    : '当前快捷键还没有全局生效，请刷新检查，或改成未被其他程序占用的快捷键。'
   if (clearHintTimer) {
     clearTimeout(clearHintTimer)
   }
@@ -49,7 +73,7 @@ function showPermissionHint(): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (props.permissions.accessibility) return
+  if (shortcutsReady.value) return
 
   const mapped = codeToShortcut[event.code]
   if (!mapped) return
@@ -81,12 +105,12 @@ function continueToSettings(): void {
     <div class="onboarding-card">
       <div class="onboarding-header">
         <div class="app-mark" aria-hidden="true">
-          <img src="/icon.png" alt="" />
+          <span class="app-mark-label">LW</span>
         </div>
         <div class="onboarding-hero">
           <p class="eyebrow">欢迎使用乐多汪汪</p>
           <h1>授予权限后即可开始语音输入</h1>
-          <p class="lead">建议先完成必需权限，后续截图相关能力可以按需开启。</p>
+          <p class="lead">建议先完成必需项，截图相关能力后续可以按需开启。</p>
         </div>
         <div class="setup-progress" :class="canContinue ? 'ready' : ''">
           <p class="setup-label">设置进度</p>
@@ -97,10 +121,10 @@ function continueToSettings(): void {
       <section class="permission-section required-group">
         <div class="section-heading">
           <div>
-            <p class="section-kicker">必需权限</p>
+            <p class="section-kicker">必需项</p>
             <h2>先完成这两项，才能继续</h2>
           </div>
-          <p class="section-summary">{{ canContinue ? '已满足使用条件' : '缺少必需权限，继续按钮会保持禁用' }}</p>
+          <p class="section-summary">{{ canContinue ? '已满足使用条件' : '缺少必需项，继续按钮会保持禁用' }}</p>
         </div>
 
         <div class="permission-list">
@@ -113,20 +137,30 @@ function continueToSettings(): void {
             <span :class="['panel-badge', props.permissions.microphone ? 'ready' : 'missing']">
               {{ props.permissions.microphone ? '已授权' : '未授权' }}
             </span>
-            <button v-if="!props.permissions.microphone" class="btn btn-primary" @click="emit('requestPermission', 'microphone')">授予权限</button>
+            <button
+              v-if="!props.permissions.microphone"
+              class="btn btn-primary"
+              @click="emit('requestPermission', 'microphone')"
+            >
+              授予权限
+            </button>
           </section>
 
           <section class="permission-row required">
             <div class="permission-icon" aria-hidden="true">⌨️</div>
             <div class="permission-copy">
-              <h3>辅助功能权限</h3>
-              <p>用于全局快捷键与自动输入，是必需权限。</p>
+              <h3>{{ requiresAccessibility ? '辅助功能权限' : '全局快捷键可用性' }}</h3>
+              <p>{{ requiresAccessibility ? '用于全局快捷键与自动输入，是必需权限。' : '要求已启用模式的快捷键可以被全局触发，是必需项。' }}</p>
             </div>
-            <span :class="['panel-badge', props.permissions.accessibility ? 'ready' : 'missing']">
-              {{ props.permissions.accessibility ? '已授权' : '未授权' }}
+            <span :class="['panel-badge', shortcutsReady ? 'ready' : 'missing']">
+              {{ shortcutsReady ? '已就绪' : '未就绪' }}
             </span>
-            <button v-if="!props.permissions.accessibility" class="btn btn-primary" @click="emit('requestPermission', 'accessibility')">
-              打开授权
+            <button
+              v-if="requiresAccessibility ? !props.permissions.accessibility : !shortcutsReady"
+              class="btn btn-primary"
+              @click="requiresAccessibility ? emit('requestPermission', 'accessibility') : emit('refresh')"
+            >
+              {{ requiresAccessibility ? '打开授权' : '重新检查' }}
             </button>
           </section>
         </div>
@@ -144,19 +178,21 @@ function continueToSettings(): void {
         <section class="permission-row optional">
           <div class="permission-icon" aria-hidden="true">🖥️</div>
           <div class="permission-copy">
-              <h3>屏幕录制权限</h3>
-              <p>仅用于截图辅助润色和语音助手上下文，不是必需权限。</p>
+            <h3>屏幕录制权限</h3>
+            <p>仅用于截图辅助润色和语音助手上下文，不是必需权限。</p>
           </div>
           <span :class="['panel-badge', props.permissions.screen ? 'ready' : 'optional']">
             {{ props.permissions.screen ? '已授权' : '可稍后设置' }}
           </span>
-          <button v-if="!props.permissions.screen" class="btn btn-secondary" @click="emit('requestPermission', 'screen')">先去配置</button>
+          <button v-if="!props.permissions.screen" class="btn btn-secondary" @click="emit('requestPermission', 'screen')">
+            先去配置
+          </button>
         </section>
       </section>
 
       <div class="onboarding-footer">
         <div class="footer-actions">
-          <button class="btn btn-secondary" @click="emit('refresh')">重新检测权限</button>
+          <button class="btn btn-secondary" @click="emit('refresh')">重新检测</button>
           <button class="btn btn-primary" :disabled="!canContinue" @click="continueToSettings">
             <span v-if="props.isEnsuringBackend" class="btn-loading"></span>
             {{ props.isEnsuringBackend ? '正在初始化...' : '继续进入设置' }}
@@ -211,10 +247,11 @@ function continueToSettings(): void {
   overflow: hidden;
 }
 
-.app-mark img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.app-mark-label {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent-color);
 }
 
 .setup-progress {

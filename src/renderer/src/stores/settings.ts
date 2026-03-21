@@ -9,11 +9,20 @@ import type {
   ApiProvider,
   ShortcutServiceStatus
 } from '../../../shared/types'
-import { BUILTIN_PRESETS, ASSISTANT_BUILTIN_PRESETS, ASR_DEFAULT_BASE_URL, POLISH_DEFAULT_BASE_URL } from '../../../shared/types'
+import {
+  BUILTIN_PRESETS,
+  ASSISTANT_BUILTIN_PRESETS,
+  ASR_DEFAULT_BASE_URL,
+  POLISH_DEFAULT_BASE_URL,
+  getDefaultAssistantShortcut,
+  getDefaultTranscriptionShortcut
+} from '../../../shared/types'
+import { getRendererPlatform } from '../utils/platform'
 
 declare global {
   interface Window {
     electronAPI: {
+      platform: 'darwin' | 'win32' | 'linux'
       getConfig: () => Promise<AppConfig>
       getConfigValue: (key: string) => Promise<unknown>
       setConfig: (key: string, value: unknown) => Promise<boolean>
@@ -21,6 +30,7 @@ declare global {
       requestPermission: (type: string) => Promise<boolean>
       getShortcutStatus: () => Promise<ShortcutServiceStatus>
       refreshShortcutStatus: () => Promise<ShortcutServiceStatus>
+      ensureNativeBackendReady: () => Promise<boolean>
       onPipelineStatus: (callback: (status: string) => void) => () => void
       onPartialText: (callback: (text: string) => void) => () => void
       onFinalText: (callback: (text: string) => void) => () => void
@@ -43,6 +53,10 @@ declare global {
 }
 
 export const useSettingsStore = defineStore('settings', () => {
+  const platform = getRendererPlatform()
+  const defaultTranscriptionShortcut = getDefaultTranscriptionShortcut(platform)
+  const defaultAssistantShortcut = getDefaultAssistantShortcut(platform)
+
   const apiKey = ref('')
   const shortcut = ref('Alt+Space')
   const inputMethod = ref<InputMethod>('clipboard')
@@ -72,10 +86,10 @@ export const useSettingsStore = defineStore('settings', () => {
   const historyMaxCount = ref(50)
   const loading = ref(false)
   // 双模式配置 - 语音识别
-  const transcriptionShortcut = ref('RightCommand')
+  const transcriptionShortcut = ref(defaultTranscriptionShortcut)
   const transcriptionEnabled = ref(true)
   // 双模式配置 - 语音助手
-  const assistantShortcut = ref('RightOption')
+  const assistantShortcut = ref(defaultAssistantShortcut)
   const assistantEnabled = ref(true)
   const assistantPrePolish = ref(false)
   const assistantOutputMode = ref<AssistantOutputMode>('window')
@@ -120,10 +134,10 @@ export const useSettingsStore = defineStore('settings', () => {
       hideDockIcon.value = config.hideDockIcon ?? false
       historyMaxCount.value = config.historyMaxCount ?? 50
       // 双模式配置 - 语音识别
-      transcriptionShortcut.value = config.transcriptionShortcut ?? config.shortcut ?? 'RightCommand'
+      transcriptionShortcut.value = config.transcriptionShortcut ?? config.shortcut ?? defaultTranscriptionShortcut
       transcriptionEnabled.value = config.transcriptionEnabled ?? true
       // 双模式配置 - 语音助手
-      assistantShortcut.value = config.assistantShortcut ?? 'RightOption'
+      assistantShortcut.value = config.assistantShortcut ?? defaultAssistantShortcut
       assistantEnabled.value = config.assistantEnabled ?? true
       assistantPrePolish.value = config.assistantPrePolish ?? false
       assistantOutputMode.value = config.assistantOutputMode ?? 'window'
