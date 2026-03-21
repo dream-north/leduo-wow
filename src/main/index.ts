@@ -13,6 +13,7 @@ import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 import { keyboardListener } from '../native-keyboard-listener'
+import { createAssistantResultWindow } from './assistant-result-window'
 
 let settingsWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -251,6 +252,8 @@ app.whenReady().then(async () => {
   // Create windows
   settingsWindow = createSettingsWindow()
   overlayWindow = createOverlayWindow()
+  assistantResultWindow = createAssistantResultWindow()
+  attachWindowDebugLogging(assistantResultWindow, 'assistant-result')
   overlayManager = new OverlayManager({
     overlayWindow,
     getAssistantResultWindow: () => assistantResultWindow,
