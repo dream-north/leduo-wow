@@ -12,11 +12,28 @@ try {
   console.warn('[TextInputter] robotjs not available, will fall back to osascript:', err)
 }
 
-export class TextInputter {
-  async input(text: string, method: InputMethod): Promise<void> {
-    console.log(`[TextInputter] Inputting text via ${method}: "${text.substring(0, 50)}..."`)
+type ClipboardApi = Pick<typeof clipboard, 'readText' | 'writeText'>
+type RobotApi = { keyTap: (key: string, modifier: string | string[]) => void }
 
-    if (method === 'clipboard') {
+export class TextInputter {
+  constructor(
+    private readonly platform: NodeJS.Platform = process.platform,
+    private readonly clipboardApi: ClipboardApi = clipboard,
+    private readonly robotApi: RobotApi | null = robot
+  ) {}
+
+  async input(text: string, method: InputMethod): Promise<void> {
+    const effectiveMethod = this.platform !== 'darwin' && method === 'applescript'
+      ? 'clipboard'
+      : method
+
+    if (effectiveMethod !== method) {
+      console.warn(`[TextInputter] ${method} is not supported on ${this.platform}, falling back to clipboard`)
+    }
+
+    console.log(`[TextInputter] Inputting text via ${effectiveMethod}: "${text.substring(0, 50)}..."`)
+
+    if (effectiveMethod === 'clipboard') {
       await this.inputViaClipboard(text)
     } else {
       await this.inputViaKeystroke(text)
@@ -25,25 +42,25 @@ export class TextInputter {
 
   private async inputViaClipboard(text: string): Promise<void> {
     // Save current clipboard content
-    const previousText = clipboard.readText()
+    const previousText = this.clipboardApi.readText()
 
     // Write new text to clipboard
-    clipboard.writeText(text)
+    this.clipboardApi.writeText(text)
 
     // Verify clipboard was set correctly
-    const verify = clipboard.readText()
+    const verify = this.clipboardApi.readText()
     if (verify !== text) {
       console.error('[TextInputter] Clipboard write failed')
       throw new Error('Failed to write to clipboard')
     }
-    console.log('[TextInputter] Clipboard set, sending Cmd+V...')
+    console.log(`[TextInputter] Clipboard set, sending ${this.getPasteShortcutLabel()}...`)
 
-    // Simulate Cmd+V
+    // Simulate paste into the focused control.
     await this.simulatePaste()
 
     // Wait for paste to complete, then restore clipboard
     await this.delay(300)
-    clipboard.writeText(previousText)
+    this.clipboardApi.writeText(previousText)
   }
 
   private async inputViaKeystroke(text: string): Promise<void> {
@@ -53,11 +70,15 @@ export class TextInputter {
       return this.inputViaClipboard(text)
     }
 
-    if (robot) {
+    if (this.robotApi) {
       for (const char of text) {
-        robot.keyTap(char, [])
+        this.robotApi.keyTap(char, [])
       }
     } else {
+      if (this.platform !== 'darwin') {
+        throw new Error('robotjs is required for keystroke input on this platform')
+      }
+
       // Fallback for ASCII text via osascript
       const escaped = text
         .replace(/\\/g, '\\\\')
@@ -71,11 +92,15 @@ export class TextInputter {
   }
 
   private async simulatePaste(): Promise<void> {
-    if (robot) {
+    if (this.robotApi) {
       // In-process CGEvent — uses Electron's own Accessibility permission
-      robot.keyTap('v', 'command')
-      console.log('[TextInputter] Cmd+V sent via robotjs')
+      this.robotApi.keyTap('v', this.getPasteModifier())
+      console.log(`[TextInputter] ${this.getPasteShortcutLabel()} sent via robotjs`)
     } else {
+      if (this.platform !== 'darwin') {
+        throw new Error('robotjs is required for clipboard paste on this platform')
+      }
+
       // Fallback: osascript (needs separate Accessibility permission for /usr/bin/osascript)
       console.warn('[TextInputter] Falling back to osascript for Cmd+V (may fail without permission)')
       const { exec } = require('child_process')
@@ -95,5 +120,13 @@ export class TextInputter {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  private getPasteModifier(): 'command' | 'control' {
+    return this.platform === 'win32' ? 'control' : 'command'
+  }
+
+  private getPasteShortcutLabel(): string {
+    return this.platform === 'win32' ? 'Ctrl+V' : 'Cmd+V'
   }
 }

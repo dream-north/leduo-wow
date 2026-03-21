@@ -25,6 +25,11 @@ const platform = getRendererPlatform()
 const defaultTranscriptionShortcut = getDefaultTranscriptionShortcut(platform)
 const defaultAssistantShortcut = getDefaultAssistantShortcut(platform)
 const altKeyName = platform === 'win32' ? 'Alt' : 'Option'
+const pasteShortcutLabel = platform === 'win32' ? 'Ctrl+V' : 'Cmd+V'
+const showAppleScriptInputMethod = platform === 'darwin'
+const showDockVisibilityToggle = platform === 'darwin'
+const showAccessibilityPermission = platform === 'darwin'
+const showScreenPermission = platform === 'darwin'
 const initialTab = sessionStorage.getItem('settings-active-tab')
 const activeTab = ref(initialTab === 'prompt' ? 'prompt-transcription' : (initialTab || 'general'))
 const dockUpdateLocked = ref(false)
@@ -634,6 +639,7 @@ async function toggleLaunchAtLogin(): Promise<void> {
 
 // Hide dock icon
 async function toggleHideDockIcon(): Promise<void> {
+  if (!showDockVisibilityToggle) return
   // Prevent toggle if update is in progress
   if (dockUpdateLocked.value) return
   store.hideDockIcon = !store.hideDockIcon
@@ -946,10 +952,10 @@ onUnmounted(() => {
               />
               <span class="radio-text">
                 <strong>剪贴板粘贴</strong>
-                <small>通过 Cmd+V 粘贴，兼容性最好</small>
+                <small>通过 {{ pasteShortcutLabel }} 粘贴，兼容性最好</small>
               </span>
             </label>
-            <label class="radio-item">
+            <label v-if="showAppleScriptInputMethod" class="radio-item">
               <input
                 type="radio"
                 name="inputMethod"
@@ -1073,7 +1079,7 @@ onUnmounted(() => {
               <span class="toggle-thumb"></span>
             </button>
           </div>
-          <div class="toggle-row" style="margin-top: 8px">
+          <div v-if="showDockVisibilityToggle" class="toggle-row" style="margin-top: 8px">
             <span>
               隐藏 Dock 栏图标
               <small style="color: var(--text-secondary)">（显示图标需重启生效）</small>
@@ -1095,7 +1101,7 @@ onUnmounted(() => {
             <button class="btn btn-secondary btn-sm" @click="checkPermissions">刷新</button>
           </div>
           <div class="permission-list">
-            <div class="permission-item">
+            <div v-if="showAccessibilityPermission" class="permission-item">
               <span>
                 <span :class="['status-dot', permissions.microphone ? 'green' : 'red']"></span>
                 麦克风权限
@@ -1105,7 +1111,7 @@ onUnmounted(() => {
               </button>
               <span v-else class="permission-granted">已授权</span>
             </div>
-            <div class="permission-item">
+            <div v-if="showScreenPermission" class="permission-item">
               <span>
                 <span :class="['status-dot', permissions.accessibility ? 'green' : 'red']"></span>
                 辅助功能权限

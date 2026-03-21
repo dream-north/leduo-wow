@@ -78,6 +78,17 @@ interface HistorySchema {
 let store: Store<StoreSchema>
 let historyStore: Store<HistorySchema>
 
+function normalizeInputMethod(
+  method: StoreSchema['inputMethod'] | undefined,
+  platform: NodeJS.Platform = process.platform
+): StoreSchema['inputMethod'] {
+  if (platform !== 'darwin') {
+    return 'clipboard'
+  }
+
+  return method === 'applescript' ? 'applescript' : 'clipboard'
+}
+
 export function initConfigStore(): Store<StoreSchema> {
   const transcriptionShortcutDefault = getDefaultTranscriptionShortcut(process.platform)
   const assistantShortcutDefault = getDefaultAssistantShortcut(process.platform)
@@ -193,7 +204,7 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
   return {
     apiKey: '',
     shortcut: s.get('shortcut'),
-    inputMethod: s.get('inputMethod'),
+    inputMethod: normalizeInputMethod(s.get('inputMethod')),
     // ASR
     asrProvider: s.get('asrProvider') ?? DEFAULT_CONFIG.asrProvider,
     asrApiKey,
@@ -245,6 +256,12 @@ export function setConfig(
   key: string,
   value: unknown
 ): void {
+  if (key === 'inputMethod') {
+    s.set('inputMethod', normalizeInputMethod(value as StoreSchema['inputMethod']) as never)
+    console.log('Config saved: inputMethod')
+    return
+  }
+
   s.set(key as keyof StoreSchema, value as never)
   console.log(`Config saved: ${key}`)
 }

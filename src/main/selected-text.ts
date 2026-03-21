@@ -21,9 +21,13 @@ export async function getSelectedText(): Promise<string | null> {
   try {
     // Simulate Cmd+C to copy selected text
     if (robot) {
-      robot.keyTap('c', 'command')
-      console.log('[SelectedText] Cmd+C sent via robotjs')
+      robot.keyTap('c', process.platform === 'win32' ? 'control' : 'command')
+      console.log(`[SelectedText] ${process.platform === 'win32' ? 'Ctrl+C' : 'Cmd+C'} sent via robotjs`)
     } else {
+      if (process.platform !== 'darwin') {
+        throw new Error('robotjs is required for selected-text capture on this platform')
+      }
+
       // Fallback to osascript
       const { exec } = require('child_process')
       const { promisify } = require('util')

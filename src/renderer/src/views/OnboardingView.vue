@@ -59,6 +59,7 @@ const codeToShortcut: Record<string, string> = {
   ShiftLeft: 'LeftShift',
   ShiftRight: 'RightShift'
 }
+const showScreenPermission = platform === 'darwin'
 
 function showPermissionHint(): void {
   permissionHint.value = requiresAccessibility.value
@@ -166,7 +167,7 @@ function continueToSettings(): void {
         </div>
       </section>
 
-      <section class="permission-section optional-group">
+      <section v-if="showScreenPermission" class="permission-section optional-group">
         <div class="section-heading">
           <div>
             <p class="section-kicker optional">可选增强</p>

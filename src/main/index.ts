@@ -165,6 +165,10 @@ export function getShortcutService(): ShortcutService | null {
 let pendingDockState: boolean | null = null
 
 export function updateDockIconVisibility(hideDockIcon: boolean): void {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
   // Skip if state hasn't changed and no pending update
   if (lastDockState === hideDockIcon && pendingDockState === null) {
     return
@@ -227,15 +231,18 @@ app.whenReady().then(async () => {
 
   checkPermissions()
 
-  // Control dock icon visibility BEFORE creating any windows
-  // This must be done early, otherwise it won't take effect until restart
-  if (config.hideDockIcon) {
-    app.dock?.hide()
-  } else {
-    app.dock?.show()
+  if (process.platform === 'darwin') {
+    // Control dock icon visibility BEFORE creating any windows
+    // This must be done early, otherwise it won't take effect until restart
+    if (config.hideDockIcon) {
+      app.dock?.hide()
+    } else {
+      app.dock?.show()
+    }
+
+    // Sync the initial state to prevent unnecessary updates
+    lastDockState = config.hideDockIcon
   }
-  // Sync the initial state to prevent unnecessary updates
-  lastDockState = config.hideDockIcon
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -274,16 +281,18 @@ app.whenReady().then(async () => {
   // Show settings window on first launch
   showSettingsWindow()
 
-  // Delayed check to ensure dock icon visibility matches config
-  // This handles cases where LSUIElement or initial dock.hide() didn't work
-  setTimeout(() => {
-    if (!configStore) return
-    const currentConfig = getConfig(configStore)
-    console.log('[Dock] Delayed check - hideDockIcon:', currentConfig.hideDockIcon)
-    // Force update dock visibility
-    lastDockState = null // Reset state to force update
-    updateDockIconVisibility(currentConfig.hideDockIcon)
-  }, 1000)
+  if (process.platform === 'darwin') {
+    // Delayed check to ensure dock icon visibility matches config
+    // This handles cases where LSUIElement or initial dock.hide() didn't work
+    setTimeout(() => {
+      if (!configStore) return
+      const currentConfig = getConfig(configStore)
+      console.log('[Dock] Delayed check - hideDockIcon:', currentConfig.hideDockIcon)
+      // Force update dock visibility
+      lastDockState = null // Reset state to force update
+      updateDockIconVisibility(currentConfig.hideDockIcon)
+    }, 1000)
+  }
 
   app.on('browser-window-focus', () => {
     shortcutService?.refresh()

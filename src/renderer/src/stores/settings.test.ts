@@ -73,4 +73,60 @@ describe('settings store assistant output mode', () => {
 
     expect(window.electronAPI.setConfig).toHaveBeenCalledWith('assistantOutputMode', 'window')
   })
+
+  it('normalizes applescript input method to clipboard on Windows', async () => {
+    window.electronAPI = {
+      ...window.electronAPI,
+      platform: 'win32',
+      getConfig: vi.fn(async () => ({
+        apiKey: '',
+        shortcut: 'RightAlt',
+        inputMethod: 'applescript',
+        asrProvider: 'dashscope',
+        asrApiKey: '',
+        asrBaseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
+        asrModel: 'qwen3-asr-flash-realtime',
+        polishEnabled: true,
+        polishProvider: 'dashscope',
+        polishApiKey: '',
+        polishModel: 'qwen3.5-flash',
+        polishBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        polishPrompt: '',
+        polishPresets: [],
+        activePresetIndex: 0,
+        transcriptionShortcut: 'RightAlt',
+        transcriptionEnabled: true,
+        assistantShortcut: 'RightControl',
+        assistantEnabled: true,
+        assistantPrePolish: false,
+        assistantOutputMode: 'window',
+        assistantModel: 'qwen3.5-flash',
+        assistantEnableThinking: false,
+        assistantThinkingBudget: 256,
+        assistantEnableSearch: false,
+        assistantEnableCodeInterpreter: false,
+        assistantPrompt: '',
+        assistantPresets: [],
+        assistantActivePresetIndex: 0,
+        launchAtLogin: false,
+        selectedMicrophoneId: '',
+        overlayPosition: 'bottom',
+        audioThreshold: 0,
+        screenshotEnabled: false,
+        screenshotSavePath: '',
+        screenshotMaxCount: 30,
+        screenshotExcludedApps: [],
+        hideDockIcon: false,
+        historyMaxCount: 50
+      }))
+    } as never
+
+    const store = useSettingsStore()
+    await store.loadSettings()
+
+    expect(store.inputMethod).toBe('clipboard')
+
+    await store.saveSetting('inputMethod', 'applescript')
+    expect(window.electronAPI.setConfig).toHaveBeenCalledWith('inputMethod', 'clipboard')
+  })
 })

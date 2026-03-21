@@ -56,6 +56,13 @@ export const useSettingsStore = defineStore('settings', () => {
   const platform = getRendererPlatform()
   const defaultTranscriptionShortcut = getDefaultTranscriptionShortcut(platform)
   const defaultAssistantShortcut = getDefaultAssistantShortcut(platform)
+  const normalizeInputMethod = (method: InputMethod): InputMethod => {
+    if (platform !== 'darwin' && method === 'applescript') {
+      return 'clipboard'
+    }
+
+    return method
+  }
 
   const apiKey = ref('')
   const shortcut = ref('Alt+Space')
@@ -108,7 +115,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const config = await window.electronAPI.getConfig()
       apiKey.value = config.apiKey
       shortcut.value = config.shortcut
-      inputMethod.value = config.inputMethod
+      inputMethod.value = normalizeInputMethod(config.inputMethod)
       // ASR
       asrProvider.value = config.asrProvider ?? 'dashscope'
       asrApiKey.value = config.asrApiKey ?? ''
@@ -159,7 +166,9 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSetting(key: string, value: unknown): Promise<void> {
     try {
       // Strip Vue reactivity proxy before sending through Electron IPC
-      const plainValue = JSON.parse(JSON.stringify(value))
+      const plainValue = key === 'inputMethod'
+        ? normalizeInputMethod(JSON.parse(JSON.stringify(value)))
+        : JSON.parse(JSON.stringify(value))
       await window.electronAPI.setConfig(key, plainValue)
     } catch (err) {
       console.error(`Failed to save setting ${key}:`, err)

@@ -53,7 +53,7 @@ export function registerIpcHandlers(
     if (key === 'audioThreshold' && overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.webContents.send(IPC.AUDIO_THRESHOLD, value as number)
     }
-    if (key === 'hideDockIcon') {
+    if (key === 'hideDockIcon' && process.platform === 'darwin') {
       updateDockIconVisibility(value as boolean)
     }
     if (key === 'historyMaxCount') {

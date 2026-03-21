@@ -151,4 +151,56 @@ describe('OnboardingView', () => {
     await continueButton!.trigger('click')
     expect(wrapper.emitted('continue')).toBeUndefined()
   })
+
+  it('hides the optional screen-permission section on Windows', () => {
+    const previousElectronApi = window.electronAPI
+    window.electronAPI = {
+      ...previousElectronApi,
+      platform: 'win32'
+    } as never
+
+    const wrapper = mount(OnboardingView, {
+      props: {
+        permissions: {
+          microphone: true,
+          accessibility: true,
+          screen: true
+        },
+        shortcuts: {
+          transcription: 'RightAlt',
+          assistant: 'RightControl'
+        },
+        enabledModes: {
+          transcription: true,
+          assistant: true
+        },
+        shortcutStatus: {
+          permissionState: 'granted',
+          backendState: 'native',
+          reason: 'ready',
+          modes: {
+            transcription: {
+              mode: 'transcription',
+              shortcut: 'RightAlt',
+              backendState: 'native',
+              reason: 'ready',
+              requiresAccessibility: false,
+              canTriggerGlobally: true
+            },
+            assistant: {
+              mode: 'assistant',
+              shortcut: 'RightControl',
+              backendState: 'native',
+              reason: 'ready',
+              requiresAccessibility: false,
+              canTriggerGlobally: true
+            }
+          }
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('屏幕录制权限')
+    window.electronAPI = previousElectronApi
+  })
 })
