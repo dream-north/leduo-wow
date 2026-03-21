@@ -225,16 +225,6 @@ onUnmounted(() => {
       </div>
 
       <div class="result-body">
-        <section class="panel response-panel">
-          <div class="panel-head">
-            <h2>回答</h2>
-            <span class="panel-kicker">{{ hasAnswer ? '最终输出' : '生成中' }}</span>
-          </div>
-
-          <div v-if="hasAnswer" class="markdown-body answer-markdown" v-html="answerHtml"></div>
-          <p v-else class="result-placeholder">{{ answerPlaceholder }}</p>
-        </section>
-
         <details v-if="reasoningMarkdown" class="panel fold-panel" :open="!reasoningCollapsed">
           <summary>
             <span>思考过程</span>
@@ -250,6 +240,16 @@ onUnmounted(() => {
           </summary>
           <div class="markdown-body code-markdown" v-html="codeHtml"></div>
         </details>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>回答</h2>
+            <span class="panel-kicker">{{ hasAnswer ? '最终输出' : '生成中' }}</span>
+          </div>
+
+          <div v-if="hasAnswer" class="markdown-body answer-markdown" v-html="answerHtml"></div>
+          <p v-else class="result-placeholder">{{ answerPlaceholder }}</p>
+        </section>
 
         <section v-if="visibleSources.length" class="panel sources-panel">
           <div class="panel-head">
@@ -447,16 +447,16 @@ h1 {
   background-clip: padding-box;
 }
 
+.result-body > :first-child {
+  margin-top: 0;
+}
+
 .panel {
   margin-top: 14px;
   padding: 16px 18px;
   border: 1px solid #e2e8f0;
   border-radius: 18px;
   background: #ffffff;
-}
-
-.response-panel {
-  margin-top: 0;
 }
 
 .panel-head {
