@@ -46,6 +46,8 @@ win:
     - nsis
 nsis:
   artifactName: leduo-wow-${version}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 dmg:
   artifactName: leduo-wow-${version}.${ext}
   title: "Leduo Wow ${version}"
