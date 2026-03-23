@@ -9,6 +9,7 @@ import { getRunningApps } from './macos-apps'
 import { updateDockIconVisibility } from './index'
 import type { ShortcutServiceStatus } from '../shared/types'
 import { getLatestAssistantResultPayload, markAssistantResultWindowReady } from './assistant-result-window'
+import { checkForUpdatesManual, downloadUpdate, installUpdate, getUpdateStatus } from './updater'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
@@ -188,4 +189,10 @@ export function registerIpcHandlers(
       pipeline.handleAssistantResultWindowClosed()
     }
   })
+
+  // Auto-update
+  ipcMain.handle(IPC.UPDATE_CHECK, () => checkForUpdatesManual())
+  ipcMain.handle(IPC.UPDATE_DOWNLOAD, () => downloadUpdate())
+  ipcMain.handle(IPC.UPDATE_INSTALL, () => installUpdate())
+  ipcMain.handle(IPC.UPDATE_STATUS, () => getUpdateStatus())
 }

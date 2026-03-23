@@ -69,6 +69,17 @@ const electronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, locked: boolean) => callback(locked)
     ipcRenderer.on(IPC.DOCK_UPDATE_LOCK, handler)
     return () => ipcRenderer.removeListener(IPC.DOCK_UPDATE_LOCK, handler)
+  },
+
+  // Auto-update
+  checkForUpdate: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.UPDATE_DOWNLOAD),
+  installUpdate: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+  getUpdateStatus: () => ipcRenderer.invoke(IPC.UPDATE_STATUS),
+  onUpdateStatus: (callback: (payload: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
+    ipcRenderer.on(IPC.UPDATE_STATUS, handler)
+    return () => ipcRenderer.removeListener(IPC.UPDATE_STATUS, handler)
   }
 }
 

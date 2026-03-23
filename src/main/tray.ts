@@ -5,10 +5,12 @@ import { PipelineStatus } from '../shared/types'
 let tray: Tray | null = null
 let trayMenu: Menu | null = null
 let onShowSettings: (() => void) | null = null
+let onCheckForUpdate: (() => void) | null = null
 let getStatus: (() => PipelineStatus) | null = null
 
 export interface TrayCallbacks {
   showSettings: () => void
+  checkForUpdate: () => void
   getStatus: () => PipelineStatus
 }
 
@@ -19,6 +21,7 @@ export function createTray(callbacks: TrayCallbacks): Tray | null {
   }
 
   onShowSettings = callbacks.showSettings
+  onCheckForUpdate = callbacks.checkForUpdate
   getStatus = callbacks.getStatus
 
   // Load Border Collie icon — use @2x for crisp retina display
@@ -86,6 +89,10 @@ export function updateTrayMenu(status?: PipelineStatus): void {
       enabled: false
     },
     { type: 'separator' },
+    {
+      label: '检查更新...',
+      click: () => onCheckForUpdate?.()
+    },
     {
       label: '设置...',
       accelerator: settingsAccelerator,

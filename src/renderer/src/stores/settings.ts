@@ -7,7 +7,8 @@ import type {
   PolishPreset,
   ExcludedApp,
   ApiProvider,
-  ShortcutServiceStatus
+  ShortcutServiceStatus,
+  UpdateStatusPayload
 } from '../../../shared/types'
 import {
   BUILTIN_PRESETS,
@@ -49,6 +50,11 @@ declare global {
       getRunningApps: () => Promise<Array<{ name: string; bundleId: string }>>
       onDockUpdateLock: (callback: (locked: boolean) => void) => () => void
       onHistoryUpdated: (callback: () => void) => () => void
+      checkForUpdate: () => Promise<UpdateStatusPayload>
+      downloadUpdate: () => Promise<void>
+      installUpdate: () => Promise<void>
+      getUpdateStatus: () => Promise<UpdateStatusPayload>
+      onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => () => void
     }
   }
 }

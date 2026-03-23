@@ -17,7 +17,8 @@ import type {
   ShortcutModeStatus,
   ShortcutServiceStatus,
   TranscriptionRecord,
-  VoiceMode
+  VoiceMode,
+  UpdateStatusPayload
 } from '../../../shared/types'
 
 const store = useSettingsStore()
@@ -746,6 +747,22 @@ function shortcutStatusClass(mode: VoiceMode): string {
 // Version
 const version = ref('')
 
+// Auto-update
+const updateStatus = ref<UpdateStatusPayload | null>(null)
+let unsubscribeUpdateStatus: (() => void) | null = null
+
+function checkForUpdate(): void {
+  window.electronAPI.checkForUpdate()
+}
+
+function downloadUpdate(): void {
+  window.electronAPI.downloadUpdate()
+}
+
+function installUpdate(): void {
+  window.electronAPI.installUpdate()
+}
+
 // History
 const historyRecords = ref<TranscriptionRecord[]>([])
 
@@ -808,6 +825,12 @@ onMounted(async () => {
     unsubscribeShortcutStatus = window.electronAPI.onShortcutStatusChanged((status) => {
       shortcutStatus.value = status
     })
+
+    // Listen for auto-update status
+    updateStatus.value = await window.electronAPI.getUpdateStatus()
+    unsubscribeUpdateStatus = window.electronAPI.onUpdateStatus((payload) => {
+      updateStatus.value = payload as UpdateStatusPayload
+    })
   } catch (err) {
     console.error('Failed to initialize settings:', err)
   }
@@ -822,6 +845,9 @@ onUnmounted(() => {
   }
   if (unsubscribeShortcutStatus) {
     unsubscribeShortcutStatus()
+  }
+  if (unsubscribeUpdateStatus) {
+    unsubscribeUpdateStatus()
   }
   stopShortcutListeners()
   if (shortcutCaptureSuspended) {
@@ -1608,6 +1634,40 @@ onUnmounted(() => {
           <div class="about-app-name">乐多汪汪</div>
           <div class="about-english-name">Leduo Wow</div>
           <div class="about-version">版本 {{ version || '0.1.0' }}</div>
+
+          <!-- Update Section -->
+          <div class="update-section">
+            <template v-if="!updateStatus || updateStatus.status === 'idle'">
+              <button class="btn btn-secondary btn-sm" @click="checkForUpdate">检查更新</button>
+            </template>
+            <template v-else-if="updateStatus.status === 'checking'">
+              <span class="update-status-text">正在检查更新...</span>
+            </template>
+            <template v-else-if="updateStatus.status === 'not-available'">
+              <span class="update-status-text update-status-ok">当前已是最新版本</span>
+            </template>
+            <template v-else-if="updateStatus.status === 'available'">
+              <span class="update-status-text">发现新版本 {{ updateStatus.newVersion }}</span>
+              <button class="btn btn-primary btn-sm" @click="downloadUpdate" style="margin-left: 8px;">下载更新</button>
+            </template>
+            <template v-else-if="updateStatus.status === 'downloading'">
+              <div class="update-progress-wrap">
+                <span class="update-status-text">下载中 {{ updateStatus.progress ?? 0 }}%</span>
+                <div class="update-progress-bar">
+                  <div class="update-progress-fill" :style="{ width: (updateStatus.progress ?? 0) + '%' }"></div>
+                </div>
+              </div>
+            </template>
+            <template v-else-if="updateStatus.status === 'downloaded'">
+              <span class="update-status-text">更新已就绪</span>
+              <button class="btn btn-primary btn-sm" @click="installUpdate" style="margin-left: 8px;">安装并重启</button>
+            </template>
+            <template v-else-if="updateStatus.status === 'error'">
+              <span class="update-status-text update-status-error">{{ updateStatus.error || '检查更新失败' }}</span>
+              <button class="btn btn-secondary btn-sm" @click="checkForUpdate" style="margin-left: 8px;">重试</button>
+            </template>
+          </div>
+
           <p class="about-description">
             多平台语音输入与语音助手工具，按下快捷键即可语音输入，AI 自动润色或回答后输出到任意应用中。
           </p>
@@ -2104,6 +2164,54 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--text-secondary);
   margin-top: 8px;
+}
+
+.update-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  min-height: 32px;
+}
+
+.update-status-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.update-status-ok {
+  color: var(--success-color);
+}
+
+.update-status-error {
+  color: var(--error-color);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 200px;
+}
+
+.update-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 3px;
+  transition: width 0.3s ease;
 }
 
 .save-toast {

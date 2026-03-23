@@ -4,6 +4,10 @@ afterPack: build/afterPack.js
 directories:
   buildResources: build
   output: dist
+publish:
+  provider: github
+  owner: dream-north
+  repo: leduo-wow
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -45,4 +49,4 @@ nsis:
 dmg:
   artifactName: leduo-wow-${version}.${ext}
   title: "Leduo Wow ${version}"
-  writeUpdateInfo: false
+

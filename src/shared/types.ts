@@ -268,3 +268,15 @@ export const DEFAULT_CONFIG: AppConfig = {
   hideDockIcon: false,
   historyMaxCount: 50
 }
+
+// Auto-update types
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+
+export interface UpdateStatusPayload {
+  status: UpdateStatus
+  currentVersion: string
+  newVersion?: string
+  releaseNotes?: string
+  progress?: number
+  error?: string
+}

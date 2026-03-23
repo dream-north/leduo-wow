@@ -13,6 +13,7 @@ import { OverlayManager } from './overlay-manager'
 import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 import { keyboardListener } from '../native-keyboard-listener'
+import { initAutoUpdater, checkForUpdatesManual } from './updater'
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -308,11 +309,15 @@ if (!gotSingleInstanceLock) {
   // Create tray (always show tray icon)
   createTray({
     showSettings: () => showSettingsWindow(),
+    checkForUpdate: () => checkForUpdatesManual(),
     getStatus: () => pipeline?.getStatus() || PipelineStatus.IDLE
   })
 
   // Register IPC handlers
   registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow, () => assistantResultWindow)
+
+  // Initialize auto-updater
+  initAutoUpdater()
 
   // Show settings window on first launch
   showSettingsWindow()
