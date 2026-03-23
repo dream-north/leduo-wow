@@ -213,11 +213,11 @@ function getRuntimePlatform(): NodeJS.Platform {
 }
 
 export function getDefaultTranscriptionShortcut(platform: NodeJS.Platform = getRuntimePlatform()): string {
-  return platform === 'win32' ? 'RightAlt' : 'RightCommand'
+  return platform === 'win32' ? 'RightAlt+.' : 'RightCommand'
 }
 
 export function getDefaultAssistantShortcut(platform: NodeJS.Platform = getRuntimePlatform()): string {
-  return platform === 'win32' ? 'RightControl' : 'RightOption'
+  return platform === 'win32' ? 'RightAlt+/' : 'RightOption'
 }
 
 export const DEFAULT_CONFIG: AppConfig = {

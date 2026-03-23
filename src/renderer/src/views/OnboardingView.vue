@@ -48,16 +48,30 @@ const requiredGrantedCount = computed(() => Number(props.permissions.microphone)
 const permissionHint = ref('')
 const platform = getRendererPlatform()
 let clearHintTimer: ReturnType<typeof setTimeout> | null = null
+const modifierKeySides = new Map<'Control' | 'Alt' | 'Meta' | 'Shift', 'Left' | 'Right'>()
 
-const codeToShortcut: Record<string, string> = {
-  MetaLeft: 'LeftCommand',
-  MetaRight: 'RightCommand',
-  AltLeft: platform === 'win32' ? 'LeftAlt' : 'LeftOption',
-  AltRight: platform === 'win32' ? 'RightAlt' : 'RightOption',
-  ControlLeft: 'LeftControl',
-  ControlRight: 'RightControl',
-  ShiftLeft: 'LeftShift',
-  ShiftRight: 'RightShift'
+const codeToKey: Record<string, string> = {
+  Space: 'Space',
+  Backspace: 'Backspace',
+  Enter: 'Return',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  Delete: 'Delete',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Backquote: '`'
 }
 const showScreenPermission = platform === 'darwin'
 
@@ -76,20 +90,109 @@ function showPermissionHint(): void {
 function handleKeydown(event: KeyboardEvent): void {
   if (shortcutsReady.value) return
 
-  const mapped = codeToShortcut[event.code]
-  if (!mapped) return
+  updateModifierSide(event.code)
 
-  if (mapped === props.shortcuts.transcription || mapped === props.shortcuts.assistant) {
+  const attemptedShortcut = buildShortcutFromEvent(event)
+  if (!attemptedShortcut) return
+
+  if (attemptedShortcut === props.shortcuts.transcription || attemptedShortcut === props.shortcuts.assistant) {
     showPermissionHint()
   }
 }
 
+function handleKeyup(event: KeyboardEvent): void {
+  clearModifierSide(event.code)
+}
+
+function updateModifierSide(code: string): void {
+  if (code === 'ControlLeft' || code === 'ControlRight') {
+    modifierKeySides.set('Control', code === 'ControlLeft' ? 'Left' : 'Right')
+  }
+  if (code === 'AltLeft' || code === 'AltRight') {
+    modifierKeySides.set('Alt', code === 'AltLeft' ? 'Left' : 'Right')
+  }
+  if (code === 'MetaLeft' || code === 'MetaRight') {
+    modifierKeySides.set('Meta', code === 'MetaLeft' ? 'Left' : 'Right')
+  }
+  if (code === 'ShiftLeft' || code === 'ShiftRight') {
+    modifierKeySides.set('Shift', code === 'ShiftLeft' ? 'Left' : 'Right')
+  }
+}
+
+function clearModifierSide(code: string): void {
+  if (code === 'ControlLeft' || code === 'ControlRight') {
+    modifierKeySides.delete('Control')
+  }
+  if (code === 'AltLeft' || code === 'AltRight') {
+    modifierKeySides.delete('Alt')
+  }
+  if (code === 'MetaLeft' || code === 'MetaRight') {
+    modifierKeySides.delete('Meta')
+  }
+  if (code === 'ShiftLeft' || code === 'ShiftRight') {
+    modifierKeySides.delete('Shift')
+  }
+}
+
+function isModifierCode(code: string): boolean {
+  return code.startsWith('Control') || code.startsWith('Alt') || code.startsWith('Meta') || code.startsWith('Shift')
+}
+
+function keyFromCode(code: string, fallbackKey: string): string {
+  if (code.startsWith('Key')) return code.slice(3)
+  if (code.startsWith('Digit')) return code.slice(5)
+  if (code.startsWith('Numpad')) return 'num' + code.slice(6)
+  if (code.startsWith('F') && /^F\d+$/.test(code)) return code
+  if (codeToKey[code]) return codeToKey[code]
+  if (fallbackKey === ' ' || fallbackKey === '\u00A0') return 'Space'
+  return fallbackKey.charAt(0).toUpperCase() + fallbackKey.slice(1)
+}
+
+function resolveModifierToken(modifier: 'Control' | 'Alt' | 'Meta' | 'Shift', active: boolean): string | null {
+  if (!active) return null
+
+  const side = modifierKeySides.get(modifier)
+  if (modifier === 'Meta') {
+    return side ? `${side}Command` : 'Command'
+  }
+  if (modifier === 'Alt') {
+    const altName = platform === 'win32' ? 'Alt' : 'Option'
+    return side ? `${side}${altName}` : altName
+  }
+
+  return side ? `${side}${modifier}` : modifier
+}
+
+function buildShortcutFromEvent(event: KeyboardEvent): string | null {
+  const keys: string[] = []
+
+  const controlToken = resolveModifierToken('Control', event.ctrlKey || event.code === 'ControlLeft' || event.code === 'ControlRight')
+  if (controlToken) keys.push(controlToken)
+
+  const altToken = resolveModifierToken('Alt', event.altKey || event.code === 'AltLeft' || event.code === 'AltRight')
+  if (altToken) keys.push(altToken)
+
+  const metaToken = resolveModifierToken('Meta', event.metaKey || event.code === 'MetaLeft' || event.code === 'MetaRight')
+  if (metaToken) keys.push(metaToken)
+
+  const shiftToken = resolveModifierToken('Shift', event.shiftKey || event.code === 'ShiftLeft' || event.code === 'ShiftRight')
+  if (shiftToken) keys.push(shiftToken)
+
+  if (!isModifierCode(event.code)) {
+    keys.push(keyFromCode(event.code, event.key))
+  }
+
+  return keys.length > 0 ? [...new Set(keys)].join('+') : null
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keyup', handleKeyup)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keyup', handleKeyup)
   if (clearHintTimer) {
     clearTimeout(clearHintTimer)
   }

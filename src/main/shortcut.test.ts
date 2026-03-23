@@ -243,15 +243,19 @@ describe('ShortcutService', () => {
     expect(status.modes.assistant.canTriggerGlobally).toBe(true)
   })
 
-  it('suppresses registered modifier-only RightAlt and RightControl events on Windows', () => {
+  it('triggers modifier-only RightAlt and RightControl on key down and suppresses them on Windows', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-23T00:00:00.000Z'))
+
     mockState.accessibilityGranted = true
     mockState.currentConfig = {
       transcriptionShortcut: 'RightAlt',
       assistantShortcut: 'RightControl'
     }
+    const toggle = vi.fn()
 
     const service = new ShortcutService({} as never, {
-      toggle: vi.fn(),
+      toggle,
       cancel: vi.fn()
     } as never, 'win32')
 
@@ -261,12 +265,179 @@ describe('ShortcutService', () => {
 
     expect(nativeBackend?.handleKeyEvent).toBeDefined()
     expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT ALT' })).toBe(true)
+    expect(toggle).toHaveBeenCalledWith('transcription')
     expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT ALT' })).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'))
     expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(toggle).toHaveBeenLastCalledWith('assistant')
     expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(2)
     expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'A' })).toBe(false)
 
     service.destroy()
+    vi.useRealTimers()
+  })
+
+  it('does not retrigger exclusive right-side modifier-only shortcuts while the key remains held down', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-23T00:00:00.000Z'))
+
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'RightAlt',
+      assistantShortcut: 'RightControl'
+    }
+    const toggle = vi.fn()
+
+    const service = new ShortcutService({} as never, {
+      toggle,
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    service.refresh()
+
+    const nativeBackend = (service as unknown as { nativeBackend?: { handleKeyEvent?: (event: Record<string, unknown>, down?: unknown) => boolean } }).nativeBackend
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(1)
+
+    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'))
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(1)
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT CONTROL' })).toBe(true)
+    vi.setSystemTime(new Date('2026-03-23T00:00:02.000Z'))
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT CONTROL' })).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(2)
+
+    service.destroy()
+    vi.useRealTimers()
+  })
+
+  it('keeps left-side modifier-only shortcuts pass-through on Windows', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-23T00:00:00.000Z'))
+
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'LeftAlt',
+      assistantShortcut: 'LeftControl'
+    }
+    const toggle = vi.fn()
+
+    const service = new ShortcutService({} as never, {
+      toggle,
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    service.refresh()
+
+    const nativeBackend = (service as unknown as { nativeBackend?: { handleKeyEvent?: (event: Record<string, unknown>, down?: unknown) => boolean } }).nativeBackend
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'LEFT ALT' })).toBe(false)
+    expect(toggle).toHaveBeenCalledWith('transcription')
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'LEFT ALT' })).toBe(false)
+    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'))
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'LEFT CONTROL' })).toBe(false)
+    expect(toggle).toHaveBeenLastCalledWith('assistant')
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'LEFT CONTROL' })).toBe(false)
+    expect(toggle).toHaveBeenCalledTimes(2)
+
+    service.destroy()
+    vi.useRealTimers()
+  })
+
+  it('still suppresses matching non-modifier shortcut combos on Windows', () => {
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'Ctrl+Shift+A',
+      assistantShortcut: 'RightControl'
+    }
+    mockState.matchShortcutMock.mockImplementation((...args: unknown[]) => {
+      const [currentModifiers, currentKeys, parsed, triggeredKey] = args as [
+        string[],
+        string[],
+        { key: string | null; modifiers: string[] },
+        string
+      ]
+
+      return parsed.key === 'A'
+        && parsed.modifiers.includes('Control')
+        && parsed.modifiers.includes('Shift')
+        && currentModifiers.includes('Control')
+        && currentModifiers.includes('Shift')
+        && currentKeys.includes('A')
+        && triggeredKey === 'A'
+    })
+    const toggle = vi.fn()
+
+    const service = new ShortcutService({} as never, {
+      toggle,
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    service.refresh()
+
+    const nativeBackend = (service as unknown as { nativeBackend?: { handleKeyEvent?: (event: Record<string, unknown>, down?: unknown) => boolean } }).nativeBackend
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'LEFT CONTROL' })).toBe(false)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'LEFT SHIFT' })).toBe(false)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'A' })).toBe(true)
+    expect(toggle).toHaveBeenCalledWith('transcription')
+
+    service.destroy()
+  })
+
+  it('matches RightAlt punctuation combos on Windows when the main key is period or slash', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-23T00:00:00.000Z'))
+
+    mockState.accessibilityGranted = true
+    mockState.currentConfig = {
+      transcriptionShortcut: 'RightAlt+.',
+      assistantShortcut: 'RightAlt+/'
+    }
+    mockState.matchShortcutMock.mockImplementation((...args: unknown[]) => {
+      const [currentModifiers, currentKeys, parsed, triggeredKey] = args as [
+        string[],
+        string[],
+        { key: string | null; modifiers: string[]; side: 'left' | 'right' | 'any' },
+        string
+      ]
+
+      const hasRightAlt = currentModifiers.includes('Alt') && currentKeys.includes('AltRight')
+      if (!hasRightAlt || parsed.side !== 'right' || !parsed.modifiers.includes('Alt')) {
+        return false
+      }
+
+      return parsed.key === triggeredKey && currentKeys.includes(triggeredKey)
+    })
+    const toggle = vi.fn()
+
+    const service = new ShortcutService({} as never, {
+      toggle,
+      cancel: vi.fn()
+    } as never, 'win32')
+
+    service.refresh()
+
+    const nativeBackend = (service as unknown as { nativeBackend?: { handleKeyEvent?: (event: Record<string, unknown>, down?: unknown) => boolean } }).nativeBackend
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT ALT' })).toBe(false)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: '.' })).toBe(true)
+    expect(toggle).toHaveBeenCalledWith('transcription')
+
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: '.' })).toBe(false)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'UP', name: 'RIGHT ALT' })).toBe(false)
+
+    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'))
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: 'RIGHT ALT' })).toBe(false)
+    expect(nativeBackend?.handleKeyEvent?.({ state: 'DOWN', name: '/' })).toBe(true)
+    expect(toggle).toHaveBeenLastCalledWith('assistant')
+
+    service.destroy()
+    vi.useRealTimers()
   })
 
 })

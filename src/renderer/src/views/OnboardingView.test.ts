@@ -52,6 +52,12 @@ describe('OnboardingView', () => {
   })
 
   it('shows a global shortcut hint when Windows-style shortcut readiness is missing', async () => {
+    const previousElectronApi = window.electronAPI
+    window.electronAPI = {
+      ...previousElectronApi,
+      platform: 'win32'
+    } as never
+
     const wrapper = mount(OnboardingView, {
       props: {
         permissions: {
@@ -60,8 +66,8 @@ describe('OnboardingView', () => {
           screen: false
         },
         shortcuts: {
-          transcription: 'RightAlt',
-          assistant: 'RightControl'
+          transcription: 'RightAlt+.',
+          assistant: 'RightAlt+/'
         },
         enabledModes: {
           transcription: true,
@@ -74,7 +80,7 @@ describe('OnboardingView', () => {
           modes: {
             transcription: {
               mode: 'transcription',
-              shortcut: 'RightAlt',
+              shortcut: 'RightAlt+.',
               backendState: 'disabled',
               reason: 'backend_failed',
               requiresAccessibility: false,
@@ -82,7 +88,7 @@ describe('OnboardingView', () => {
             },
             assistant: {
               mode: 'assistant',
-              shortcut: 'RightControl',
+              shortcut: 'RightAlt+/',
               backendState: 'disabled',
               reason: 'backend_failed',
               requiresAccessibility: false,
@@ -93,10 +99,12 @@ describe('OnboardingView', () => {
       }
     })
 
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'ControlRight' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'AltRight', altKey: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Period', key: '.', altKey: true }))
     await flushPromises()
 
     expect(wrapper.text()).toContain('当前快捷键还没有全局生效')
+    window.electronAPI = previousElectronApi
   })
 
   it('disables continue until microphone and shortcut readiness are both satisfied', async () => {
@@ -108,8 +116,8 @@ describe('OnboardingView', () => {
           screen: true
         },
         shortcuts: {
-          transcription: 'RightAlt',
-          assistant: 'RightControl'
+          transcription: 'RightAlt+.',
+          assistant: 'RightAlt+/'
         },
         enabledModes: {
           transcription: true,
@@ -122,7 +130,7 @@ describe('OnboardingView', () => {
           modes: {
             transcription: {
               mode: 'transcription',
-              shortcut: 'RightAlt',
+              shortcut: 'RightAlt+.',
               backendState: 'disabled',
               reason: 'backend_failed',
               requiresAccessibility: false,
@@ -130,7 +138,7 @@ describe('OnboardingView', () => {
             },
             assistant: {
               mode: 'assistant',
-              shortcut: 'RightControl',
+              shortcut: 'RightAlt+/',
               backendState: 'disabled',
               reason: 'backend_failed',
               requiresAccessibility: false,
@@ -167,8 +175,8 @@ describe('OnboardingView', () => {
           screen: true
         },
         shortcuts: {
-          transcription: 'RightAlt',
-          assistant: 'RightControl'
+          transcription: 'RightAlt+.',
+          assistant: 'RightAlt+/'
         },
         enabledModes: {
           transcription: true,
@@ -181,7 +189,7 @@ describe('OnboardingView', () => {
           modes: {
             transcription: {
               mode: 'transcription',
-              shortcut: 'RightAlt',
+              shortcut: 'RightAlt+.',
               backendState: 'native',
               reason: 'ready',
               requiresAccessibility: false,
@@ -189,7 +197,7 @@ describe('OnboardingView', () => {
             },
             assistant: {
               mode: 'assistant',
-              shortcut: 'RightControl',
+              shortcut: 'RightAlt+/',
               backendState: 'native',
               reason: 'ready',
               requiresAccessibility: false,

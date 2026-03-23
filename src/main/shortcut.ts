@@ -251,7 +251,7 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
   private started = false
   private shortcuts: ShortcutRegistration[] = []
   private parsedShortcuts = new Map<VoiceMode, ParsedShortcut>()
-  private blockedModifierOnlyKeys = new Set<string>()
+  private exclusiveSingleModifierKeys = new Set<string>()
   private currentModifiers = new Set<string>()
   private currentKeys = new Set<string>()
   private listener: {
@@ -314,6 +314,7 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
     this.started = false
     this.listener = null
     this.keyHandler = null
+    this.exclusiveSingleModifierKeys.clear()
     this.currentModifiers.clear()
     this.currentKeys.clear()
     this.parsedShortcuts.clear()
@@ -330,14 +331,14 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
 
   private applyShortcuts(): void {
     this.parsedShortcuts.clear()
-    this.blockedModifierOnlyKeys.clear()
+    this.exclusiveSingleModifierKeys.clear()
     for (const shortcut of this.shortcuts) {
       const parsedShortcut = parseShortcut(shortcut.shortcut)
       this.parsedShortcuts.set(shortcut.id, parsedShortcut)
 
-      const blockedKey = this.getBlockedModifierOnlyKey(parsedShortcut)
-      if (blockedKey) {
-        this.blockedModifierOnlyKeys.add(blockedKey)
+      const exclusiveKey = this.getExclusiveSingleModifierKey(parsedShortcut)
+      if (exclusiveKey) {
+        this.exclusiveSingleModifierKeys.add(exclusiveKey)
       }
     }
   }
@@ -355,7 +356,8 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
     if (!normalized) return false
 
     if (isKeyDown) {
-      let stopPropagation = this.blockedModifierOnlyKeys.has(normalized.key)
+      const wasKeyDown = this.currentKeys.has(normalized.key)
+      let stopPropagation = this.exclusiveSingleModifierKeys.has(normalized.key)
 
       if (normalized.isEscape) {
         this.emit('escape')
@@ -369,6 +371,13 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
       for (const shortcut of this.shortcuts) {
         const parsed = this.parsedShortcuts.get(shortcut.id)
         if (!parsed) continue
+
+        if (this.isSingleModifierShortcut(parsed)) {
+          if (!wasKeyDown && this.matchesSingleModifierShortcut(parsed, normalized.key)) {
+            this.emit('trigger', shortcut.id, shortcut.shortcut)
+          }
+          continue
+        }
 
         if (matchShortcut(Array.from(this.currentModifiers), Array.from(this.currentKeys), parsed, normalized.key)) {
           this.emit('trigger', shortcut.id, shortcut.shortcut)
@@ -384,7 +393,7 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
     }
     this.currentKeys.delete(normalized.key)
 
-    return this.blockedModifierOnlyKeys.has(normalized.key)
+    return this.exclusiveSingleModifierKeys.has(normalized.key)
   }
 
   private normalizeEventKey(event: Record<string, unknown>): { key: string; modifierName?: string; isEscape?: boolean } | null {
@@ -450,21 +459,38 @@ class WindowsNativeShortcutBackend extends EventEmitter implements ShortcutBacke
     this.started = false
     this.listener = null
     this.keyHandler = null
+    this.exclusiveSingleModifierKeys.clear()
     this.currentModifiers.clear()
     this.currentKeys.clear()
     this.parsedShortcuts.clear()
-    this.blockedModifierOnlyKeys.clear()
     this.emit('exit', null)
   }
 
-  private getBlockedModifierOnlyKey(parsedShortcut: ParsedShortcut): string | null {
-    if (parsedShortcut.key || parsedShortcut.modifiers.length !== 1 || parsedShortcut.side === 'any') {
-      return null
+  private isSingleModifierShortcut(parsedShortcut: ParsedShortcut): boolean {
+    return !parsedShortcut.key && parsedShortcut.modifiers.length === 1 && parsedShortcut.side !== 'any'
+  }
+
+  private matchesSingleModifierShortcut(parsedShortcut: ParsedShortcut, key: string): boolean {
+    if (!this.isSingleModifierShortcut(parsedShortcut)) {
+      return false
     }
 
     const modifier = parsedShortcut.modifiers[0]
     const side = parsedShortcut.side.charAt(0).toUpperCase() + parsedShortcut.side.slice(1)
-    return `${modifier}${side}`
+    return key === `${modifier}${side}`
+  }
+
+  private getExclusiveSingleModifierKey(parsedShortcut: ParsedShortcut): string | null {
+    if (!this.isSingleModifierShortcut(parsedShortcut) || parsedShortcut.side !== 'right') {
+      return null
+    }
+
+    const modifier = parsedShortcut.modifiers[0]
+    if (modifier !== 'Alt' && modifier !== 'Control') {
+      return null
+    }
+
+    return `${modifier}Right`
   }
 }
 

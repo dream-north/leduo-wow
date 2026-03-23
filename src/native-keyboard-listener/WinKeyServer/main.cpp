@@ -27,7 +27,11 @@ bool haltPropogation(bool isMouse, bool isDown, DWORD vkCode, DWORD scanCode, PO
 KeyState getKeyState(WPARAM wParam);
 DWORD getMouseButtonCode(WPARAM wParam);
 void printErr(const char *str);
-void fakeKey(DWORD iKeyEventF, WORD vkVirtualKey);
+void fakeKey(DWORD iKeyEventF, WORD vkVirtualKey, ULONG_PTR extraInfo = 0);
+bool isInjectedCleanupEvent(const KBDLLHOOKSTRUCT &key);
+bool isPhysicalKeyDown(int vKey);
+void releaseTrackedModifier(DWORD vkCode);
+void releaseAllTrackedModifiers();
 DWORD WINAPI timeoutLoop(LPVOID lpParam);
 DWORD WINAPI checkInputLoop(LPVOID lpParam);
 
@@ -41,6 +45,10 @@ HHOOK hKeyboardHook;
 HHOOK hMouseHook;
 bool bIsMetaDown = false;
 bool bIsAltDown = false;
+bool bIsRightControlSuppressed = false;
+bool bIsRightAltSuppressed = false;
+bool bIsAltGrControlSuppressed = false;
+const ULONG_PTR kCleanupExtraInfo = 0x4C4544554FULL;
 
 int main(int argc, char **argv)
 {
@@ -55,6 +63,7 @@ int main(int argc, char **argv)
     hMouseHook = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)MouseEvent, hInstance, 0);
 
     MessageLoop();
+    releaseAllTrackedModifiers();
 
     UnhookWindowsHookEx(hKeyboardHook);
     UnhookWindowsHookEx(hMouseHook);
@@ -72,8 +81,30 @@ __declspec(dllexport) LRESULT CALLBACK KeyboardEvent(int nCode, WPARAM wParam, L
     {
         KBDLLHOOKSTRUCT key = *((KBDLLHOOKSTRUCT *)lParam);
 
+        if (isInjectedCleanupEvent(key))
+        {
+            return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
+        }
+
         if (haltPropogation(false, ks == down, key.vkCode, key.scanCode, zeroPoint))
         {
+            if (key.vkCode == VK_RCONTROL)
+            {
+                if (ks == down)
+                    bIsRightControlSuppressed = true;
+                else
+                    releaseTrackedModifier(VK_RCONTROL);
+            }
+            if (key.vkCode == VK_RMENU)
+            {
+                if (ks == down)
+                {
+                    bIsRightAltSuppressed = true;
+                    bIsAltGrControlSuppressed = isPhysicalKeyDown(VK_LCONTROL) || isPhysicalKeyDown(VK_CONTROL);
+                }
+                else
+                    releaseTrackedModifier(VK_RMENU);
+            }
             if (bIsMetaDown || bIsAltDown)
             {
                 printErr("Sending VK_HELP to prevent win_key_up triggering start menu");
@@ -83,6 +114,13 @@ __declspec(dllexport) LRESULT CALLBACK KeyboardEvent(int nCode, WPARAM wParam, L
         }
         else
         {
+            if (key.vkCode == VK_RCONTROL && ks == up)
+                bIsRightControlSuppressed = false;
+            if (key.vkCode == VK_RMENU && ks == up)
+            {
+                bIsRightAltSuppressed = false;
+                bIsAltGrControlSuppressed = false;
+            }
             if (key.vkCode == VK_LWIN || key.vkCode == VK_RWIN)
                 bIsMetaDown = ks == down;
             if (key.vkCode == VK_LMENU || key.vkCode == VK_RMENU)
@@ -166,7 +204,7 @@ DWORD getMouseButtonCode(WPARAM wParam)
     }
 }
 
-void fakeKey(DWORD iKeyEventF, WORD vkVirtualKey)
+void fakeKey(DWORD iKeyEventF, WORD vkVirtualKey, ULONG_PTR extraInfo)
 {
     INPUT inputFix;
     inputFix.type = INPUT_KEYBOARD;
@@ -174,8 +212,46 @@ void fakeKey(DWORD iKeyEventF, WORD vkVirtualKey)
     inputFix.ki.wScan = 0;
     inputFix.ki.dwFlags = iKeyEventF;
     inputFix.ki.time = 0;
-    inputFix.ki.dwExtraInfo = 0;
+    inputFix.ki.dwExtraInfo = extraInfo;
     SendInput(1, &inputFix, sizeof(inputFix));
+}
+
+bool isInjectedCleanupEvent(const KBDLLHOOKSTRUCT &key)
+{
+    return (key.flags & LLKHF_INJECTED) && key.dwExtraInfo == kCleanupExtraInfo;
+}
+
+bool isPhysicalKeyDown(int vKey)
+{
+    return (GetAsyncKeyState(vKey) & 0x8000) != 0;
+}
+
+void releaseTrackedModifier(DWORD vkCode)
+{
+    if (vkCode == VK_RCONTROL && bIsRightControlSuppressed)
+    {
+        printErr("Releasing suppressed VK_RCONTROL\n");
+        fakeKey(KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, VK_RCONTROL, kCleanupExtraInfo);
+        bIsRightControlSuppressed = false;
+    }
+    if (vkCode == VK_RMENU && bIsRightAltSuppressed)
+    {
+        printErr("Releasing suppressed VK_RMENU\n");
+        fakeKey(KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, VK_RMENU, kCleanupExtraInfo);
+        bIsRightAltSuppressed = false;
+        if (bIsAltGrControlSuppressed)
+        {
+            printErr("Releasing AltGr companion VK_LCONTROL\n");
+            fakeKey(KEYEVENTF_KEYUP, VK_LCONTROL, kCleanupExtraInfo);
+            bIsAltGrControlSuppressed = false;
+        }
+    }
+}
+
+void releaseAllTrackedModifiers()
+{
+    releaseTrackedModifier(VK_RCONTROL);
+    releaseTrackedModifier(VK_RMENU);
 }
 
 void printErr(const char str[])

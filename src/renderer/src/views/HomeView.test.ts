@@ -38,9 +38,9 @@ describe('HomeView', () => {
       platform: 'win32',
       checkPermissions: vi.fn(async () => ({ ...permissionState })),
       getConfig: vi.fn(async () => ({
-        shortcut: 'RightAlt',
-        transcriptionShortcut: 'RightAlt',
-        assistantShortcut: 'RightControl',
+        shortcut: 'RightAlt+.',
+        transcriptionShortcut: 'RightAlt+.',
+        assistantShortcut: 'RightAlt+/',
         transcriptionEnabled: true,
         assistantEnabled: true
       })),
@@ -51,7 +51,7 @@ describe('HomeView', () => {
         modes: {
           transcription: {
             mode: 'transcription',
-            shortcut: 'RightAlt',
+            shortcut: 'RightAlt+.',
             backendState: permissionState.accessibility ? 'native' : 'disabled',
             reason: permissionState.accessibility ? 'ready' : 'backend_failed',
             requiresAccessibility: false,
@@ -59,7 +59,7 @@ describe('HomeView', () => {
           },
           assistant: {
             mode: 'assistant',
-            shortcut: 'RightControl',
+            shortcut: 'RightAlt+/',
             backendState: permissionState.accessibility ? 'native' : 'disabled',
             reason: permissionState.accessibility ? 'ready' : 'backend_failed',
             requiresAccessibility: false,
