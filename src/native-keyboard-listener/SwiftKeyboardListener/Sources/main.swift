@@ -1001,6 +1001,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private var isInitialPageLoaded = false
     private var pendingUpdateWorkItem: DispatchWorkItem?
     private var streamingGeneration: UInt64 = 0
+    private let renderQueue = DispatchQueue(label: "com.leduo.markdown-render", qos: .userInitiated)
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -1207,6 +1208,12 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         isInitialPageLoaded = false
         copyResetWorkItem?.cancel()
         panel.orderOut(nil)
+        // Release content memory
+        currentMarkdown = ""
+        currentDisplayMarkdown = ""
+        currentReasoningMarkdown = ""
+        currentCodeMarkdown = ""
+        currentSources = []
     }
 
     private func positionOnActiveScreen() {
@@ -1257,21 +1264,44 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private func scheduleIncrementalUpdate() {
         pendingUpdateWorkItem?.cancel()
         let generation = streamingGeneration
+
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, self.streamingGeneration == generation else { return }
-            let bodyHTML = MarkdownTemplateRenderer.renderBody(
-                self.currentDisplayMarkdown,
-                sources: self.currentSources,
-                reasoningMarkdown: self.currentReasoningMarkdown,
-                reasoningCollapsed: self.currentReasoningCollapsed,
-                codeMarkdown: self.currentCodeMarkdown,
-                codeCollapsed: self.currentCodeCollapsed
-            )
-            let escaped = MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
-            self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
+            // Capture snapshot on main thread
+            let dm = self.currentDisplayMarkdown
+            let src = self.currentSources
+            let rm = self.currentReasoningMarkdown
+            let rc = self.currentReasoningCollapsed
+            let cm = self.currentCodeMarkdown
+            let cc = self.currentCodeCollapsed
+
+            self.renderQueue.async { [weak self] in
+                guard let self, self.streamingGeneration == generation else { return }
+                let escaped: String = autoreleasepool {
+                    let bodyHTML = MarkdownTemplateRenderer.renderBody(
+                        dm, sources: src,
+                        reasoningMarkdown: rm, reasoningCollapsed: rc,
+                        codeMarkdown: cm, codeCollapsed: cc
+                    )
+                    return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.streamingGeneration == generation else { return }
+                    self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
+                }
+            }
         }
         pendingUpdateWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
+        // Adaptive debounce based on content length
+        let totalLen = currentDisplayMarkdown.count + currentReasoningMarkdown.count + currentCodeMarkdown.count
+        let delay: TimeInterval
+        switch totalLen {
+        case ..<10_000:  delay = 0.05
+        case ..<50_000:  delay = 0.10
+        case ..<100_000: delay = 0.20
+        default:         delay = 0.30
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     private func updateStats(_ stats: [[String: String]]) {
@@ -1662,23 +1692,44 @@ enum MarkdownTemplateRenderer {
     }
 
     static func escapeForJSString(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        var result = ""
+        result.reserveCapacity(string.count + string.count / 8)
+        for ch in string {
+            switch ch {
+            case "\\": result += "\\\\"
+            case "'":  result += "\\'"
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\u{2028}": result += "\\u2028"
+            case "\u{2029}": result += "\\u2029"
+            default:   result.append(ch)
+            }
+        }
+        return result
     }
+
+    private static let maxSectionRenderLength = 80_000
 
     private static func renderReasoning(_ markdown: String, collapsed: Bool) -> String {
         let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+
+        let displayText: String
+        let truncatedNotice: String
+        if trimmed.count > maxSectionRenderLength {
+            let startIdx = trimmed.index(trimmed.endIndex, offsetBy: -maxSectionRenderLength)
+            displayText = String(trimmed[startIdx...])
+            truncatedNotice = "<p class=\"truncated\">\u{2026}前面的内容已省略\u{2026}</p>\n"
+        } else {
+            displayText = trimmed
+            truncatedNotice = ""
+        }
+
         let openAttribute = collapsed ? "" : " open"
         return """
         <details class="reasoning"\(openAttribute)>
           <summary>思考过程</summary>
-          <div class="reasoning-body">\(renderBlocks(trimmed))</div>
+          <div class="reasoning-body">\(truncatedNotice)\(renderBlocks(displayText))</div>
         </details>
         """
     }
@@ -1686,11 +1737,23 @@ enum MarkdownTemplateRenderer {
     private static func renderCodeSection(_ markdown: String, collapsed: Bool) -> String {
         let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
+
+        let displayText: String
+        let truncatedNotice: String
+        if trimmed.count > maxSectionRenderLength {
+            let startIdx = trimmed.index(trimmed.endIndex, offsetBy: -maxSectionRenderLength)
+            displayText = String(trimmed[startIdx...])
+            truncatedNotice = "<p class=\"truncated\">\u{2026}前面的内容已省略\u{2026}</p>\n"
+        } else {
+            displayText = trimmed
+            truncatedNotice = ""
+        }
+
         let openAttribute = collapsed ? "" : " open"
         return """
         <details class="reasoning"\(openAttribute)>
           <summary>代码执行</summary>
-          <div class="reasoning-body">\(renderBlocks(trimmed))</div>
+          <div class="reasoning-body">\(truncatedNotice)\(renderBlocks(displayText))</div>
         </details>
         """
     }
@@ -1771,9 +1834,11 @@ enum MarkdownTemplateRenderer {
                 continue
             }
 
-            if isOrderedList(trimmed) {
+            if let firstItem = orderedListItem(trimmed) {
                 var items: [String] = []
-                var startNumber: Int?
+                let startNumber: Int? = firstItem.number
+                items.append("<li>\(renderInline(firstItem.text))</li>")
+                index += 1
                 while index < lines.count {
                     while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
                         index += 1
@@ -1781,9 +1846,6 @@ enum MarkdownTemplateRenderer {
                     guard index < lines.count else { break }
                     let candidate = lines[index].trimmingCharacters(in: .whitespaces)
                     guard let item = orderedListItem(candidate) else { break }
-                    if startNumber == nil {
-                        startNumber = item.number
-                    }
                     items.append("<li>\(renderInline(item.text))</li>")
                     index += 1
                 }
@@ -1795,7 +1857,7 @@ enum MarkdownTemplateRenderer {
             var paragraphLines: [String] = []
             while index < lines.count {
                 let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                if candidate.isEmpty || candidate.hasPrefix("#") || candidate.hasPrefix(">") || candidate.hasPrefix("```") || isUnorderedList(candidate) || isOrderedList(candidate) || candidate == "---" || candidate == "***" {
+                if candidate.isEmpty || candidate.hasPrefix("#") || candidate.hasPrefix(">") || candidate.hasPrefix("```") || isUnorderedList(candidate) || (candidate.first?.isNumber == true && isOrderedList(candidate)) || candidate == "---" || candidate == "***" {
                     break
                 }
                 paragraphLines.append(renderInline(candidate))
@@ -1917,12 +1979,19 @@ enum MarkdownTemplateRenderer {
     }
 
     private static func escapeHTML(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
+        var result = ""
+        result.reserveCapacity(string.count + string.count / 8)
+        for ch in string {
+            switch ch {
+            case "&": result += "&amp;"
+            case "<": result += "&lt;"
+            case ">": result += "&gt;"
+            case "\"": result += "&quot;"
+            case "'": result += "&#39;"
+            default:  result.append(ch)
+            }
+        }
+        return result
     }
 
     private static func replaceRegex(
@@ -1930,24 +1999,35 @@ enum MarkdownTemplateRenderer {
         in source: String,
         transform: ([String]) -> String
     ) -> String {
-        let matches = regex.matches(in: source, options: [], range: NSRange(source.startIndex..<source.endIndex, in: source))
+        let nsRange = NSRange(source.startIndex..<source.endIndex, in: source)
+        let matches = regex.matches(in: source, options: [], range: nsRange)
         guard !matches.isEmpty else { return source }
 
-        var result = source
-        for match in matches.reversed() {
+        var parts: [String] = []
+        parts.reserveCapacity(matches.count * 2 + 1)
+        var lastEnd = source.startIndex
+
+        for match in matches {
+            guard let fullRange = Range(match.range(at: 0), in: source) else { continue }
+            if lastEnd < fullRange.lowerBound {
+                parts.append(String(source[lastEnd..<fullRange.lowerBound]))
+            }
             var groups: [String] = []
-            for index in 0..<match.numberOfRanges {
-                if let range = Range(match.range(at: index), in: result) {
-                    groups.append(String(result[range]))
+            groups.reserveCapacity(match.numberOfRanges)
+            for i in 0..<match.numberOfRanges {
+                if let r = Range(match.range(at: i), in: source) {
+                    groups.append(String(source[r]))
                 } else {
                     groups.append("")
                 }
             }
-            if let range = Range(match.range(at: 0), in: result) {
-                result.replaceSubrange(range, with: transform(groups))
-            }
+            parts.append(transform(groups))
+            lastEnd = fullRange.upperBound
         }
-        return result
+        if lastEnd < source.endIndex {
+            parts.append(String(source[lastEnd...]))
+        }
+        return parts.joined()
     }
 
     private static func renderSources(_ sources: [[String: Any]]) -> String {

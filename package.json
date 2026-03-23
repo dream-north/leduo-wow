@@ -1,6 +1,6 @@
 {
   "name": "leduo-wow",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "author": "DreamNorth",
   "description": "Cross-platform voice input and assistant app powered by Qwen ASR and LLM",
   "main": "./out/main/index.js",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@jitsi/robotjs": "^0.6.21",
     "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.3",
     "openai": "^4.77.0",
     "ws": "^8.18.0"
   },
