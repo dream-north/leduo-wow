@@ -2,6 +2,7 @@ export enum PipelineStatus {
   IDLE = 'idle',
   RECORDING = 'recording',
   FINALIZING_ASR = 'finalizing_asr',
+  ENHANCING_ASR = 'enhancing_asr',
   POLISHING = 'polishing',
   INPUTTING = 'inputting',
   ERROR = 'error'
@@ -73,12 +74,40 @@ export type ApiProvider = 'dashscope' | 'custom'
 
 export const ASR_DEFAULT_BASE_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime'
 export const POLISH_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-export const ASR_MODEL_PRESETS = [
-  'qwen3-asr-flash-realtime'
-] as const
-export const TEXT_MODEL_PRESETS = [
-  'qwen3.5-flash',
-  'qwen3.5-plus'
+export const FLASH_ASR_DEFAULT_API_URL =
+  'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+export const ASR_MODEL_PRESETS = ['qwen3-asr-flash-realtime'] as const
+export const FLASH_ASR_MODEL_PRESETS = ['qwen3-asr-flash'] as const
+export const TEXT_MODEL_PRESETS = ['qwen3.5-flash', 'qwen3.5-plus'] as const
+
+export type VocabularySource = 'personal' | 'shared'
+
+export interface VocabularyEntry {
+  id: string
+  term: string
+  description: string
+  category: string
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  sourceUrl?: string
+}
+
+export interface SharedVocabSyncSource {
+  name: string
+  url: string
+  lastSyncAt?: number
+}
+
+export const VOCABULARY_CATEGORY_PRESETS = [
+  '人名',
+  '产品',
+  '团队',
+  '技术',
+  '公司',
+  '行业',
+  '地名',
+  '其他'
 ] as const
 
 export interface ExcludedApp {
@@ -133,6 +162,14 @@ export interface AppConfig {
   screenshotExcludedApps: ExcludedApp[]
   hideDockIcon: boolean
   historyMaxCount: number
+  // Vocabulary enhancement
+  vocabularyEnabled: boolean
+  vocabularyModel: string
+  vocabularyMaxEntries: number
+  sharedVocabularySyncUrl: string
+  sharedVocabularySyncToken: string
+  sharedVocabSyncSources: SharedVocabSyncSource[]
+  customModels: { asr: string[]; text: string[]; vocab: string[] }
 }
 
 export interface TranscriptionRecord {
@@ -266,7 +303,15 @@ export const DEFAULT_CONFIG: AppConfig = {
   screenshotMaxCount: 30,
   screenshotExcludedApps: [],
   hideDockIcon: false,
-  historyMaxCount: 50
+  historyMaxCount: 50,
+  // Vocabulary enhancement
+  vocabularyEnabled: true,
+  vocabularyModel: 'qwen3-asr-flash',
+  vocabularyMaxEntries: 200,
+  sharedVocabularySyncUrl: '',
+  sharedVocabularySyncToken: '',
+  sharedVocabSyncSources: [] as SharedVocabSyncSource[],
+  customModels: { asr: [], text: [], vocab: [] }
 }
 
 // Auto-update types

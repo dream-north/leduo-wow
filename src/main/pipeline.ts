@@ -6,9 +6,12 @@ import { PipelineStatus, VoiceMode } from '../shared/types'
 import type { OverlayResultStat, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { ASRClient } from './asr-client'
+import { FlashASRClient } from './flash-asr-client'
 import { LLMPolisher } from './llm-polisher'
 import { TextInputter } from './text-inputter'
 import { getConfig, addHistory, ConfigStore, setConfig } from './config-store'
+import { getActiveVocabulary } from './vocabulary-store'
+import type { VocabularyStore } from './vocabulary-store'
 import { getFrontmostApp } from './macos-apps'
 import { getSelectedText } from './selected-text'
 import type { OverlayBackend } from './overlay-backend'
@@ -18,6 +21,7 @@ export class Pipeline extends EventEmitter {
   private currentMode: VoiceMode = 'transcription'
   private overlay: OverlayBackend
   private configStore: ConfigStore
+  private vocabularyStore: VocabularyStore
   private asrClient: ASRClient | null = null
   private partialText: string = ''
   private screenshotBase64: string = ''
@@ -25,16 +29,18 @@ export class Pipeline extends EventEmitter {
   private screenshotActive: boolean = false
   private appCheckTimer: ReturnType<typeof setInterval> | null = null
   private llmAbortController: AbortController | null = null
+  private audioChunks: Buffer[] = []
   private latestAssistantDetailsMarkdown: string | undefined
   private latestAssistantReasoningMarkdown: string | undefined
   private latestAssistantCodeMarkdown: string | undefined
   private latestAssistantStats: OverlayResultStat[] | undefined
   private latestAssistantSources: Array<{ index: number; title: string; url: string }> | undefined
 
-  constructor(overlay: OverlayBackend, configStore: ConfigStore) {
+  constructor(overlay: OverlayBackend, configStore: ConfigStore, vocabularyStore: VocabularyStore) {
     super()
     this.overlay = overlay
     this.configStore = configStore
+    this.vocabularyStore = vocabularyStore
   }
 
   getStatus(): PipelineStatus {
@@ -263,6 +269,36 @@ export class Pipeline extends EventEmitter {
     this.latestAssistantStats = undefined
     this.latestAssistantSources = undefined
 
+    // Vocabulary-enhanced re-recognition using Flash ASR
+    if (config.vocabularyEnabled && this.audioChunks.length > 0) {
+      const activeVocab = getActiveVocabulary(this.vocabularyStore)
+      if (activeVocab.length > 0) {
+        const vocabEntries = activeVocab.slice(0, 200)
+        const systemPrompt = FlashASRClient.buildVocabularySystemPrompt(vocabEntries)
+        const apiKey = config.asrApiKey || config.polishApiKey
+        if (apiKey) {
+          this.setStatus(PipelineStatus.ENHANCING_ASR)
+          this.showHud('词汇增强识别中...', 'processing')
+          try {
+            const wavBase64 = FlashASRClient.pcmChunksToWavBase64(this.audioChunks)
+            const flashClient = new FlashASRClient(apiKey, config.vocabularyModel)
+            const enhancedText = await flashClient.recognize(wavBase64, systemPrompt, llmSignal)
+            if (enhancedText.trim()) {
+              console.log(`[Pipeline] Vocabulary-enhanced ASR: "${text.substring(0, 30)}" → "${enhancedText.substring(0, 30)}"`)
+              outputText = enhancedText
+            }
+          } catch (err) {
+            if (this.isAbortError(err, llmSignal)) {
+              this.finishCancelledRun(llmSignal)
+              return
+            }
+            console.warn('[Pipeline] Vocabulary-enhanced ASR failed, using original text:', (err as Error).message)
+          }
+        }
+      }
+    }
+    this.audioChunks = []
+
     if (this.currentMode === 'transcription' && config.polishEnabled) {
       const apiKey = config.polishApiKey
       if (!apiKey) {
@@ -274,7 +310,7 @@ export class Pipeline extends EventEmitter {
         try {
           const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
-            text,
+            outputText,
             config.polishPrompt,
             this.screenshotBase64 || undefined,
             () => {
@@ -308,7 +344,7 @@ export class Pipeline extends EventEmitter {
         try {
           const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
-            text,
+            outputText,
             config.polishPrompt,
             this.screenshotBase64 || undefined,
             () => {
@@ -507,6 +543,7 @@ export class Pipeline extends EventEmitter {
   appendAudioChunk(chunk: Buffer): void {
     if (this.status === PipelineStatus.RECORDING && this.asrClient) {
       this.asrClient.appendAudio(chunk)
+      this.audioChunks.push(Buffer.from(chunk))
     }
   }
 
@@ -521,6 +558,7 @@ export class Pipeline extends EventEmitter {
     this.partialText = ''
     this.screenshotBase64 = ''
     this.screenshotActive = false
+    this.audioChunks = []
     this.latestAssistantDetailsMarkdown = undefined
     this.latestAssistantReasoningMarkdown = undefined
     this.latestAssistantCodeMarkdown = undefined

@@ -37,5 +37,18 @@ export const IPC = {
   UPDATE_CHECK: 'update:check',
   UPDATE_DOWNLOAD: 'update:download',
   UPDATE_INSTALL: 'update:install',
-  UPDATE_STATUS: 'update:status'
+  UPDATE_STATUS: 'update:status',
+  // Vocabulary
+  VOCABULARY_GET_PERSONAL: 'vocabulary:get-personal',
+  VOCABULARY_GET_SHARED: 'vocabulary:get-shared',
+  VOCABULARY_ADD: 'vocabulary:add',
+  VOCABULARY_UPDATE: 'vocabulary:update',
+  VOCABULARY_DELETE: 'vocabulary:delete',
+  VOCABULARY_IMPORT: 'vocabulary:import',
+  VOCABULARY_EXPORT: 'vocabulary:export',
+  VOCABULARY_GET_STATS: 'vocabulary:get-stats',
+  VOCABULARY_SYNC_SHARED: 'vocabulary:sync-shared',
+  VOCABULARY_SYNC_URL: 'vocabulary:sync-url',
+  VOCABULARY_REMOVE_SOURCE: 'vocabulary:remove-source',
+  VOCABULARY_UPDATED: 'vocabulary:updated'
 } as const

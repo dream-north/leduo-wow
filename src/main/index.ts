@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { createTray } from './tray'
 import { registerIpcHandlers } from './ipc-handlers'
 import { initConfigStore, getConfig } from './config-store'
+import { initVocabularyStore } from './vocabulary-store'
 import { ShortcutService } from './shortcut'
 import { Pipeline } from './pipeline'
 import { PipelineStatus } from '../shared/types'
@@ -261,6 +262,7 @@ if (!gotSingleInstanceLock) {
 
   // Initialize config store first (before creating any windows)
   configStore = initConfigStore()
+  const vocabularyStore = initVocabularyStore()
   const config = getConfig(configStore)
 
   checkPermissions()
@@ -297,7 +299,7 @@ if (!gotSingleInstanceLock) {
   })
 
   // Initialize pipeline
-  pipeline = new Pipeline(overlayManager, configStore)
+  pipeline = new Pipeline(overlayManager, configStore, vocabularyStore)
   keyboardListener.onOverlayResultClosed((position, size) => {
     pipeline?.handleAssistantResultWindowClosed(position, size)
   })
@@ -314,7 +316,14 @@ if (!gotSingleInstanceLock) {
   })
 
   // Register IPC handlers
-  registerIpcHandlers(configStore, pipeline, shortcutService, overlayWindow, () => assistantResultWindow)
+  registerIpcHandlers(
+    configStore,
+    pipeline,
+    shortcutService,
+    overlayWindow,
+    () => assistantResultWindow,
+    vocabularyStore
+  )
 
   // Initialize auto-updater
   initAutoUpdater()

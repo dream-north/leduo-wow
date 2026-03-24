@@ -1,6 +1,19 @@
 import { ipcMain, app, BrowserWindow, clipboard, dialog, shell } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 import { getConfig, setConfig, getHistory, setHistory, ConfigStore } from './config-store'
+import {
+  getPersonalVocabulary,
+  getSharedVocabulary,
+  addVocabularyEntry,
+  updateVocabularyEntry,
+  deleteVocabularyEntry,
+  importVocabularyEntries,
+  exportVocabularyEntries,
+  getVocabularyStats,
+  removeSourceEntries
+} from './vocabulary-store'
+import type { VocabularyStore } from './vocabulary-store'
+import { syncSharedVocabulary, syncFromUrl } from './vocabulary-sync'
 import { Pipeline } from './pipeline'
 import { ShortcutService } from './shortcut'
 import { checkPermissions, requestMicrophonePermission, requestAccessibilityPermission, requestScreenPermission } from './permissions'
@@ -16,7 +29,8 @@ export function registerIpcHandlers(
   pipeline: Pipeline,
   shortcutService: ShortcutService,
   overlayWindow: BrowserWindow | null,
-  getAssistantResultWindow: () => BrowserWindow | null
+  getAssistantResultWindow: () => BrowserWindow | null,
+  vocabularyStore: VocabularyStore
 ): void {
   shortcutService.on('status-changed', ({ status }: { status: ShortcutServiceStatus }) => {
     BrowserWindow.getAllWindows().forEach((win) => {
@@ -188,6 +202,66 @@ export function registerIpcHandlers(
     } else {
       pipeline.handleAssistantResultWindowClosed()
     }
+  })
+
+  // Vocabulary handlers
+  ipcMain.handle(IPC.VOCABULARY_GET_PERSONAL, () => {
+    return getPersonalVocabulary(vocabularyStore)
+  })
+
+  ipcMain.handle(IPC.VOCABULARY_GET_SHARED, () => {
+    return getSharedVocabulary(vocabularyStore)
+  })
+
+  ipcMain.handle(
+    IPC.VOCABULARY_ADD,
+    (_event, source: 'personal' | 'shared', entry: { term: string; description?: string; category?: string }) => {
+      return addVocabularyEntry(vocabularyStore, source, {
+        term: entry.term,
+        description: entry.description || '',
+        category: entry.category || '',
+        enabled: true
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC.VOCABULARY_UPDATE,
+    (_event, source: 'personal' | 'shared', id: string, updates: Record<string, unknown>) => {
+      return updateVocabularyEntry(vocabularyStore, source, id, updates)
+    }
+  )
+
+  ipcMain.handle(IPC.VOCABULARY_DELETE, (_event, source: 'personal' | 'shared', id: string) => {
+    return deleteVocabularyEntry(vocabularyStore, source, id)
+  })
+
+  ipcMain.handle(
+    IPC.VOCABULARY_IMPORT,
+    (_event, source: 'personal' | 'shared', entries: Array<{ term: string; description?: string; category?: string }>) => {
+      return importVocabularyEntries(vocabularyStore, source, entries)
+    }
+  )
+
+  ipcMain.handle(IPC.VOCABULARY_EXPORT, (_event, source: 'personal' | 'shared', name?: string) => {
+    return exportVocabularyEntries(vocabularyStore, source, name)
+  })
+
+  ipcMain.handle(IPC.VOCABULARY_GET_STATS, () => {
+    return getVocabularyStats(vocabularyStore)
+  })
+
+  ipcMain.handle(IPC.VOCABULARY_SYNC_SHARED, async () => {
+    const config = getConfig(configStore)
+    return await syncSharedVocabulary(vocabularyStore, config)
+  })
+
+  ipcMain.handle(IPC.VOCABULARY_SYNC_URL, async (_event, url: string) => {
+    return await syncFromUrl(vocabularyStore, url)
+  })
+
+  ipcMain.handle(IPC.VOCABULARY_REMOVE_SOURCE, (_event, sourceUrl: string) => {
+    removeSourceEntries(vocabularyStore, sourceUrl)
   })
 
   // Auto-update

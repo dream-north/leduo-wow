@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import {
   BUILTIN_PRESETS,
@@ -8,6 +8,8 @@ import {
   ASSISTANT_DEFAULT_PROMPT,
   ASR_MODEL_PRESETS,
   TEXT_MODEL_PRESETS,
+  FLASH_ASR_MODEL_PRESETS,
+  VOCABULARY_CATEGORY_PRESETS,
   getDefaultAssistantShortcut,
   getDefaultTranscriptionShortcut
 } from '../../../shared/types'
@@ -18,7 +20,8 @@ import type {
   ShortcutServiceStatus,
   TranscriptionRecord,
   VoiceMode,
-  UpdateStatusPayload
+  UpdateStatusPayload,
+  VocabularyEntry
 } from '../../../shared/types'
 
 const store = useSettingsStore()
@@ -33,10 +36,48 @@ const showAccessibilityPermission = platform === 'darwin'
 const showScreenPermission = platform === 'darwin'
 const initialTab = sessionStorage.getItem('settings-active-tab')
 const activeTab = ref(initialTab === 'prompt' ? 'prompt-transcription' : (initialTab || 'general'))
+const contentRef = ref<HTMLElement | null>(null)
+const tabScrollPositions = new Map<string, number>()
 const dockUpdateLocked = ref(false)
 let unsubscribeDockLock: (() => void) | null = null
 let unsubscribeHistoryUpdate: (() => void) | null = null
-watch(activeTab, (val) => sessionStorage.setItem('settings-active-tab', val))
+let unsubscribeVocabularyUpdate: (() => void) | null = null
+
+// Vocabulary (Memory tab)
+const personalVocabulary = ref<VocabularyEntry[]>([])
+const sharedVocabulary = ref<VocabularyEntry[]>([])
+const vocabStats = ref({ personalCount: 0, sharedCount: 0, activeCount: 0 })
+const vocabSubTab = ref<'settings' | 'personal' | 'shared'>('settings')
+watch(vocabSubTab, () => { vocabFilterCategory.value = '全部' })
+const vocabFilterCategory = ref('全部')
+const vocabNewTerm = ref('')
+const vocabNewDesc = ref('')
+const vocabNewCategory = ref('其他')
+const showVocabAddForm = ref(false)
+const showSyncSourceForm = ref(false)
+const syncSourceName = ref('')
+const syncSourceUrl = ref('')
+const exportName = ref('')
+const showExportNameInput = ref(false)
+const vocabEditingId = ref<string | null>(null)
+const vocabEditTerm = ref('')
+const vocabEditDesc = ref('')
+const vocabEditCategory = ref('')
+const vocabSyncLoading = ref(false)
+const vocabSyncResult = ref('')
+watch(activeTab, (val, oldVal) => {
+  sessionStorage.setItem('settings-active-tab', val)
+  // Save scroll position for old tab
+  if (oldVal && contentRef.value) {
+    tabScrollPositions.set(oldVal, contentRef.value.scrollTop)
+  }
+  // Restore scroll position for new tab
+  nextTick(() => {
+    if (contentRef.value) {
+      contentRef.value.scrollTop = tabScrollPositions.get(val) || 0
+    }
+  })
+})
 const saveMessage = ref('')
 
 const tabs = [
@@ -44,6 +85,7 @@ const tabs = [
   { id: 'api', label: 'API', icon: '🔑' },
   { id: 'prompt-transcription', label: '语音识别', icon: '🎤' },
   { id: 'prompt-assistant', label: '语音助手', icon: '🤖' },
+  { id: 'memory', label: '记忆', icon: '🧠' },
   { id: 'history', label: '历史', icon: '📜' },
   { id: 'about', label: '关于', icon: 'ℹ️' }
 ]
@@ -560,6 +602,7 @@ const editPresetNameValue = ref('')
 const showCustomAsrModel = ref(false)
 const showCustomPolishModel = ref(false)
 const showCustomAssistantModel = ref(false)
+const showCustomVocabModel = ref(false)
 
 function isCustomModel(model: string, presets: readonly string[]): boolean {
   return !presets.includes(model)
@@ -569,6 +612,7 @@ function syncCustomModelState(): void {
   showCustomAsrModel.value = isCustomModel(store.asrModel, ASR_MODEL_PRESETS)
   showCustomPolishModel.value = isCustomModel(store.polishModel, TEXT_MODEL_PRESETS)
   showCustomAssistantModel.value = isCustomModel(store.assistantModel, TEXT_MODEL_PRESETS)
+  showCustomVocabModel.value = isCustomModel(store.vocabularyModel, FLASH_ASR_MODEL_PRESETS as unknown as string[])
 }
 
 function startEditPresetName(index: number): void {
@@ -606,18 +650,46 @@ async function resetPreset(index: number): Promise<void> {
 }
 
 // Model save
+async function addCustomModel(category: 'asr' | 'text' | 'vocab', model: string): Promise<void> {
+  const trimmed = model.trim()
+  if (!trimmed) return
+  const list = store.customModels[category]
+  if (!list.includes(trimmed)) {
+    list.push(trimmed)
+    await store.saveSetting('customModels', store.customModels)
+  }
+}
+
+async function deleteCustomModel(category: 'asr' | 'text' | 'vocab', model: string): Promise<void> {
+  const list = store.customModels[category]
+  const idx = list.indexOf(model)
+  if (idx !== -1) {
+    list.splice(idx, 1)
+    await store.saveSetting('customModels', store.customModels)
+  }
+}
+
 async function saveAsrModel(): Promise<void> {
   await store.saveSetting('asrModel', store.asrModel)
+  if (isCustomModel(store.asrModel, ASR_MODEL_PRESETS)) {
+    await addCustomModel('asr', store.asrModel)
+  }
   showSaveMessage('识别模型已保存')
 }
 
 async function savePolishModel(): Promise<void> {
   await store.saveSetting('polishModel', store.polishModel)
+  if (isCustomModel(store.polishModel, TEXT_MODEL_PRESETS)) {
+    await addCustomModel('text', store.polishModel)
+  }
   showSaveMessage('润色模型已保存')
 }
 
 async function saveAssistantModel(): Promise<void> {
   await store.saveSetting('assistantModel', store.assistantModel)
+  if (isCustomModel(store.assistantModel, TEXT_MODEL_PRESETS)) {
+    await addCustomModel('text', store.assistantModel)
+  }
   showSaveMessage('助手模型已保存')
 }
 
@@ -637,6 +709,20 @@ async function selectAssistantModel(model: string): Promise<void> {
   store.assistantModel = model
   showCustomAssistantModel.value = false
   await saveAssistantModel()
+}
+
+async function selectVocabModel(model: string): Promise<void> {
+  store.vocabularyModel = model
+  showCustomVocabModel.value = false
+  await store.saveSetting('vocabularyModel', model)
+}
+
+async function saveVocabModel(): Promise<void> {
+  await store.saveSetting('vocabularyModel', store.vocabularyModel)
+  if (isCustomModel(store.vocabularyModel, FLASH_ASR_MODEL_PRESETS as unknown as string[])) {
+    await addCustomModel('vocab', store.vocabularyModel)
+  }
+  showSaveMessage('增强识别模型已保存')
 }
 
 async function savePolishBaseUrl(): Promise<void> {
@@ -831,6 +917,12 @@ onMounted(async () => {
     unsubscribeUpdateStatus = window.electronAPI.onUpdateStatus((payload) => {
       updateStatus.value = payload as UpdateStatusPayload
     })
+
+    // Load vocabulary and listen for updates
+    await loadVocabulary()
+    unsubscribeVocabularyUpdate = window.electronAPI.onVocabularyUpdated(() => {
+      loadVocabulary()
+    })
   } catch (err) {
     console.error('Failed to initialize settings:', err)
   }
@@ -842,6 +934,9 @@ onUnmounted(() => {
   }
   if (unsubscribeHistoryUpdate) {
     unsubscribeHistoryUpdate()
+  }
+  if (unsubscribeVocabularyUpdate) {
+    unsubscribeVocabularyUpdate()
   }
   if (unsubscribeShortcutStatus) {
     unsubscribeShortcutStatus()
@@ -855,6 +950,225 @@ onUnmounted(() => {
     void window.electronAPI.setShortcutCaptureActive(false)
   }
 })
+
+// ---- Vocabulary (Memory tab) functions ----
+
+// Computed: category stats for filter chips
+const personalCategoryStats = computed(() => {
+  const counts = new Map<string, number>()
+  for (const e of personalVocabulary.value) {
+    counts.set(e.category, (counts.get(e.category) || 0) + 1)
+  }
+  return Array.from(counts.entries()).map(([name, count]) => ({ name, count }))
+})
+
+const filteredPersonalVocabulary = computed(() => {
+  if (vocabFilterCategory.value === '全部') return personalVocabulary.value
+  return personalVocabulary.value.filter((e) => e.category === vocabFilterCategory.value)
+})
+
+function getSourceEntries(sourceUrl: string): VocabularyEntry[] {
+  return sharedVocabulary.value.filter((e) => e.sourceUrl === sourceUrl)
+}
+
+async function loadVocabulary() {
+  try {
+    const [personal, shared, stats] = await Promise.all([
+      window.electronAPI.getPersonalVocabulary(),
+      window.electronAPI.getSharedVocabulary(),
+      window.electronAPI.getVocabularyStats()
+    ])
+    personalVocabulary.value = personal
+    sharedVocabulary.value = shared
+    vocabStats.value = stats
+  } catch (err) {
+    console.error('Failed to load vocabulary:', err)
+  }
+}
+
+async function addVocabularyEntry() {
+  const term = vocabNewTerm.value.trim()
+  if (!term) return
+  if (personalVocabulary.value.length >= 200) {
+    showSaveMessage('个人词汇已达上限 200 条，无法继续添加')
+    return
+  }
+  try {
+    const result = await window.electronAPI.addVocabulary('personal', {
+      term,
+      description: vocabNewDesc.value.trim(),
+      category: vocabNewCategory.value
+    })
+    if (result.duplicate) {
+      showSaveMessage(`词汇 "${term}" 已存在`)
+      return
+    }
+    vocabNewTerm.value = ''
+    vocabNewDesc.value = ''
+    vocabNewCategory.value = '其他'
+    showVocabAddForm.value = false
+    await loadVocabulary()
+  } catch (err) {
+    console.error('Failed to add vocabulary:', err)
+  }
+}
+
+function startEditVocabulary(entry: VocabularyEntry) {
+  vocabEditingId.value = entry.id
+  vocabEditTerm.value = entry.term
+  vocabEditDesc.value = entry.description
+  vocabEditCategory.value = entry.category
+}
+
+async function saveEditVocabulary(source: 'personal' | 'shared' = 'personal') {
+  if (!vocabEditingId.value) return
+  try {
+    await window.electronAPI.updateVocabulary(source, vocabEditingId.value, {
+      term: vocabEditTerm.value.trim(),
+      description: vocabEditDesc.value.trim(),
+      category: vocabEditCategory.value
+    })
+    vocabEditingId.value = null
+    await loadVocabulary()
+  } catch (err) {
+    console.error('Failed to update vocabulary:', err)
+  }
+}
+
+function cancelEditVocabulary() {
+  vocabEditingId.value = null
+}
+
+async function deleteVocabularyEntry(source: 'personal' | 'shared', id: string) {
+  try {
+    await window.electronAPI.deleteVocabulary(source, id)
+    await loadVocabulary()
+  } catch (err) {
+    console.error('Failed to delete vocabulary:', err)
+  }
+}
+
+async function toggleVocabularyEntry(source: 'personal' | 'shared', entry: VocabularyEntry) {
+  try {
+    await window.electronAPI.updateVocabulary(source, entry.id, { enabled: !entry.enabled })
+    await loadVocabulary()
+  } catch (err) {
+    console.error('Failed to toggle vocabulary:', err)
+  }
+}
+
+async function importVocabulary() {
+  try {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      // Support both old array format and new {entries} format
+      const entries = Array.isArray(parsed) ? parsed : (parsed.entries ?? [])
+      if (Array.isArray(entries)) {
+        const result = await window.electronAPI.importVocabulary('personal', entries)
+        await loadVocabulary()
+        let msg = `已导入 ${result.added} 条词汇`
+        if (result.skipped > 0) msg += `，跳过 ${result.skipped} 条重复`
+        if (result.limitReached) msg += '（已达上限 200 条）'
+        showSaveMessage(msg)
+      }
+    }
+    input.click()
+  } catch (err) {
+    console.error('Failed to import vocabulary:', err)
+  }
+}
+
+async function addSyncSource(): Promise<void> {
+  const url = syncSourceUrl.value.trim()
+  if (!url) return
+  vocabSyncLoading.value = true
+  vocabSyncResult.value = ''
+  try {
+    const result = await window.electronAPI.syncVocabularyFromUrl(url)
+    if (result.error) {
+      vocabSyncResult.value = `同步失败: ${result.error}`
+      vocabSyncLoading.value = false
+      return
+    }
+    const name = syncSourceName.value.trim() || result.name || '未命名词典'
+    const sources = [...store.sharedVocabSyncSources, { name, url, lastSyncAt: Date.now() }]
+    store.sharedVocabSyncSources = sources
+    await store.saveSetting('sharedVocabSyncSources', sources)
+    syncSourceName.value = ''
+    syncSourceUrl.value = ''
+    showSyncSourceForm.value = false
+    vocabSyncResult.value = `已同步 ${result.total} 条词汇`
+    await loadVocabulary()
+  } catch (err) {
+    vocabSyncResult.value = `同步出错: ${(err as Error).message}`
+  } finally {
+    vocabSyncLoading.value = false
+  }
+}
+
+async function syncSource(index: number): Promise<void> {
+  const source = store.sharedVocabSyncSources[index]
+  if (!source) return
+  vocabSyncLoading.value = true
+  vocabSyncResult.value = ''
+  try {
+    const result = await window.electronAPI.syncVocabularyFromUrl(source.url)
+    if (result.error) {
+      vocabSyncResult.value = `同步失败: ${result.error}`
+    } else {
+      const sources = [...store.sharedVocabSyncSources]
+      sources[index] = { ...sources[index], lastSyncAt: Date.now() }
+      store.sharedVocabSyncSources = sources
+      await store.saveSetting('sharedVocabSyncSources', sources)
+      vocabSyncResult.value = `已同步 ${result.total} 条词汇`
+      await loadVocabulary()
+    }
+  } catch (err) {
+    vocabSyncResult.value = `同步出错: ${(err as Error).message}`
+  } finally {
+    vocabSyncLoading.value = false
+  }
+}
+
+async function removeSyncSource(index: number): Promise<void> {
+  const source = store.sharedVocabSyncSources[index]
+  if (!source) return
+  await window.electronAPI.removeVocabularySource(source.url)
+  const sources = store.sharedVocabSyncSources.filter((_, i) => i !== index)
+  store.sharedVocabSyncSources = sources
+  await store.saveSetting('sharedVocabSyncSources', sources)
+  await loadVocabulary()
+}
+
+async function exportVocabularyWithName(source: 'personal' | 'shared'): Promise<void> {
+  try {
+    const name = exportName.value.trim() || undefined
+    const data = await window.electronAPI.exportVocabulary(source, name)
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `vocabulary-${source}${name ? '-' + name : ''}-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    exportName.value = ''
+    showExportNameInput.value = false
+  } catch (err) {
+    console.error('Failed to export vocabulary:', err)
+  }
+}
+
+async function toggleVocabularyEnabled() {
+  const newVal = !store.vocabularyEnabled
+  store.vocabularyEnabled = newVal
+  await store.saveSetting('vocabularyEnabled', newVal)
+}
 </script>
 
 <template>
@@ -884,7 +1198,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- Content -->
-    <main class="content">
+    <main ref="contentRef" class="content">
       <!-- General Tab -->
       <div v-if="activeTab === 'general'" class="tab-content">
         <h2 class="section-title">通用设置</h2>
@@ -1282,6 +1596,15 @@ onUnmounted(() => {
               >
                 {{ model }}
               </button>
+              <span
+                v-for="model in store.customModels.asr"
+                :key="'custom-' + model"
+                :class="['preset-chip', 'preset-custom', { active: store.asrModel === model && !showCustomAsrModel }]"
+                @click="selectAsrModel(model)"
+              >
+                {{ model }}
+                <span class="chip-delete" @click.stop="deleteCustomModel('asr', model)">×</span>
+              </span>
               <button
                 :class="['preset-chip', 'preset-add', { active: showCustomAsrModel }]"
                 @click="showCustomAsrModel = !showCustomAsrModel"
@@ -1295,7 +1618,7 @@ onUnmounted(() => {
                 class="input-field"
                 placeholder="输入自定义 ASR 模型名"
               />
-              <button class="btn btn-primary" @click="saveAsrModel">保存</button>
+              <button class="btn btn-primary" @click="saveAsrModel(); showCustomAsrModel = false">保存</button>
             </div>
           </div>
 
@@ -1311,6 +1634,15 @@ onUnmounted(() => {
               >
                 {{ model }}
               </button>
+              <span
+                v-for="model in store.customModels.text"
+                :key="'custom-' + model"
+                :class="['preset-chip', 'preset-custom', { active: store.polishModel === model && !showCustomPolishModel }]"
+                @click="selectPolishModel(model)"
+              >
+                {{ model }}
+                <span class="chip-delete" @click.stop="deleteCustomModel('text', model)">×</span>
+              </span>
               <button
                 :class="['preset-chip', 'preset-add', { active: showCustomPolishModel }]"
                 @click="showCustomPolishModel = !showCustomPolishModel"
@@ -1324,7 +1656,7 @@ onUnmounted(() => {
                 class="input-field"
                 placeholder="输入自定义润色模型名"
               />
-              <button class="btn btn-primary" @click="savePolishModel">保存</button>
+              <button class="btn btn-primary" @click="savePolishModel(); showCustomPolishModel = false">保存</button>
             </div>
           </div>
 
@@ -1411,6 +1743,15 @@ onUnmounted(() => {
               >
                 {{ model }}
               </button>
+              <span
+                v-for="model in store.customModels.text"
+                :key="'custom-' + model"
+                :class="['preset-chip', 'preset-custom', { active: store.assistantModel === model && !showCustomAssistantModel }]"
+                @click="selectAssistantModel(model)"
+              >
+                {{ model }}
+                <span class="chip-delete" @click.stop="deleteCustomModel('text', model)">×</span>
+              </span>
               <button
                 :class="['preset-chip', 'preset-add', { active: showCustomAssistantModel }]"
                 @click="showCustomAssistantModel = !showCustomAssistantModel"
@@ -1424,7 +1765,7 @@ onUnmounted(() => {
                 class="input-field"
                 placeholder="输入自定义助手模型名"
               />
-              <button class="btn btn-primary" @click="saveAssistantModel">保存</button>
+              <button class="btn btn-primary" @click="saveAssistantModel(); showCustomAssistantModel = false">保存</button>
             </div>
           </div>
 
@@ -1585,7 +1926,234 @@ onUnmounted(() => {
           </div>
       </div>
 
-      <!-- History Tab -->
+
+      <!-- Memory Tab -->
+      <div v-if="activeTab === 'memory'" class="tab-content">
+        <h2 class="section-title">词汇记忆</h2>
+        <p class="setting-description">添加专有名词帮助语音识别更准确地识别特定词汇。</p>
+
+        <!-- 3 sub-tabs -->
+        <div class="mode-tabs" style="margin-top: 8px;">
+          <button :class="['mode-tab', { active: vocabSubTab === 'settings' }]" @click="vocabSubTab = 'settings'">
+            通用设置
+          </button>
+          <button :class="['mode-tab', { active: vocabSubTab === 'personal' }]" @click="vocabSubTab = 'personal'">
+            个人词汇 ({{ vocabStats.personalCount }})
+          </button>
+          <button :class="['mode-tab', { active: vocabSubTab === 'shared' }]" @click="vocabSubTab = 'shared'">
+            共享词汇 ({{ vocabStats.sharedCount }})
+          </button>
+        </div>
+
+        <!-- Settings sub-tab -->
+        <div v-if="vocabSubTab === 'settings'">
+          <div class="setting-group">
+            <div class="toggle-row">
+              <span>启用词汇增强识别</span>
+              <button :class="['toggle', { active: store.vocabularyEnabled }]" @click="toggleVocabularyEnabled">
+                <span class="toggle-thumb"></span>
+              </button>
+            </div>
+          </div>
+
+          <template v-if="store.vocabularyEnabled">
+            <div class="setting-group">
+              <label class="setting-label">增强识别模型</label>
+              <div class="model-chip-list">
+                <button
+                  v-for="model in FLASH_ASR_MODEL_PRESETS"
+                  :key="model"
+                  :class="['preset-chip', { active: store.vocabularyModel === model && !showCustomVocabModel }]"
+                  @click="selectVocabModel(model)"
+                >
+                  {{ model }}
+                </button>
+                <span
+                  v-for="model in store.customModels.vocab"
+                  :key="'custom-' + model"
+                  :class="['preset-chip', 'preset-custom', { active: store.vocabularyModel === model && !showCustomVocabModel }]"
+                  @click="selectVocabModel(model)"
+                >
+                  {{ model }}
+                  <span class="chip-delete" @click.stop="deleteCustomModel('vocab', model)">×</span>
+                </span>
+                <button
+                  :class="['preset-chip', 'preset-add', { active: showCustomVocabModel }]"
+                  @click="showCustomVocabModel = !showCustomVocabModel"
+                >
+                  + 自定义
+                </button>
+              </div>
+              <div v-if="showCustomVocabModel" class="setting-row model-custom-row">
+                <input
+                  v-model="store.vocabularyModel"
+                  class="input-field"
+                  placeholder="输入自定义模型名"
+                />
+                <button class="btn btn-primary" @click="saveVocabModel(); showCustomVocabModel = false">保存</button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Personal vocabulary sub-tab -->
+        <div v-if="vocabSubTab === 'personal'">
+          <div class="vocab-toolbar">
+            <span class="vocab-toolbar-info">已启用 {{ vocabStats.activeCount }} 条</span>
+            <div class="vocab-toolbar-actions">
+              <button class="vocab-icon-btn" title="添加" @click="showVocabAddForm = !showVocabAddForm">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              </button>
+              <button class="vocab-icon-btn" title="导入" @click="importVocabulary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </button>
+              <button class="vocab-icon-btn" title="导出" @click="showExportNameInput = !showExportNameInput">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Export name input -->
+          <div v-if="showExportNameInput" class="vocab-add-form">
+            <input class="input-field" v-model="exportName" placeholder="词典名称（可选）" style="flex: 1">
+            <button class="btn btn-primary btn-sm" @click="exportVocabularyWithName('personal')">导出</button>
+            <button class="btn btn-text btn-sm" @click="showExportNameInput = false">取消</button>
+          </div>
+
+          <!-- Add form (collapsible) -->
+          <div v-if="showVocabAddForm" class="vocab-add-form">
+            <input class="input-field vocab-input-term" v-model="vocabNewTerm" placeholder="词汇 *" @keydown.enter="addVocabularyEntry">
+            <input class="input-field vocab-input-desc" v-model="vocabNewDesc" placeholder="描述（可选）">
+            <select class="input-field vocab-input-category" v-model="vocabNewCategory">
+              <option v-for="cat in VOCABULARY_CATEGORY_PRESETS" :key="cat" :value="cat">{{ cat }}</option>
+            </select>
+            <button class="btn btn-primary btn-sm" @click="addVocabularyEntry" :disabled="!vocabNewTerm.trim()">确认</button>
+            <button class="btn btn-text btn-sm" @click="showVocabAddForm = false">取消</button>
+          </div>
+
+          <!-- Category filter chips -->
+          <div class="vocab-filter-chips">
+            <button
+              :class="['filter-chip', { active: vocabFilterCategory === '全部' }]"
+              @click="vocabFilterCategory = '全部'"
+            >全部 ({{ personalVocabulary.length }})</button>
+            <template v-for="cat in personalCategoryStats" :key="cat.name">
+              <button
+                :class="['filter-chip', { active: vocabFilterCategory === cat.name }]"
+                @click="vocabFilterCategory = cat.name"
+              >{{ cat.name }} ({{ cat.count }})</button>
+            </template>
+          </div>
+
+          <!-- Personal list -->
+          <div class="vocab-list-container">
+            <div class="vocab-list" v-if="filteredPersonalVocabulary.length > 0">
+              <div v-for="entry in filteredPersonalVocabulary" :key="entry.id" :class="['vocab-item', { disabled: !entry.enabled }]">
+                <template v-if="vocabEditingId === entry.id">
+                  <div class="vocab-edit-row">
+                    <input class="input-field vocab-input-term" v-model="vocabEditTerm" @keydown.enter="saveEditVocabulary('personal')">
+                    <input class="input-field vocab-input-desc" v-model="vocabEditDesc">
+                    <select class="input-field vocab-input-category" v-model="vocabEditCategory">
+                      <option v-for="cat in VOCABULARY_CATEGORY_PRESETS" :key="cat" :value="cat">{{ cat }}</option>
+                    </select>
+                    <div class="vocab-edit-actions">
+                      <button class="btn btn-primary btn-sm" @click="saveEditVocabulary('personal')">保存</button>
+                      <button class="btn btn-text btn-sm" @click="cancelEditVocabulary">取消</button>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="vocab-item-main">
+                    <span class="vocab-term">{{ entry.term }}</span>
+                    <span class="vocab-category">{{ entry.category }}</span>
+                    <span v-if="entry.description" class="vocab-desc" :title="entry.description">{{ entry.description }}</span>
+                  </div>
+                  <div class="vocab-item-actions">
+                    <button :class="['toggle toggle-xs', { active: entry.enabled }]" @click="toggleVocabularyEntry('personal', entry)">
+                      <span class="toggle-thumb"></span>
+                    </button>
+                    <button class="vocab-icon-btn" title="编辑" @click="startEditVocabulary(entry)">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                    </button>
+                    <button class="vocab-icon-btn vocab-icon-btn-danger" title="删除" @click="deleteVocabularyEntry('personal', entry.id)">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div v-else class="vocab-empty">
+              {{ vocabFilterCategory === '全部' ? '暂无个人词汇' : '该分类下暂无词汇' }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Shared vocabulary sub-tab -->
+        <div v-if="vocabSubTab === 'shared'">
+          <!-- Sync sources management -->
+          <div class="setting-group">
+            <label class="setting-label">同步源</label>
+            <p class="setting-description">从远程地址同步词汇，严格保持与远端一致。</p>
+
+            <div v-if="showSyncSourceForm" class="vocab-add-form" style="margin-top: 8px;">
+              <input class="input-field" v-model="syncSourceUrl" placeholder="同步地址 *" style="flex: 2">
+              <input class="input-field" v-model="syncSourceName" placeholder="名称（可选，自动识别）" style="flex: 1">
+              <button class="btn btn-primary btn-sm" @click="addSyncSource" :disabled="!syncSourceUrl.trim() || vocabSyncLoading">
+                {{ vocabSyncLoading ? '同步中...' : '确认' }}
+              </button>
+              <button class="btn btn-text btn-sm" @click="showSyncSourceForm = false">取消</button>
+            </div>
+            <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+              <button v-if="!showSyncSourceForm" class="btn btn-text btn-sm" @click="showSyncSourceForm = true">
+                + 添加同步源
+              </button>
+              <span v-if="vocabSyncResult" class="vocab-sync-result">{{ vocabSyncResult }}</span>
+            </div>
+          </div>
+
+          <!-- Vocabulary grouped by sync source -->
+          <template v-if="store.sharedVocabSyncSources.length > 0">
+            <div v-for="(source, idx) in store.sharedVocabSyncSources" :key="idx" class="setting-group shared-source-group">
+              <div class="shared-source-header">
+                <div class="sync-source-info">
+                  <span class="sync-source-name">{{ source.name }}</span>
+                  <span class="sync-source-url" :title="source.url">{{ source.url }}</span>
+                  <span v-if="source.lastSyncAt" class="sync-source-time">{{ new Date(source.lastSyncAt).toLocaleDateString() }} 同步</span>
+                  <span class="sync-source-count">{{ getSourceEntries(source.url).length }} 条</span>
+                </div>
+                <div class="sync-source-actions">
+                  <button class="vocab-icon-btn" title="同步" :disabled="vocabSyncLoading" @click="syncSource(idx)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  </button>
+                  <button class="vocab-icon-btn vocab-icon-btn-danger" title="移除" @click="removeSyncSource(idx)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="vocab-list-container">
+                <div class="vocab-list" v-if="getSourceEntries(source.url).length > 0">
+                  <div v-for="entry in getSourceEntries(source.url)" :key="entry.id" :class="['vocab-item', { disabled: !entry.enabled }]">
+                    <div class="vocab-item-main">
+                      <span class="vocab-term">{{ entry.term }}</span>
+                      <span class="vocab-category">{{ entry.category }}</span>
+                      <span v-if="entry.description" class="vocab-desc" :title="entry.description">{{ entry.description }}</span>
+                    </div>
+                    <div class="vocab-item-actions">
+                      <button :class="['toggle toggle-xs', { active: entry.enabled }]" @click="toggleVocabularyEntry('shared', entry)">
+                        <span class="toggle-thumb"></span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="vocab-empty">尚未同步，点击同步按钮获取词汇</div>
+              </div>
+            </div>
+          </template>
+          <div v-else class="vocab-empty" style="margin-top: 12px;">暂无同步源，点击上方添加</div>
+        </div>
+      </div>
+
+            <!-- History Tab -->
       <div v-if="activeTab === 'history'" class="tab-content">
         <h2 class="section-title">识别历史</h2>
         <div class="setting-group">
@@ -2055,6 +2623,32 @@ onUnmounted(() => {
   color: var(--accent-color);
 }
 
+.preset-chip.preset-custom {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chip-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chip-delete:hover {
+  background: rgba(255, 59, 48, 0.15);
+  color: #ff3b30;
+}
+
 .preset-chip.preset-add {
   border-style: dashed;
   color: var(--text-secondary);
@@ -2508,6 +3102,295 @@ onUnmounted(() => {
 
 .shortcut-row.disabled .shortcut-display {
   background: var(--bg-primary);
+}
+
+/* ============ Vocabulary (Memory Tab) ============ */
+.vocab-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.vocab-toolbar-info {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.vocab-toolbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.vocab-add-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.vocab-input-term {
+  flex: 2;
+  min-width: 80px;
+}
+
+.vocab-input-desc {
+  flex: 3;
+  min-width: 100px;
+}
+
+.vocab-input-category {
+  flex: 1;
+  min-width: 70px;
+}
+
+.vocab-filter-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.filter-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.filter-chip:hover {
+  border-color: var(--accent-color);
+}
+
+.filter-chip.active {
+  background: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+.vocab-list-container {
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.vocab-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.vocab-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-color);
+  transition: opacity 0.2s;
+}
+
+.vocab-item:last-child {
+  border-bottom: none;
+}
+
+.vocab-item.disabled {
+  opacity: 0.45;
+}
+
+.vocab-item-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.vocab-term {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.vocab-category {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-color);
+  color: white;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.vocab-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.vocab-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+
+.vocab-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.vocab-icon-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.vocab-icon-btn-danger:hover {
+  color: var(--error-color);
+}
+
+.toggle-xs {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+}
+
+.toggle-xs .toggle-thumb {
+  width: 14px;
+  height: 14px;
+}
+
+.toggle-xs.active .toggle-thumb {
+  transform: translateX(14px);
+}
+
+.vocab-edit-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 4px 0;
+}
+
+.vocab-edit-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.vocab-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.btn-sm {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.vocab-sync-result {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sync-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sync-source-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  gap: 8px;
+}
+
+.sync-source-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sync-source-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.sync-source-url {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-source-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.sync-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sync-source-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.shared-source-group {
+  margin-top: 4px;
+}
+
+.shared-source-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.shared-source-header .sync-source-info {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 </style>

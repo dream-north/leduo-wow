@@ -161,7 +161,7 @@ describe('Pipeline assistant output mode', () => {
 
   it('inputs assistant output into the frontmost app when output mode is input', async () => {
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('生成结果')
@@ -186,7 +186,7 @@ describe('Pipeline assistant output mode', () => {
     mockState.config.assistantOutputMode = 'window'
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('弹窗结果')
@@ -211,7 +211,7 @@ describe('Pipeline assistant output mode', () => {
 
   it('hides previous result windows before starting a new recording', async () => {
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     await pipeline.toggle('assistant')
 
@@ -230,7 +230,7 @@ describe('Pipeline assistant output mode', () => {
     mockState.config.assistantEnableSearch = false
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('帮我总结')
@@ -265,7 +265,7 @@ describe('Pipeline assistant output mode', () => {
     })
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('帮我想一想')
@@ -307,7 +307,7 @@ describe('Pipeline assistant output mode', () => {
     })
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('请计算 12 的三次方')
@@ -360,7 +360,7 @@ describe('Pipeline assistant output mode', () => {
     })
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('杭州明天天气是什么？')
@@ -438,7 +438,7 @@ describe('Pipeline assistant output mode', () => {
     }) as any)
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('帮我查一下')
@@ -475,7 +475,7 @@ describe('Pipeline assistant output mode', () => {
     ) as any)
 
     const overlay = createOverlayBackend()
-    const pipeline = new Pipeline(overlay as never, {} as never)
+    const pipeline = new Pipeline(overlay as never, {} as never, {} as never)
 
     ;(pipeline as any).currentMode = 'assistant'
     const task = (pipeline as any).onASRComplete('取消这次回答')

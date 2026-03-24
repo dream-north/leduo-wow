@@ -76,6 +76,7 @@ export function updateTrayMenu(status?: PipelineStatus): void {
     [PipelineStatus.IDLE]: '就绪',
     [PipelineStatus.RECORDING]: '🎤 录音中...',
     [PipelineStatus.FINALIZING_ASR]: '识别中...',
+    [PipelineStatus.ENHANCING_ASR]: '词汇增强识别中...',
     [PipelineStatus.POLISHING]: '润色中...',
     [PipelineStatus.INPUTTING]: '输入中...',
     [PipelineStatus.ERROR]: '错误'

@@ -80,6 +80,28 @@ const electronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
     ipcRenderer.on(IPC.UPDATE_STATUS, handler)
     return () => ipcRenderer.removeListener(IPC.UPDATE_STATUS, handler)
+  },
+
+  // Vocabulary
+  getPersonalVocabulary: () => ipcRenderer.invoke(IPC.VOCABULARY_GET_PERSONAL),
+  getSharedVocabulary: () => ipcRenderer.invoke(IPC.VOCABULARY_GET_SHARED),
+  addVocabulary: (source: string, entry: { term: string; description?: string; category?: string }) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_ADD, source, entry),
+  updateVocabulary: (source: string, id: string, updates: Record<string, unknown>) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_UPDATE, source, id, updates),
+  deleteVocabulary: (source: string, id: string) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_DELETE, source, id),
+  importVocabulary: (source: string, entries: Array<{ term: string; description?: string; category?: string }>) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_IMPORT, source, entries),
+  exportVocabulary: (source: string, name?: string) => ipcRenderer.invoke(IPC.VOCABULARY_EXPORT, source, name),
+  getVocabularyStats: () => ipcRenderer.invoke(IPC.VOCABULARY_GET_STATS),
+  syncSharedVocabulary: () => ipcRenderer.invoke(IPC.VOCABULARY_SYNC_SHARED),
+  syncVocabularyFromUrl: (url: string) => ipcRenderer.invoke(IPC.VOCABULARY_SYNC_URL, url),
+  removeVocabularySource: (sourceUrl: string) => ipcRenderer.invoke(IPC.VOCABULARY_REMOVE_SOURCE, sourceUrl),
+  onVocabularyUpdated: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on(IPC.VOCABULARY_UPDATED, handler)
+    return () => ipcRenderer.removeListener(IPC.VOCABULARY_UPDATED, handler)
   }
 }
 

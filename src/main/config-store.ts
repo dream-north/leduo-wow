@@ -63,6 +63,13 @@ interface StoreSchema {
   screenshotExcludedApps: ExcludedApp[]
   hideDockIcon: boolean
   historyMaxCount: number
+  // Vocabulary enhancement
+  vocabularyEnabled: boolean
+  vocabularyModel: string
+  vocabularyMaxEntries: number
+  sharedVocabularySyncUrl: string
+  sharedVocabularySyncToken: string
+  customModels: { asr: string[]; text: string[]; vocab: string[] }
 }
 
 interface HistorySchema {
@@ -143,7 +150,14 @@ export function initConfigStore(): Store<StoreSchema> {
       screenshotMaxCount: DEFAULT_CONFIG.screenshotMaxCount,
       screenshotExcludedApps: DEFAULT_CONFIG.screenshotExcludedApps,
       hideDockIcon: DEFAULT_CONFIG.hideDockIcon,
-      historyMaxCount: DEFAULT_CONFIG.historyMaxCount
+      historyMaxCount: DEFAULT_CONFIG.historyMaxCount,
+      // Vocabulary enhancement
+      vocabularyEnabled: DEFAULT_CONFIG.vocabularyEnabled,
+      vocabularyModel: DEFAULT_CONFIG.vocabularyModel,
+      vocabularyMaxEntries: DEFAULT_CONFIG.vocabularyMaxEntries,
+      sharedVocabularySyncUrl: DEFAULT_CONFIG.sharedVocabularySyncUrl,
+      sharedVocabularySyncToken: DEFAULT_CONFIG.sharedVocabularySyncToken,
+      customModels: { asr: [], text: [], vocab: [] }
     }
   })
 
@@ -247,7 +261,31 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     screenshotMaxCount: s.get('screenshotMaxCount') ?? 30,
     screenshotExcludedApps: s.get('screenshotExcludedApps') ?? [],
     hideDockIcon: s.get('hideDockIcon') ?? false,
-    historyMaxCount: s.get('historyMaxCount') ?? 50
+    historyMaxCount: s.get('historyMaxCount') ?? 50,
+    // Vocabulary enhancement
+    vocabularyEnabled: s.get('vocabularyEnabled') ?? DEFAULT_CONFIG.vocabularyEnabled,
+    vocabularyModel: s.get('vocabularyModel') ?? DEFAULT_CONFIG.vocabularyModel,
+    vocabularyMaxEntries: s.get('vocabularyMaxEntries') ?? DEFAULT_CONFIG.vocabularyMaxEntries,
+    sharedVocabularySyncUrl: s.get('sharedVocabularySyncUrl') ?? DEFAULT_CONFIG.sharedVocabularySyncUrl,
+    sharedVocabularySyncToken: s.get('sharedVocabularySyncToken') ?? DEFAULT_CONFIG.sharedVocabularySyncToken,
+    sharedVocabSyncSources: (() => {
+      const saved = s.get('sharedVocabSyncSources')
+      if (Array.isArray(saved) && saved.length > 0) return saved
+      // Migrate: if old single URL exists, convert to source
+      const legacyUrl = s.get('sharedVocabularySyncUrl')
+      if (legacyUrl) {
+        const migrated = [{ name: '共享词典', url: legacyUrl }]
+        s.set('sharedVocabSyncSources', migrated as never)
+        return migrated
+      }
+      return []
+    })(),
+    customModels: (() => {
+      const raw = s.get('customModels')
+      return (raw && typeof raw === 'object' && !Array.isArray(raw))
+        ? raw as { asr: string[]; text: string[]; vocab: string[] }
+        : { asr: [], text: [], vocab: [] }
+    })()
   }
 }
 

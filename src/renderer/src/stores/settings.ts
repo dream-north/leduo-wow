@@ -8,7 +8,9 @@ import type {
   ExcludedApp,
   ApiProvider,
   ShortcutServiceStatus,
-  UpdateStatusPayload
+  UpdateStatusPayload,
+  VocabularyEntry,
+  SharedVocabSyncSource
 } from '../../../shared/types'
 import {
   BUILTIN_PRESETS,
@@ -55,6 +57,44 @@ declare global {
       installUpdate: () => Promise<void>
       getUpdateStatus: () => Promise<UpdateStatusPayload>
       onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => () => void
+      // Vocabulary
+      getPersonalVocabulary: () => Promise<VocabularyEntry[]>
+      getSharedVocabulary: () => Promise<VocabularyEntry[]>
+      addVocabulary: (
+        source: string,
+        entry: { term: string; description?: string; category?: string }
+      ) => Promise<{ entry: VocabularyEntry; duplicate: boolean }>
+      updateVocabulary: (
+        source: string,
+        id: string,
+        updates: Record<string, unknown>
+      ) => Promise<boolean>
+      deleteVocabulary: (source: string, id: string) => Promise<boolean>
+      importVocabulary: (
+        source: string,
+        entries: Array<{ term: string; description?: string; category?: string }>
+      ) => Promise<{ added: number; skipped: number; limitReached: boolean }>
+      exportVocabulary: (source: string, name?: string) => Promise<{
+        version: number
+        name?: string
+        exportedAt: number
+        entries: Array<{ term: string; description: string; category: string }>
+      }>
+      getVocabularyStats: () => Promise<{
+        personalCount: number
+        sharedCount: number
+        activeCount: number
+      }>
+      syncSharedVocabulary: () => Promise<{ synced: number; error?: string }>
+      syncVocabularyFromUrl: (
+        url: string
+      ) => Promise<{
+        total: number
+        name?: string
+        error?: string
+      }>
+      removeVocabularySource: (sourceUrl: string) => Promise<void>
+      onVocabularyUpdated: (callback: () => void) => () => void
     }
   }
 }
@@ -115,6 +155,14 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantPrompt = ref('')
   const assistantPresets = ref<PolishPreset[]>([...ASSISTANT_BUILTIN_PRESETS])
   const assistantActivePresetIndex = ref(0)
+  // Vocabulary enhancement
+  const vocabularyEnabled = ref(true)
+  const vocabularyModel = ref('qwen3-asr-flash')
+  const vocabularyMaxEntries = ref(200)
+  const sharedVocabularySyncUrl = ref('')
+  const sharedVocabularySyncToken = ref('')
+  const customModels = ref<{ asr: string[]; text: string[]; vocab: string[] }>({ asr: [], text: [], vocab: [] })
+  const sharedVocabSyncSources = ref<SharedVocabSyncSource[]>([])
 
   async function loadSettings(): Promise<void> {
     loading.value = true
@@ -163,6 +211,13 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantPrompt.value = config.assistantPrompt ?? ''
       assistantPresets.value = config.assistantPresets ?? [...ASSISTANT_BUILTIN_PRESETS]
       assistantActivePresetIndex.value = config.assistantActivePresetIndex ?? 0
+      // Custom models (guard against old string[] format)
+      const cm = config.customModels as unknown
+      customModels.value = (cm && typeof cm === 'object' && !Array.isArray(cm) && 'asr' in (cm as Record<string, unknown>))
+        ? cm as { asr: string[]; text: string[]; vocab: string[] }
+        : { asr: [], text: [], vocab: [] }
+      // Shared vocab sync sources
+      sharedVocabSyncSources.value = config.sharedVocabSyncSources ?? []
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {
@@ -227,6 +282,14 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantPrompt,
     assistantPresets,
     assistantActivePresetIndex,
+    // Vocabulary enhancement
+    vocabularyEnabled,
+    vocabularyModel,
+    vocabularyMaxEntries,
+    sharedVocabularySyncUrl,
+    sharedVocabularySyncToken,
+    customModels,
+    sharedVocabSyncSources,
     loadSettings,
     saveSetting
   }
