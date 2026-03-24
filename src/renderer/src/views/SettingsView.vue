@@ -48,7 +48,8 @@ const personalVocabulary = ref<VocabularyEntry[]>([])
 const sharedVocabulary = ref<VocabularyEntry[]>([])
 const vocabStats = ref({ personalCount: 0, sharedCount: 0, activeCount: 0 })
 const vocabSubTab = ref<'settings' | 'personal' | 'shared'>('settings')
-watch(vocabSubTab, () => { vocabFilterCategory.value = '全部' })
+const sharedSourceTabIndex = ref(0)
+watch(vocabSubTab, () => { vocabFilterCategory.value = '全部'; sharedSourceTabIndex.value = 0 })
 const vocabFilterCategory = ref('全部')
 const vocabNewTerm = ref('')
 const vocabNewDesc = ref('')
@@ -967,6 +968,29 @@ const filteredPersonalVocabulary = computed(() => {
   return personalVocabulary.value.filter((e) => e.category === vocabFilterCategory.value)
 })
 
+const activeSharedSource = computed(() => {
+  return store.sharedVocabSyncSources[sharedSourceTabIndex.value] ?? null
+})
+
+const activeSharedSourceEntries = computed(() => {
+  const source = activeSharedSource.value
+  if (!source) return []
+  return sharedVocabulary.value.filter((e) => e.sourceUrl === source.url)
+})
+
+const sharedCategoryStats = computed(() => {
+  const counts = new Map<string, number>()
+  for (const e of activeSharedSourceEntries.value) {
+    counts.set(e.category, (counts.get(e.category) || 0) + 1)
+  }
+  return Array.from(counts.entries()).map(([name, count]) => ({ name, count }))
+})
+
+const filteredSharedVocabulary = computed(() => {
+  if (vocabFilterCategory.value === '全部') return activeSharedSourceEntries.value
+  return activeSharedSourceEntries.value.filter((e) => e.category === vocabFilterCategory.value)
+})
+
 function getSourceEntries(sourceUrl: string): VocabularyEntry[] {
   return sharedVocabulary.value.filter((e) => e.sourceUrl === sourceUrl)
 }
@@ -1143,6 +1167,10 @@ async function removeSyncSource(index: number): Promise<void> {
   const sources = store.sharedVocabSyncSources.filter((_, i) => i !== index)
   store.sharedVocabSyncSources = sources
   await store.saveSetting('sharedVocabSyncSources', sources)
+  if (sharedSourceTabIndex.value >= sources.length) {
+    sharedSourceTabIndex.value = Math.max(0, sources.length - 1)
+  }
+  vocabFilterCategory.value = '全部'
   await loadVocabulary()
 }
 
@@ -2090,12 +2118,9 @@ async function toggleVocabularyEnabled() {
 
         <!-- Shared vocabulary sub-tab -->
         <div v-if="vocabSubTab === 'shared'">
-          <!-- Sync sources management -->
+          <!-- Add sync source form -->
           <div class="setting-group">
-            <label class="setting-label">同步源</label>
-            <p class="setting-description">从远程地址同步词汇，严格保持与远端一致。</p>
-
-            <div v-if="showSyncSourceForm" class="vocab-add-form" style="margin-top: 8px;">
+            <div v-if="showSyncSourceForm" class="vocab-add-form">
               <input class="input-field" v-model="syncSourceUrl" placeholder="同步地址 *" style="flex: 2">
               <input class="input-field" v-model="syncSourceName" placeholder="名称（可选，自动识别）" style="flex: 1">
               <button class="btn btn-primary btn-sm" @click="addSyncSource" :disabled="!syncSourceUrl.trim() || vocabSyncLoading">
@@ -2103,7 +2128,7 @@ async function toggleVocabularyEnabled() {
               </button>
               <button class="btn btn-text btn-sm" @click="showSyncSourceForm = false">取消</button>
             </div>
-            <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
               <button v-if="!showSyncSourceForm" class="btn btn-text btn-sm" @click="showSyncSourceForm = true">
                 + 添加同步源
               </button>
@@ -2111,28 +2136,56 @@ async function toggleVocabularyEnabled() {
             </div>
           </div>
 
-          <!-- Vocabulary grouped by sync source -->
+          <!-- Sync source tabs -->
           <template v-if="store.sharedVocabSyncSources.length > 0">
-            <div v-for="(source, idx) in store.sharedVocabSyncSources" :key="idx" class="setting-group shared-source-group">
-              <div class="shared-source-header">
+            <div class="shared-source-tabs">
+              <button
+                v-for="(source, idx) in store.sharedVocabSyncSources"
+                :key="idx"
+                :class="['shared-source-tab', { active: sharedSourceTabIndex === idx }]"
+                @click="sharedSourceTabIndex = idx; vocabFilterCategory = '全部'"
+              >
+                <span class="shared-source-tab-name">{{ source.name }}</span>
+                <span class="shared-source-tab-count">{{ getSourceEntries(source.url).length }}</span>
+              </button>
+            </div>
+
+            <!-- Active source content -->
+            <div v-if="activeSharedSource" class="shared-source-content">
+              <!-- Source info + actions bar -->
+              <div class="shared-source-bar">
                 <div class="sync-source-info">
-                  <span class="sync-source-name">{{ source.name }}</span>
-                  <span class="sync-source-url" :title="source.url">{{ source.url }}</span>
-                  <span v-if="source.lastSyncAt" class="sync-source-time">{{ new Date(source.lastSyncAt).toLocaleDateString() }} 同步</span>
-                  <span class="sync-source-count">{{ getSourceEntries(source.url).length }} 条</span>
+                  <span class="sync-source-url" :title="activeSharedSource.url">{{ activeSharedSource.url }}</span>
+                  <span v-if="activeSharedSource.lastSyncAt" class="sync-source-time">{{ new Date(activeSharedSource.lastSyncAt).toLocaleDateString() }} 同步</span>
                 </div>
                 <div class="sync-source-actions">
-                  <button class="vocab-icon-btn" title="同步" :disabled="vocabSyncLoading" @click="syncSource(idx)">
+                  <button class="vocab-icon-btn" title="同步" :disabled="vocabSyncLoading" @click="syncSource(sharedSourceTabIndex)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                   </button>
-                  <button class="vocab-icon-btn vocab-icon-btn-danger" title="移除" @click="removeSyncSource(idx)">
+                  <button class="vocab-icon-btn vocab-icon-btn-danger" title="移除" @click="removeSyncSource(sharedSourceTabIndex)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                   </button>
                 </div>
               </div>
+
+              <!-- Category filter chips -->
+              <div class="vocab-filter-chips">
+                <button
+                  :class="['filter-chip', { active: vocabFilterCategory === '全部' }]"
+                  @click="vocabFilterCategory = '全部'"
+                >全部 ({{ activeSharedSourceEntries.length }})</button>
+                <template v-for="cat in sharedCategoryStats" :key="cat.name">
+                  <button
+                    :class="['filter-chip', { active: vocabFilterCategory === cat.name }]"
+                    @click="vocabFilterCategory = cat.name"
+                  >{{ cat.name }} ({{ cat.count }})</button>
+                </template>
+              </div>
+
+              <!-- Vocabulary list -->
               <div class="vocab-list-container">
-                <div class="vocab-list" v-if="getSourceEntries(source.url).length > 0">
-                  <div v-for="entry in getSourceEntries(source.url)" :key="entry.id" :class="['vocab-item', { disabled: !entry.enabled }]">
+                <div class="vocab-list" v-if="filteredSharedVocabulary.length > 0">
+                  <div v-for="entry in filteredSharedVocabulary" :key="entry.id" :class="['vocab-item', { disabled: !entry.enabled }]">
                     <div class="vocab-item-main">
                       <span class="vocab-term">{{ entry.term }}</span>
                       <span class="vocab-category">{{ entry.category }}</span>
@@ -2145,7 +2198,9 @@ async function toggleVocabularyEnabled() {
                     </div>
                   </div>
                 </div>
-                <div v-else class="vocab-empty">尚未同步，点击同步按钮获取词汇</div>
+                <div v-else class="vocab-empty">
+                  {{ vocabFilterCategory === '全部' ? '尚未同步，点击同步按钮获取词汇' : '该分类下暂无词汇' }}
+                </div>
               </div>
             </div>
           </template>
@@ -3391,6 +3446,84 @@ async function toggleVocabularyEnabled() {
   flex-direction: row;
   align-items: center;
   gap: 8px;
+}
+
+/* Shared source tabs */
+.shared-source-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.shared-source-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.shared-source-tab:hover {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.shared-source-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}
+
+.shared-source-tab-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shared-source-tab-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-secondary);
+}
+
+.shared-source-tab.active .shared-source-tab-count {
+  background: rgba(0, 113, 227, 0.1);
+  color: var(--accent-color);
+}
+
+.shared-source-content {
+  animation: fadeIn 0.15s ease-out;
+}
+
+.shared-source-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.shared-source-bar .sync-source-info {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 </style>
