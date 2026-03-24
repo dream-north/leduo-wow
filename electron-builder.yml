@@ -22,6 +22,7 @@ extraResources:
   - from: build/tray-icon@3x.png
     to: build/tray-icon@3x.png
 mac:
+  artifactName: leduo-wow-${version}-${arch}-mac.${ext}
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   hardenedRuntime: true

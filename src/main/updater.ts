@@ -120,5 +120,11 @@ export function downloadUpdate(): void {
 
 export function installUpdate(): void {
   if (currentStatus !== 'downloaded') return
-  autoUpdater.quitAndInstall()
+  console.log('[Updater] Installing update and restarting...')
+  // Delay to let IPC response reach renderer before app quits.
+  // Pass (false, true): isSilent=false, isForceRunAfter=true
+  // so macOS properly restarts after update.
+  setTimeout(() => {
+    autoUpdater.quitAndInstall(false, true)
+  }, 100)
 }
