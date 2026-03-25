@@ -125,6 +125,22 @@ export function installUpdate(): void {
   // Pass (false, true): isSilent=false, isForceRunAfter=true
   // so macOS properly restarts after update.
   setTimeout(() => {
+    // Remove close event listeners from all windows to prevent them
+    // from blocking the quit process. Settings window and assistant result
+    // window both use e.preventDefault() in their close handlers to hide
+    // instead of close, which can prevent app.quit() (called internally
+    // by quitAndInstall) from completing.
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.removeAllListeners('close')
+    }
+
     autoUpdater.quitAndInstall(false, true)
+
+    // Safety net: if quitAndInstall didn't terminate the process,
+    // force exit so the app doesn't linger.
+    setTimeout(() => {
+      console.log('[Updater] Force exiting as safety net...')
+      app.exit(0)
+    }, 3000)
   }, 100)
 }
