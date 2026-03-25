@@ -162,6 +162,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const sharedVocabularySyncUrl = ref('')
   const sharedVocabularySyncToken = ref('')
   const customModels = ref<{ asr: string[]; text: string[]; vocab: string[] }>({ asr: [], text: [], vocab: [] })
+  const customVocabularyCategories = ref<string[]>([])
   const sharedVocabSyncSources = ref<SharedVocabSyncSource[]>([])
 
   async function loadSettings(): Promise<void> {
@@ -218,6 +219,7 @@ export const useSettingsStore = defineStore('settings', () => {
         : { asr: [], text: [], vocab: [] }
       // Shared vocab sync sources
       sharedVocabSyncSources.value = config.sharedVocabSyncSources ?? []
+      customVocabularyCategories.value = config.customVocabularyCategories ?? []
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {
@@ -289,6 +291,7 @@ export const useSettingsStore = defineStore('settings', () => {
     sharedVocabularySyncUrl,
     sharedVocabularySyncToken,
     customModels,
+    customVocabularyCategories,
     sharedVocabSyncSources,
     loadSettings,
     saveSetting

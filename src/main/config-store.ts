@@ -70,6 +70,7 @@ interface StoreSchema {
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   customModels: { asr: string[]; text: string[]; vocab: string[] }
+  customVocabularyCategories: string[]
 }
 
 interface HistorySchema {
@@ -157,7 +158,8 @@ export function initConfigStore(): Store<StoreSchema> {
       vocabularyMaxEntries: DEFAULT_CONFIG.vocabularyMaxEntries,
       sharedVocabularySyncUrl: DEFAULT_CONFIG.sharedVocabularySyncUrl,
       sharedVocabularySyncToken: DEFAULT_CONFIG.sharedVocabularySyncToken,
-      customModels: { asr: [], text: [], vocab: [] }
+      customModels: { asr: [], text: [], vocab: [] },
+      customVocabularyCategories: []
     }
   })
 
@@ -285,7 +287,8 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
       return (raw && typeof raw === 'object' && !Array.isArray(raw))
         ? raw as { asr: string[]; text: string[]; vocab: string[] }
         : { asr: [], text: [], vocab: [] }
-    })()
+    })(),
+    customVocabularyCategories: (s.get('customVocabularyCategories') ?? []) as string[]
   }
 }
 

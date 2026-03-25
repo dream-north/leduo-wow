@@ -54,6 +54,8 @@ const vocabFilterCategory = ref('全部')
 const vocabNewTerm = ref('')
 const vocabNewDesc = ref('')
 const vocabNewCategory = ref('其他')
+const vocabNewCategoryCustom = ref('')
+const vocabEditCategoryCustom = ref('')
 const showVocabAddForm = ref(false)
 const showSyncSourceForm = ref(false)
 const syncSourceName = ref('')
@@ -954,6 +956,10 @@ onUnmounted(() => {
 
 // ---- Vocabulary (Memory tab) functions ----
 
+const allVocabularyCategories = computed(() => {
+  return [...VOCABULARY_CATEGORY_PRESETS, ...store.customVocabularyCategories]
+})
+
 // Computed: category stats for filter chips
 const personalCategoryStats = computed(() => {
   const counts = new Map<string, number>()
@@ -1196,6 +1202,29 @@ async function toggleVocabularyEnabled() {
   const newVal = !store.vocabularyEnabled
   store.vocabularyEnabled = newVal
   await store.saveSetting('vocabularyEnabled', newVal)
+}
+
+async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
+  const raw = target === 'new' ? vocabNewCategoryCustom.value : vocabEditCategoryCustom.value
+  const name = raw.trim()
+  if (!name) {
+    // Empty input: revert to default
+    if (target === 'new') vocabNewCategory.value = '其他'
+    else vocabEditCategory.value = '其他'
+    return
+  }
+  const all = [...VOCABULARY_CATEGORY_PRESETS, ...store.customVocabularyCategories]
+  if (!all.includes(name)) {
+    store.customVocabularyCategories.push(name)
+    await store.saveSetting('customVocabularyCategories', store.customVocabularyCategories)
+  }
+  if (target === 'new') {
+    vocabNewCategory.value = name
+    vocabNewCategoryCustom.value = ''
+  } else {
+    vocabEditCategory.value = name
+    vocabEditCategoryCustom.value = ''
+  }
 }
 </script>
 
@@ -2022,6 +2051,8 @@ async function toggleVocabularyEnabled() {
               </div>
             </div>
           </template>
+
+
         </div>
 
         <!-- Personal vocabulary sub-tab -->
@@ -2052,9 +2083,15 @@ async function toggleVocabularyEnabled() {
           <div v-if="showVocabAddForm" class="vocab-add-form">
             <input class="input-field vocab-input-term" v-model="vocabNewTerm" placeholder="词汇 *" @keydown.enter="addVocabularyEntry">
             <input class="input-field vocab-input-desc" v-model="vocabNewDesc" placeholder="描述（可选）">
-            <select class="input-field vocab-input-category" v-model="vocabNewCategory">
-              <option v-for="cat in VOCABULARY_CATEGORY_PRESETS" :key="cat" :value="cat">{{ cat }}</option>
-            </select>
+            <template v-if="vocabNewCategory === '__custom__'">
+              <input class="input-field vocab-input-category" v-model="vocabNewCategoryCustom" placeholder="输入新分类" @keydown.enter="confirmInlineCategory('new')" @blur="confirmInlineCategory('new')">
+            </template>
+            <template v-else>
+              <select class="input-field vocab-input-category" v-model="vocabNewCategory">
+                <option v-for="cat in allVocabularyCategories" :key="cat" :value="cat">{{ cat }}</option>
+                <option value="__custom__">+ 自定义...</option>
+              </select>
+            </template>
             <button class="btn btn-primary btn-sm" @click="addVocabularyEntry" :disabled="!vocabNewTerm.trim()">确认</button>
             <button class="btn btn-text btn-sm" @click="showVocabAddForm = false">取消</button>
           </div>
@@ -2081,9 +2118,15 @@ async function toggleVocabularyEnabled() {
                   <div class="vocab-edit-row">
                     <input class="input-field vocab-input-term" v-model="vocabEditTerm" @keydown.enter="saveEditVocabulary('personal')">
                     <input class="input-field vocab-input-desc" v-model="vocabEditDesc">
-                    <select class="input-field vocab-input-category" v-model="vocabEditCategory">
-                      <option v-for="cat in VOCABULARY_CATEGORY_PRESETS" :key="cat" :value="cat">{{ cat }}</option>
-                    </select>
+                    <template v-if="vocabEditCategory === '__custom__'">
+                      <input class="input-field vocab-input-category" v-model="vocabEditCategoryCustom" placeholder="输入新分类" @keydown.enter="confirmInlineCategory('edit')" @blur="confirmInlineCategory('edit')">
+                    </template>
+                    <template v-else>
+                      <select class="input-field vocab-input-category" v-model="vocabEditCategory">
+                        <option v-for="cat in allVocabularyCategories" :key="cat" :value="cat">{{ cat }}</option>
+                        <option value="__custom__">+ 自定义...</option>
+                      </select>
+                    </template>
                     <div class="vocab-edit-actions">
                       <button class="btn btn-primary btn-sm" @click="saveEditVocabulary('personal')">保存</button>
                       <button class="btn btn-text btn-sm" @click="cancelEditVocabulary">取消</button>

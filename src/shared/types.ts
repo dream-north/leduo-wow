@@ -170,6 +170,7 @@ export interface AppConfig {
   sharedVocabularySyncToken: string
   sharedVocabSyncSources: SharedVocabSyncSource[]
   customModels: { asr: string[]; text: string[]; vocab: string[] }
+  customVocabularyCategories: string[]
 }
 
 export interface TranscriptionRecord {
@@ -311,7 +312,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   sharedVocabularySyncUrl: '',
   sharedVocabularySyncToken: '',
   sharedVocabSyncSources: [] as SharedVocabSyncSource[],
-  customModels: { asr: [], text: [], vocab: [] }
+  customModels: { asr: [], text: [], vocab: [] },
+  customVocabularyCategories: [] as string[]
 }
 
 // Auto-update types
