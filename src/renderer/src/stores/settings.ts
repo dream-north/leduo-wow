@@ -175,6 +175,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const vocabularyPrompt = ref(VOCAB_PROMPT_DEFAULT_TEMPLATE)
   const vocabularyPromptPresets = ref<PolishPreset[]>([...VOCAB_PROMPT_BUILTIN_PRESETS])
   const vocabularyPromptActivePresetIndex = ref(0)
+  const vocabularyInPolish = ref(false)
   const sharedVocabularySyncUrl = ref('')
   const sharedVocabularySyncToken = ref('')
   const customModels = ref<{ asr: string[]; text: string[]; vocab: string[] }>({ asr: [], text: [], vocab: [] })
@@ -240,6 +241,7 @@ export const useSettingsStore = defineStore('settings', () => {
       vocabularyPrompt.value = config.vocabularyPrompt ?? VOCAB_PROMPT_DEFAULT_TEMPLATE
       vocabularyPromptPresets.value = config.vocabularyPromptPresets ?? [...VOCAB_PROMPT_BUILTIN_PRESETS]
       vocabularyPromptActivePresetIndex.value = config.vocabularyPromptActivePresetIndex ?? 0
+      vocabularyInPolish.value = config.vocabularyInPolish ?? false
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {
@@ -310,6 +312,7 @@ export const useSettingsStore = defineStore('settings', () => {
     vocabularyPrompt,
     vocabularyPromptPresets,
     vocabularyPromptActivePresetIndex,
+    vocabularyInPolish,
     sharedVocabularySyncUrl,
     sharedVocabularySyncToken,
     customModels,

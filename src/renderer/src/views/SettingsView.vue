@@ -2261,6 +2261,13 @@ function closeMergeDialog(): void {
                 <span class="toggle-thumb"></span>
               </button>
             </div>
+            <div class="toggle-row">
+              <span>词汇辅助润色</span>
+              <button :class="['toggle', { active: store.vocabularyInPolish }]" @click="store.vocabularyInPolish = !store.vocabularyInPolish; store.saveSetting('vocabularyInPolish', store.vocabularyInPolish)">
+                <span class="toggle-thumb"></span>
+              </button>
+            </div>
+            <p class="setting-description" style="margin-top: -4px">开启后，词汇提示词会拼接到润色提示词中，帮助润色模型更准确地保留专有名词。</p>
           </div>
 
           <template v-if="store.vocabularyEnabled">

@@ -242,6 +242,7 @@ export interface AppConfig {
   vocabularyPrompt: string
   vocabularyPromptPresets: PolishPreset[]
   vocabularyPromptActivePresetIndex: number
+  vocabularyInPolish: boolean
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   sharedVocabSyncSources: SharedVocabSyncSource[]
@@ -398,6 +399,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   vocabularyPrompt: VOCAB_PROMPT_DEFAULT_TEMPLATE,
   vocabularyPromptPresets: [...VOCAB_PROMPT_BUILTIN_PRESETS],
   vocabularyPromptActivePresetIndex: 0,
+  vocabularyInPolish: false,
   sharedVocabularySyncUrl: '',
   sharedVocabularySyncToken: '',
   sharedVocabSyncSources: [] as SharedVocabSyncSource[],

@@ -69,6 +69,7 @@ interface StoreSchema {
   vocabularyPrompt: string
   vocabularyPromptPresets: PolishPreset[]
   vocabularyPromptActivePresetIndex: number
+  vocabularyInPolish: boolean
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   customModels: { asr: string[]; text: string[]; vocab: string[] }
@@ -160,6 +161,7 @@ export function initConfigStore(): Store<StoreSchema> {
       vocabularyPrompt: DEFAULT_CONFIG.vocabularyPrompt,
       vocabularyPromptPresets: DEFAULT_CONFIG.vocabularyPromptPresets,
       vocabularyPromptActivePresetIndex: DEFAULT_CONFIG.vocabularyPromptActivePresetIndex,
+      vocabularyInPolish: DEFAULT_CONFIG.vocabularyInPolish,
       sharedVocabularySyncUrl: DEFAULT_CONFIG.sharedVocabularySyncUrl,
       sharedVocabularySyncToken: DEFAULT_CONFIG.sharedVocabularySyncToken,
       customModels: { asr: [], text: [], vocab: [] },
@@ -274,6 +276,7 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     vocabularyPrompt: s.get('vocabularyPrompt') ?? DEFAULT_CONFIG.vocabularyPrompt,
     vocabularyPromptPresets: s.get('vocabularyPromptPresets') ?? DEFAULT_CONFIG.vocabularyPromptPresets,
     vocabularyPromptActivePresetIndex: s.get('vocabularyPromptActivePresetIndex') ?? DEFAULT_CONFIG.vocabularyPromptActivePresetIndex,
+    vocabularyInPolish: s.get('vocabularyInPolish') ?? DEFAULT_CONFIG.vocabularyInPolish,
     sharedVocabularySyncUrl: s.get('sharedVocabularySyncUrl') ?? DEFAULT_CONFIG.sharedVocabularySyncUrl,
     sharedVocabularySyncToken: s.get('sharedVocabularySyncToken') ?? DEFAULT_CONFIG.sharedVocabularySyncToken,
     sharedVocabSyncSources: (() => {

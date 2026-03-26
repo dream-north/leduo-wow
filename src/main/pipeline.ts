@@ -326,6 +326,16 @@ export class Pipeline extends EventEmitter {
     }
     this.audioChunks = []
 
+    // Build polish prompt, optionally with vocabulary hints
+    let polishPrompt = config.polishPrompt
+    if (config.vocabularyInPolish && config.vocabularyEnabled) {
+      const activeVocab = getActiveVocabulary(this.vocabularyStore)
+      if (activeVocab.length > 0) {
+        const vocabHint = FlashASRClient.buildVocabularySystemPrompt(activeVocab.slice(0, 200), config.vocabularyPrompt)
+        polishPrompt = `${polishPrompt}\n\n${vocabHint}`
+      }
+    }
+
     if (this.currentMode === 'transcription' && config.polishEnabled) {
       const apiKey = config.polishApiKey
       if (!apiKey) {
@@ -338,7 +348,7 @@ export class Pipeline extends EventEmitter {
           const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
             outputText,
-            config.polishPrompt,
+            polishPrompt,
             this.screenshotBase64 || undefined,
             () => {
               if (this.status === PipelineStatus.POLISHING) {
@@ -372,7 +382,7 @@ export class Pipeline extends EventEmitter {
           const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
             outputText,
-            config.polishPrompt,
+            polishPrompt,
             this.screenshotBase64 || undefined,
             () => {
               if (this.status === PipelineStatus.POLISHING) {

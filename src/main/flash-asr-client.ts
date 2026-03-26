@@ -64,8 +64,10 @@ export class FlashASRClient {
     if (entries.length === 0) return ''
 
     const lines = entries.map((e) => {
-      if (e.description) return `- ${e.term}：${e.description}`
-      return `- ${e.term}`
+      const parts = [e.term]
+      if (e.category) parts.push(`[${e.category}]`)
+      if (e.description) parts.push(e.description)
+      return `- ${parts.join('：')}`
     })
     const vocabList = lines.join('\n')
 
