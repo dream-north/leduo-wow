@@ -2256,18 +2256,23 @@ function closeMergeDialog(): void {
         <div v-if="vocabSubTab === 'settings'">
           <div class="setting-group">
             <div class="toggle-row">
-              <span>启用词汇增强识别</span>
+              <div>
+                <span>词汇增强识别</span>
+                <p class="setting-description" style="margin: 2px 0 0">二次识别，提升专有名词准确率，但会增加延迟</p>
+              </div>
               <button :class="['toggle', { active: store.vocabularyEnabled }]" @click="toggleVocabularyEnabled">
                 <span class="toggle-thumb"></span>
               </button>
             </div>
             <div class="toggle-row">
-              <span>词汇辅助润色</span>
+              <div>
+                <span>词汇辅助润色</span>
+                <p class="setting-description" style="margin: 2px 0 0">将词汇提示词拼接到润色提示词中</p>
+              </div>
               <button :class="['toggle', { active: store.vocabularyInPolish }]" @click="store.vocabularyInPolish = !store.vocabularyInPolish; store.saveSetting('vocabularyInPolish', store.vocabularyInPolish)">
                 <span class="toggle-thumb"></span>
               </button>
             </div>
-            <p class="setting-description" style="margin-top: -4px">开启后，词汇提示词会拼接到润色提示词中，帮助润色模型更准确地保留专有名词。</p>
           </div>
 
           <template v-if="store.vocabularyEnabled">
@@ -2307,9 +2312,10 @@ function closeMergeDialog(): void {
                 <button class="btn btn-primary" @click="saveVocabModel(); showCustomVocabModel = false">保存</button>
               </div>
             </div>
+          </template>
 
-            <!-- Vocabulary prompt presets -->
-            <div class="setting-group">
+          <!-- Vocabulary prompt presets (always visible) -->
+          <div class="setting-group">
               <label class="setting-label">提示词预设</label>
               <div class="preset-list">
                 <button
@@ -2374,7 +2380,6 @@ function closeMergeDialog(): void {
                 <button class="btn btn-primary" @click="saveVocabPrompt">保存提示词</button>
               </div>
             </div>
-          </template>
         </div>
 
         <!-- Personal vocabulary sub-tab -->
