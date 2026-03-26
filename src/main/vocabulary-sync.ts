@@ -150,8 +150,7 @@ export async function previewMerge(
           category: personal.category,
           origin: 'both',
           conflict: { personalDescription: personal.description, personalCategory: personal.category, remoteDescription: remote.description, remoteCategory: remote.category },
-          selected: true,
-          resolution: 'keep-personal'
+          selected: true
         })
         conflictCount++
       }
