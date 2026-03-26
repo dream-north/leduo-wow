@@ -18,7 +18,7 @@
  */
 
 import { EventEmitter } from 'events'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, execSync, ChildProcess } from 'child_process'
 import path from 'path'
 import type { OverlayHudPayload, OverlayResultPayload, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 
@@ -37,6 +37,9 @@ export type KeyEventHandler = (info: KeyInfo) => void
 let currentModifiers: Set<string> = new Set()
 let currentKeys: Set<string> = new Set()
 
+// Module-level PID tracking for process cleanup on exit
+let activeChildPid: number | null = null
+
 class SwiftKeyboardListener extends EventEmitter {
   private process: ChildProcess | null = null
   private running: boolean = false
@@ -51,6 +54,44 @@ class SwiftKeyboardListener extends EventEmitter {
     this.refCount = 0
     this.stopping = false
     this.eventTapReady = false
+    activeChildPid = null
+  }
+
+  /**
+   * Synchronously kill the child process (SIGKILL).
+   * Safe to call from process.on('exit') handlers.
+   */
+  forceKillSync(): void {
+    if (activeChildPid !== null) {
+      try {
+        process.kill(activeChildPid, 'SIGKILL')
+      } catch {
+        // ESRCH: process already exited — ignore
+      }
+      activeChildPid = null
+    }
+  }
+
+  /**
+   * Kill any stale SwiftKeyboardListener processes from previous runs.
+   */
+  private cleanupStaleProcesses(): void {
+    if (process.platform !== 'darwin') return
+
+    try {
+      const output = execSync('pgrep -x SwiftKeyboardListener', { encoding: 'utf8' })
+      const pids = output.trim().split('\n').map(Number).filter(Boolean)
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL')
+          console.log('[SwiftKeyboardListener] Killed stale process:', pid)
+        } catch {
+          // Process may have already exited
+        }
+      }
+    } catch {
+      // pgrep returns exit code 1 when no matches — expected
+    }
   }
 
   /**
@@ -61,6 +102,8 @@ class SwiftKeyboardListener extends EventEmitter {
       this.refCount += 1
       return true
     }
+
+    this.cleanupStaleProcesses()
 
     // Find the Swift executable
     let executablePath: string
@@ -105,6 +148,8 @@ class SwiftKeyboardListener extends EventEmitter {
         console.error('[SwiftKeyboardListener] Failed to spawn process')
         return false
       }
+
+      activeChildPid = this.process.pid ?? null
 
       this.process.stdin.on('error', (err) => {
         if (this.stopping || (err as NodeJS.ErrnoException).code === 'EPIPE') {
@@ -222,6 +267,8 @@ class SwiftKeyboardListener extends EventEmitter {
       return
     }
 
+    const pid = this.process?.pid ?? null
+
     try {
       this.stopping = true
       this.sendCommand({ command: 'stop' })
@@ -237,6 +284,20 @@ class SwiftKeyboardListener extends EventEmitter {
       console.log('[SwiftKeyboardListener] Stopped')
     } catch (err) {
       console.error('[SwiftKeyboardListener] Failed to stop:', err)
+    }
+
+    // SIGKILL fallback: if SIGTERM didn't work within 500ms, force kill
+    if (pid !== null && pid !== undefined) {
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0) // Check if still alive (throws if dead)
+          console.log('[SwiftKeyboardListener] Process still alive after SIGTERM, sending SIGKILL')
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // ESRCH: already exited — good
+        }
+        activeChildPid = null
+      }, 500)
     }
   }
 
@@ -466,6 +527,11 @@ class SwiftKeyboardListener extends EventEmitter {
 }
 
 export const keyboardListener = new SwiftKeyboardListener()
+
+// Last-resort cleanup: synchronously SIGKILL the child when Node process exits
+process.on('exit', () => {
+  keyboardListener.forceKillSync()
+})
 
 /**
  * Parse a shortcut string into components

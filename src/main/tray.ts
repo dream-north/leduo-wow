@@ -103,7 +103,7 @@ export function updateTrayMenu(status?: PipelineStatus): void {
     {
       label: '退出 乐多汪汪',
       accelerator: quitAccelerator,
-      click: () => app.exit(0)
+      click: () => app.quit()
     }
   ])
 }

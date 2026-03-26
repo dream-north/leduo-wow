@@ -359,6 +359,12 @@ app.on('will-quit', () => {
   shortcutService?.destroy()
 })
 
+// Safety net: synchronously kill SwiftKeyboardListener on process exit.
+// Covers app.exit(0) paths (tray, updater) that skip will-quit.
+process.on('exit', () => {
+  keyboardListener.forceKillSync()
+})
+
 app.on('activate', () => {
   showSettingsWindow()
   shortcutService?.refresh()
