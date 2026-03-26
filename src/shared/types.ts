@@ -5,7 +5,13 @@ export enum PipelineStatus {
   ENHANCING_ASR = 'enhancing_asr',
   POLISHING = 'polishing',
   INPUTTING = 'inputting',
+  CONVERSING = 'conversing',
   ERROR = 'error'
+}
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 export type InputMethod = 'clipboard' | 'applescript'
@@ -50,6 +56,9 @@ export interface OverlayResultPayload {
   reasoningCollapsed?: boolean
   codeMarkdown?: string
   codeCollapsed?: boolean
+  turnIndex?: number
+  userMessage?: string
+  isConversation?: boolean
 }
 
 export interface OverlayResultStat {

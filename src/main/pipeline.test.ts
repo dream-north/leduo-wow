@@ -247,7 +247,8 @@ describe('Pipeline assistant output mode', () => {
         enableSearch: false,
         thinkingBudget: 256,
         signal: expect.any(AbortSignal)
-      }
+      },
+      []
     )
   })
 
@@ -325,7 +326,8 @@ describe('Pipeline assistant output mode', () => {
         enableCodeInterpreter: true,
         thinkingBudget: 256,
         signal: expect.any(AbortSignal)
-      }
+      },
+      []
     )
     expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
       text: '计算结果是 1728',
@@ -378,7 +380,8 @@ describe('Pipeline assistant output mode', () => {
         enableCodeInterpreter: false,
         thinkingBudget: 256,
         signal: expect.any(AbortSignal)
-      }
+      },
+      []
     )
     expect(overlay.showResult).toHaveBeenCalledWith(expect.objectContaining({
       text: '杭州明天多云。[ref_1]',

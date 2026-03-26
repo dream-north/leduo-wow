@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import { POLISH_DEFAULT_BASE_URL } from '../shared/types'
-import type { OverlayResultSource } from '../shared/types'
+import type { ConversationMessage, OverlayResultSource } from '../shared/types'
 
 interface LLMRequestOptions {
   enableThinking?: boolean
@@ -226,12 +226,18 @@ export class LLMPolisher {
     systemPrompt: string,
     screenshotBase64: string | undefined,
     onProgress: (progress: AssistantStreamProgress) => void,
-    options?: LLMRequestOptions
+    options?: LLMRequestOptions,
+    conversationHistory?: ConversationMessage[]
   ): Promise<AssistantResponseResult> {
     const startTime = Date.now()
     try {
       const hasImage = !!screenshotBase64
-      console.log(`[LLMPolisher] Stream start: model=${this.model}, textLen=${text.length}, image=${hasImage}`)
+      console.log(`[LLMPolisher] Stream start: model=${this.model}, textLen=${text.length}, image=${hasImage}, historyLen=${conversationHistory?.length ?? 0}`)
+
+      const historyMessages = (conversationHistory ?? []).map((msg) => ({
+        role: msg.role,
+        content: msg.content
+      }))
 
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -244,6 +250,7 @@ export class LLMPolisher {
           model: this.model,
           messages: [
             { role: 'system', content: systemPrompt },
+            ...historyMessages,
             { role: 'user', content: this.buildUserContent(text, screenshotBase64) }
           ],
           temperature: 0.3,
@@ -354,7 +361,8 @@ export class LLMPolisher {
     text: string,
     systemPrompt: string,
     screenshotBase64: string | undefined,
-    options?: LLMRequestOptions
+    options?: LLMRequestOptions,
+    conversationHistory?: ConversationMessage[]
   ): Promise<AssistantResponseResult> {
     const startTime = Date.now()
     const responseClient = new OpenAI({
@@ -381,11 +389,17 @@ export class LLMPolisher {
       })
     }
 
+    const historyInput = (conversationHistory ?? []).map((msg) => ({
+      role: msg.role as string,
+      content: [{ type: 'input_text' as const, text: msg.content }]
+    }))
+
     try {
       const response = await responseClient.responses.create({
         model: this.model,
         input: [
           { role: 'system', content: systemPrompt },
+          ...historyInput,
           { role: 'user', content: userContent }
         ] as any,
         tools,
@@ -426,7 +440,8 @@ export class LLMPolisher {
     systemPrompt: string,
     screenshotBase64: string | undefined,
     onProgress: (progress: AssistantStreamProgress) => void,
-    options?: LLMRequestOptions
+    options?: LLMRequestOptions,
+    conversationHistory?: ConversationMessage[]
   ): Promise<AssistantResponseResult> {
     const startTime = Date.now()
     const responseClient = new OpenAI({
@@ -453,6 +468,11 @@ export class LLMPolisher {
       })
     }
 
+    const historyInput = (conversationHistory ?? []).map((msg) => ({
+      role: msg.role as string,
+      content: [{ type: 'input_text' as const, text: msg.content }]
+    }))
+
     const buildCodeMarkdown = (code: string, logs: string): string | undefined => {
       const sections: string[] = []
       if (code.trim()) {
@@ -476,6 +496,7 @@ export class LLMPolisher {
       model: this.model,
       input: [
         { role: 'system', content: systemPrompt },
+        ...historyInput,
         { role: 'user', content: userContent }
       ] as any,
       tools,

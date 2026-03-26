@@ -28,6 +28,8 @@ export const IPC = {
   ASSISTANT_RESULT_GET_LATEST: 'assistant-result:get-latest',
   ASSISTANT_RESULT_COPY: 'assistant-result:copy',
   ASSISTANT_RESULT_CLOSE: 'assistant-result:close',
+  ASSISTANT_CONVERSATION_SEND_TEXT: 'assistant-conversation:send-text',
+  ASSISTANT_CONVERSATION_VOICE_REQUEST: 'assistant-conversation:voice-request',
   OPEN_SETTINGS: 'open:settings',
   DIALOG_SELECT_FOLDER: 'dialog:select-folder',
   SHELL_OPEN_PATH: 'shell:open-path',

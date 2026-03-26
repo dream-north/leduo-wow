@@ -19,6 +19,8 @@ let isQuitting = false
 const latestPayloadByWindow = new WeakMap<BrowserWindow, AssistantResultPayload>()
 const rendererReadyByWindow = new WeakMap<BrowserWindow, boolean>()
 const pendingShowByWindow = new WeakMap<BrowserWindow, boolean>()
+const throttledPayloadByWindow = new WeakMap<BrowserWindow, AssistantResultPayload | null>()
+const throttleTimerByWindow = new WeakMap<BrowserWindow, ReturnType<typeof setTimeout> | null>()
 
 export interface AssistantResultPayload {
   text: string
@@ -31,6 +33,9 @@ export interface AssistantResultPayload {
   reasoningCollapsed?: boolean
   codeMarkdown?: string
   codeCollapsed?: boolean
+  turnIndex?: number
+  userMessage?: string
+  isConversation?: boolean
 }
 
 app.on('before-quit', () => {
@@ -79,9 +84,13 @@ export function createAssistantResultWindow(): BrowserWindow {
   })
 
   win.on('closed', () => {
+    const timer = throttleTimerByWindow.get(win)
+    if (timer) clearTimeout(timer)
     latestPayloadByWindow.delete(win)
     rendererReadyByWindow.delete(win)
     pendingShowByWindow.delete(win)
+    throttledPayloadByWindow.delete(win)
+    throttleTimerByWindow.delete(win)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -171,11 +180,37 @@ export function showAssistantResultWindow(
     return
   }
 
-  dispatchAssistantResultPayload(win, payload)
+  // First call (window not visible yet): dispatch immediately to show the window.
+  // Subsequent calls while visible: coalesce via throttle to avoid flooding IPC.
+  if (!win.isVisible()) {
+    dispatchAssistantResultPayload(win, payload)
+    return
+  }
+
+  throttledPayloadByWindow.set(win, payload)
+  if (!throttleTimerByWindow.get(win)) {
+    throttleTimerByWindow.set(
+      win,
+      setTimeout(() => {
+        throttleTimerByWindow.set(win, null)
+        const pending = throttledPayloadByWindow.get(win)
+        throttledPayloadByWindow.set(win, null)
+        if (pending && !win.isDestroyed()) {
+          dispatchAssistantResultPayload(win, pending)
+        }
+      }, 50)
+    )
+  }
 }
 
 export function hideAssistantResultWindow(win: BrowserWindow): void {
   pendingShowByWindow.set(win, false)
+  const timer = throttleTimerByWindow.get(win)
+  if (timer) {
+    clearTimeout(timer)
+    throttleTimerByWindow.set(win, null)
+  }
+  throttledPayloadByWindow.set(win, null)
   if (rendererReadyByWindow.get(win)) {
     win.webContents.send(IPC.ASSISTANT_RESULT_HIDE)
   }

@@ -3,7 +3,7 @@ import { EventEmitter } from 'events'
 import { writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { join } from 'path'
 import { PipelineStatus, VoiceMode } from '../shared/types'
-import type { OverlayResultStat, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
+import type { ConversationMessage, OverlayResultStat, OverlayWindowPosition, OverlayWindowSize } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { ASRClient } from './asr-client'
 import { FlashASRClient } from './flash-asr-client'
@@ -35,6 +35,9 @@ export class Pipeline extends EventEmitter {
   private latestAssistantCodeMarkdown: string | undefined
   private latestAssistantStats: OverlayResultStat[] | undefined
   private latestAssistantSources: Array<{ index: number; title: string; url: string }> | undefined
+  private conversationHistory: ConversationMessage[] = []
+  private conversationTurnIndex: number = 0
+  private isFollowUp: boolean = false
 
   constructor(overlay: OverlayBackend, configStore: ConfigStore, vocabularyStore: VocabularyStore) {
     super()
@@ -64,18 +67,34 @@ export class Pipeline extends EventEmitter {
   async toggle(mode: VoiceMode = 'transcription'): Promise<void> {
     if (this.status === PipelineStatus.IDLE) {
       await this.startRecording(mode)
+    } else if (this.status === PipelineStatus.CONVERSING) {
+      if (mode === 'assistant') {
+        await this.startFollowUpRecording()
+      } else {
+        console.log('[Pipeline] Transcription toggle during CONVERSING, ending conversation')
+        this.endConversation()
+        await this.startRecording(mode)
+      }
     } else if (this.status === PipelineStatus.RECORDING) {
       await this.stopRecording()
     } else {
       console.log(`[Pipeline] Toggle pressed during ${this.status}, force cancelling`)
-      this.forceCancel()
+      if (this.isFollowUp) {
+        this.cancelFollowUp()
+      } else {
+        this.forceCancel()
+      }
     }
   }
 
   cancel(): void {
-    if (this.status === PipelineStatus.IDLE) return
+    if (this.status === PipelineStatus.IDLE || this.status === PipelineStatus.CONVERSING) return
     console.log(`[Pipeline] Cancel requested during ${this.status}`)
-    this.forceCancel()
+    if (this.isFollowUp) {
+      this.cancelFollowUp()
+    } else {
+      this.forceCancel()
+    }
   }
 
   handleAssistantResultWindowClosed(position?: OverlayWindowPosition, size?: OverlayWindowSize): void {
@@ -84,6 +103,12 @@ export class Pipeline extends EventEmitter {
     }
     if (size) {
       setConfig(this.configStore, 'assistantResultWindowSize', size)
+    }
+
+    if (this.currentMode === 'assistant' && this.status === PipelineStatus.CONVERSING) {
+      console.log('[Pipeline] Assistant result window closed during conversation, ending conversation')
+      this.endConversation()
+      return
     }
 
     if (this.currentMode === 'assistant' && this.status === PipelineStatus.POLISHING) {
@@ -107,7 +132,9 @@ export class Pipeline extends EventEmitter {
   private async startRecording(mode: VoiceMode = 'transcription'): Promise<void> {
     const config = getConfig(this.configStore)
     this.currentMode = mode
-    this.overlay.hideResult()
+    if (!this.isFollowUp) {
+      this.overlay.hideResult()
+    }
 
     if (mode === 'assistant' && !config.assistantEnabled) {
       this.showHud('语音助手已禁用', 'error')
@@ -387,6 +414,16 @@ export class Pipeline extends EventEmitter {
             userPrompt = `我的语音指令是："${outputText}"\n\n选中的文本是：\n\`\`\`\n${selectedText}\n\`\`\``
           }
 
+          // Add user message to conversation history
+          this.conversationHistory.push({ role: 'user', content: userPrompt })
+          // Trim conversation history to last 20 messages (10 turns)
+          if (this.conversationHistory.length > 20) {
+            this.conversationHistory = this.conversationHistory.slice(-20)
+          }
+
+          const historyForLLM = this.conversationHistory.slice(0, -1)
+          const currentTurnIndex = this.conversationTurnIndex
+
           const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
           const initialAssistantWindowText = config.assistantEnableCodeInterpreter || config.assistantEnableSearch
             ? '正在思考，必要时会调用工具...'
@@ -397,7 +434,10 @@ export class Pipeline extends EventEmitter {
               format: 'markdown',
               position: config.assistantResultWindowPosition,
               size: config.assistantResultWindowSize,
-              reasoningCollapsed: false
+              reasoningCollapsed: false,
+              turnIndex: currentTurnIndex,
+              userMessage: userPrompt,
+              isConversation: true
             })
           }
           if (config.assistantEnableCodeInterpreter || config.assistantEnableSearch) {
@@ -428,7 +468,10 @@ export class Pipeline extends EventEmitter {
                     reasoningMarkdown: reasoningText || undefined,
                     reasoningCollapsed: isAnswering,
                     codeMarkdown,
-                    codeCollapsed
+                    codeCollapsed,
+                    turnIndex: currentTurnIndex,
+                    userMessage: userPrompt,
+                    isConversation: true
                   })
                 }
               },
@@ -438,7 +481,8 @@ export class Pipeline extends EventEmitter {
                 enableCodeInterpreter: config.assistantEnableCodeInterpreter,
                 thinkingBudget: config.assistantThinkingBudget,
                 signal: llmSignal
-              }
+              },
+              historyForLLM
             )
             outputText = assistantResult.text
             this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
@@ -462,7 +506,10 @@ export class Pipeline extends EventEmitter {
                     position: config.assistantResultWindowPosition,
                     size: config.assistantResultWindowSize,
                     reasoningMarkdown: reasoningText || undefined,
-                    reasoningCollapsed: isAnswering
+                    reasoningCollapsed: isAnswering,
+                    turnIndex: currentTurnIndex,
+                    userMessage: userPrompt,
+                    isConversation: true
                   })
                 }
               },
@@ -471,7 +518,8 @@ export class Pipeline extends EventEmitter {
                 enableSearch: config.assistantEnableSearch,
                 thinkingBudget: config.assistantThinkingBudget,
                 signal: llmSignal
-              }
+              },
+              historyForLLM
             )
             outputText = assistantResult.text
             this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
@@ -480,12 +528,23 @@ export class Pipeline extends EventEmitter {
             this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
             this.latestAssistantSources = assistantResult.sources
           }
+
+          // Add assistant response to conversation history
+          this.conversationHistory.push({ role: 'assistant', content: outputText })
         } catch (err) {
           if (this.isAbortError(err, llmSignal)) {
+            // Remove the user message we added if the request was cancelled
+            if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+              this.conversationHistory.pop()
+            }
             this.finishCancelledRun(llmSignal)
             return
           }
           console.error('Assistant error:', err)
+          // Remove the user message on error too
+          if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+            this.conversationHistory.pop()
+          }
           outputText = text
         }
       }
@@ -498,12 +557,12 @@ export class Pipeline extends EventEmitter {
 
     this.clearLLMAbortSignal(llmSignal)
 
-    this.setStatus(PipelineStatus.INPUTTING)
     this.overlay.hideHud()
     await this.delay(100)
 
     try {
       if (this.currentMode === 'assistant' && config.assistantOutputMode === 'window') {
+        const currentTurnIndex = this.conversationTurnIndex
         this.overlay.showResult({
           text: outputText,
           format: 'markdown',
@@ -515,23 +574,48 @@ export class Pipeline extends EventEmitter {
           codeMarkdown: this.latestAssistantCodeMarkdown,
           codeCollapsed: true,
           stats: this.latestAssistantStats,
-          sources: this.latestAssistantSources
+          sources: this.latestAssistantSources,
+          turnIndex: currentTurnIndex,
+          isConversation: true
         })
+
+        addHistory(this.configStore, {
+          id: Date.now().toString(),
+          timestamp: Date.now(),
+          originalText: text,
+          polishedText: outputText,
+          mode: this.currentMode
+        })
+        this.broadcastToWindows(IPC.PIPELINE_FINAL_TEXT, outputText, this.currentMode)
+
+        // Enter CONVERSING state instead of resetting
+        this.conversationTurnIndex++
+        this.isFollowUp = false
+        this.isProcessingComplete = false
+        this.partialText = ''
+        this.screenshotBase64 = ''
+        this.screenshotActive = false
+        this.audioChunks = []
+        if (this.asrClient) {
+          this.asrClient.abort()
+          this.asrClient = null
+        }
+        this.setStatus(PipelineStatus.CONVERSING)
       } else {
+        this.setStatus(PipelineStatus.INPUTTING)
         const inputter = new TextInputter()
         await inputter.input(outputText, config.inputMethod)
+
+        addHistory(this.configStore, {
+          id: Date.now().toString(),
+          timestamp: Date.now(),
+          originalText: text,
+          polishedText: outputText,
+          mode: this.currentMode
+        })
+        this.broadcastToWindows(IPC.PIPELINE_FINAL_TEXT, outputText, this.currentMode)
+        this.reset()
       }
-
-      addHistory(this.configStore, {
-        id: Date.now().toString(),
-        timestamp: Date.now(),
-        originalText: text,
-        polishedText: outputText,
-        mode: this.currentMode
-      })
-
-      this.broadcastToWindows(IPC.PIPELINE_FINAL_TEXT, outputText, this.currentMode)
-      this.reset()
     } catch (err) {
       console.error('Output error:', err)
       this.setStatus(PipelineStatus.ERROR)
@@ -565,6 +649,9 @@ export class Pipeline extends EventEmitter {
     this.latestAssistantStats = undefined
     this.latestAssistantSources = undefined
     this.isProcessingComplete = false
+    this.conversationHistory = []
+    this.conversationTurnIndex = 0
+    this.isFollowUp = false
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
     this.broadcastToWindows(IPC.AUDIO_STOP)
@@ -586,6 +673,9 @@ export class Pipeline extends EventEmitter {
     this.latestAssistantStats = undefined
     this.latestAssistantSources = undefined
     this.isProcessingComplete = true
+    this.conversationHistory = []
+    this.conversationTurnIndex = 0
+    this.isFollowUp = false
     this.broadcastToWindows(IPC.AUDIO_STOP)
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
@@ -593,6 +683,281 @@ export class Pipeline extends EventEmitter {
     setTimeout(() => {
       this.isProcessingComplete = false
     }, 100)
+  }
+
+  private cancelFollowUp(): void {
+    console.log('[Pipeline] cancelFollowUp()')
+    this.stopAppCheckPolling()
+    this.cancelActiveLLMRequest()
+    if (this.asrClient) {
+      this.asrClient.abort()
+      this.asrClient = null
+    }
+    // Remove the pending user message if we added one
+    if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+      this.conversationHistory.pop()
+    }
+    this.partialText = ''
+    this.screenshotBase64 = ''
+    this.screenshotActive = false
+    this.audioChunks = []
+    this.isProcessingComplete = false
+    this.isFollowUp = false
+    this.broadcastToWindows(IPC.AUDIO_STOP)
+    this.overlay.hideHud()
+    this.setStatus(PipelineStatus.CONVERSING)
+  }
+
+  private endConversation(): void {
+    console.log('[Pipeline] endConversation()')
+    this.stopAppCheckPolling()
+    this.cancelActiveLLMRequest()
+    if (this.asrClient) {
+      this.asrClient.abort()
+      this.asrClient = null
+    }
+    this.partialText = ''
+    this.screenshotBase64 = ''
+    this.screenshotActive = false
+    this.audioChunks = []
+    this.isProcessingComplete = false
+    this.conversationHistory = []
+    this.conversationTurnIndex = 0
+    this.isFollowUp = false
+    this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantReasoningMarkdown = undefined
+    this.latestAssistantCodeMarkdown = undefined
+    this.latestAssistantStats = undefined
+    this.latestAssistantSources = undefined
+    this.broadcastToWindows(IPC.AUDIO_STOP)
+    this.overlay.hideHud()
+    this.overlay.hideResult()
+    this.setStatus(PipelineStatus.IDLE)
+  }
+
+  async startFollowUpRecording(): Promise<void> {
+    if (this.status !== PipelineStatus.CONVERSING) {
+      console.warn(`[Pipeline] startFollowUpRecording called in unexpected state ${this.status}`)
+      return
+    }
+    console.log('[Pipeline] Starting follow-up voice recording')
+    this.isFollowUp = true
+    this.isProcessingComplete = false
+    await this.startRecording('assistant')
+  }
+
+  async handleFollowUpText(text: string): Promise<void> {
+    if (this.status !== PipelineStatus.CONVERSING) {
+      console.warn(`[Pipeline] handleFollowUpText called in unexpected state ${this.status}`)
+      return
+    }
+    if (!text.trim()) return
+
+    console.log(`[Pipeline] Follow-up text: "${text.substring(0, 50)}"`)
+    this.isFollowUp = true
+    this.isProcessingComplete = false
+
+    const config = getConfig(this.configStore)
+    const llmSignal = this.createLLMAbortSignal()
+    const showsAssistantResultWindow = config.assistantOutputMode === 'window'
+    this.latestAssistantDetailsMarkdown = undefined
+    this.latestAssistantReasoningMarkdown = undefined
+    this.latestAssistantCodeMarkdown = undefined
+    this.latestAssistantStats = undefined
+    this.latestAssistantSources = undefined
+
+    const apiKey = config.polishApiKey
+    if (!apiKey) {
+      console.warn('[Pipeline] No polishApiKey configured for follow-up')
+      this.isFollowUp = false
+      return
+    }
+
+    this.setStatus(PipelineStatus.POLISHING)
+    if (showsAssistantResultWindow) {
+      this.overlay.hideHud()
+    }
+
+    try {
+      // Capture fresh screenshot and selected text
+      if (config.screenshotEnabled) {
+        try {
+          this.screenshotBase64 = await this.captureScreen()
+        } catch (err) {
+          console.error('[Pipeline] Follow-up screenshot capture failed:', err)
+          this.screenshotBase64 = ''
+        }
+      }
+
+      const selectedText = await getSelectedText()
+      let userPrompt = text
+      if (selectedText) {
+        userPrompt = `我的语音指令是："${text}"\n\n选中的文本是：\n\`\`\`\n${selectedText}\n\`\`\``
+      }
+
+      // Add user message to history
+      this.conversationHistory.push({ role: 'user', content: userPrompt })
+      if (this.conversationHistory.length > 20) {
+        this.conversationHistory = this.conversationHistory.slice(-20)
+      }
+
+      const historyForLLM = this.conversationHistory.slice(0, -1)
+      const currentTurnIndex = this.conversationTurnIndex
+
+      const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
+      const initialAssistantWindowText = config.assistantEnableCodeInterpreter || config.assistantEnableSearch
+        ? '正在思考，必要时会调用工具...'
+        : '正在思考...'
+
+      if (showsAssistantResultWindow) {
+        this.overlay.showResult({
+          text: initialAssistantWindowText,
+          format: 'markdown',
+          position: config.assistantResultWindowPosition,
+          size: config.assistantResultWindowSize,
+          reasoningCollapsed: false,
+          turnIndex: currentTurnIndex,
+          userMessage: userPrompt,
+          isConversation: true
+        })
+      }
+
+      let outputText: string
+      if (config.assistantEnableCodeInterpreter || config.assistantEnableSearch) {
+        const assistantResult = await polisher.respondWithToolsStream(
+          userPrompt,
+          config.assistantPrompt,
+          this.screenshotBase64 || undefined,
+          ({ answerText, reasoningText, isAnswering, codeMarkdown, codeCollapsed }) => {
+            this.latestAssistantCodeMarkdown = codeMarkdown
+            if (showsAssistantResultWindow) {
+              this.overlay.showResult({
+                text: answerText || (reasoningText || codeMarkdown ? '' : initialAssistantWindowText),
+                format: 'markdown',
+                position: config.assistantResultWindowPosition,
+                size: config.assistantResultWindowSize,
+                reasoningMarkdown: reasoningText || undefined,
+                reasoningCollapsed: isAnswering,
+                codeMarkdown,
+                codeCollapsed,
+                turnIndex: currentTurnIndex,
+                userMessage: userPrompt,
+                isConversation: true
+              })
+            }
+          },
+          {
+            enableThinking: config.assistantEnableThinking,
+            enableSearch: config.assistantEnableSearch,
+            enableCodeInterpreter: config.assistantEnableCodeInterpreter,
+            thinkingBudget: config.assistantThinkingBudget,
+            signal: llmSignal
+          },
+          historyForLLM
+        )
+        outputText = assistantResult.text
+        this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+        this.latestAssistantReasoningMarkdown = assistantResult.usage?.reasoningContent
+        this.latestAssistantCodeMarkdown = assistantResult.codeMarkdown
+        this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+        this.latestAssistantSources = assistantResult.sources
+      } else {
+        const assistantResult = await polisher.polishStreamWithMetadata(
+          userPrompt,
+          config.assistantPrompt,
+          this.screenshotBase64 || undefined,
+          ({ answerText, reasoningText, isAnswering }) => {
+            if (showsAssistantResultWindow) {
+              this.overlay.showResult({
+                text: answerText || (reasoningText ? '' : '正在生成...'),
+                format: 'markdown',
+                position: config.assistantResultWindowPosition,
+                size: config.assistantResultWindowSize,
+                reasoningMarkdown: reasoningText || undefined,
+                reasoningCollapsed: isAnswering,
+                turnIndex: currentTurnIndex,
+                userMessage: userPrompt,
+                isConversation: true
+              })
+            }
+          },
+          {
+            enableThinking: config.assistantEnableThinking,
+            enableSearch: config.assistantEnableSearch,
+            thinkingBudget: config.assistantThinkingBudget,
+            signal: llmSignal
+          },
+          historyForLLM
+        )
+        outputText = assistantResult.text
+        this.latestAssistantDetailsMarkdown = this.buildAssistantDetailsMarkdown(assistantResult.usage)
+        this.latestAssistantReasoningMarkdown = assistantResult.usage?.reasoningContent
+        this.latestAssistantCodeMarkdown = undefined
+        this.latestAssistantStats = this.buildAssistantStats(assistantResult.usage)
+        this.latestAssistantSources = assistantResult.sources
+      }
+
+      if (llmSignal.aborted) {
+        if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+          this.conversationHistory.pop()
+        }
+        this.finishCancelledFollowUp(llmSignal)
+        return
+      }
+
+      this.clearLLMAbortSignal(llmSignal)
+
+      // Add assistant response to history
+      this.conversationHistory.push({ role: 'assistant', content: outputText })
+
+      // Show final result
+      if (showsAssistantResultWindow) {
+        this.overlay.showResult({
+          text: outputText,
+          format: 'markdown',
+          position: config.assistantResultWindowPosition,
+          size: config.assistantResultWindowSize,
+          detailsMarkdown: this.latestAssistantDetailsMarkdown,
+          reasoningMarkdown: this.latestAssistantReasoningMarkdown,
+          reasoningCollapsed: true,
+          codeMarkdown: this.latestAssistantCodeMarkdown,
+          codeCollapsed: true,
+          stats: this.latestAssistantStats,
+          sources: this.latestAssistantSources,
+          turnIndex: currentTurnIndex,
+          isConversation: true
+        })
+      }
+
+      addHistory(this.configStore, {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        originalText: text,
+        polishedText: outputText,
+        mode: 'assistant'
+      })
+      this.broadcastToWindows(IPC.PIPELINE_FINAL_TEXT, outputText, 'assistant')
+
+      this.conversationTurnIndex++
+      this.isFollowUp = false
+      this.screenshotBase64 = ''
+      this.setStatus(PipelineStatus.CONVERSING)
+    } catch (err) {
+      if (this.isAbortError(err, llmSignal)) {
+        if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+          this.conversationHistory.pop()
+        }
+        this.finishCancelledFollowUp(llmSignal)
+        return
+      }
+      console.error('Follow-up error:', err)
+      // Remove the user message on error
+      if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
+        this.conversationHistory.pop()
+      }
+      this.isFollowUp = false
+      this.setStatus(PipelineStatus.CONVERSING)
+    }
   }
 
   private createLLMAbortSignal(): AbortSignal {
@@ -614,9 +979,24 @@ export class Pipeline extends EventEmitter {
 
   private finishCancelledRun(signal: AbortSignal): void {
     this.clearLLMAbortSignal(signal)
+    if (this.isFollowUp) {
+      this.finishCancelledFollowUp(signal)
+      return
+    }
     if (this.status !== PipelineStatus.IDLE) {
       this.setStatus(PipelineStatus.IDLE)
     }
+  }
+
+  private finishCancelledFollowUp(signal: AbortSignal): void {
+    this.clearLLMAbortSignal(signal)
+    this.isFollowUp = false
+    this.isProcessingComplete = false
+    this.partialText = ''
+    this.screenshotBase64 = ''
+    this.overlay.hideHud()
+    this.broadcastToWindows(IPC.AUDIO_STOP)
+    this.setStatus(PipelineStatus.CONVERSING)
   }
 
   private isAbortError(err: unknown, signal: AbortSignal): boolean {

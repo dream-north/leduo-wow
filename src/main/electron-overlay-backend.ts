@@ -77,7 +77,10 @@ export class ElectronOverlayBackend implements OverlayBackend {
       reasoningMarkdown: payload.reasoningMarkdown,
       reasoningCollapsed: payload.reasoningCollapsed,
       codeMarkdown: payload.codeMarkdown,
-      codeCollapsed: payload.codeCollapsed
+      codeCollapsed: payload.codeCollapsed,
+      turnIndex: payload.turnIndex,
+      userMessage: payload.userMessage,
+      isConversation: payload.isConversation
     })
   }
 

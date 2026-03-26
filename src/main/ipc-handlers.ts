@@ -206,6 +206,14 @@ export function registerIpcHandlers(
     }
   })
 
+  ipcMain.on(IPC.ASSISTANT_CONVERSATION_SEND_TEXT, (_event, text: string) => {
+    void pipeline.handleFollowUpText(text)
+  })
+
+  ipcMain.on(IPC.ASSISTANT_CONVERSATION_VOICE_REQUEST, () => {
+    void pipeline.startFollowUpRecording()
+  })
+
   // Vocabulary handlers
   ipcMain.handle(IPC.VOCABULARY_GET_PERSONAL, () => {
     return getPersonalVocabulary(vocabularyStore)

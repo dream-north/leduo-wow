@@ -79,6 +79,7 @@ export function updateTrayMenu(status?: PipelineStatus): void {
     [PipelineStatus.ENHANCING_ASR]: '词汇增强识别中...',
     [PipelineStatus.POLISHING]: '润色中...',
     [PipelineStatus.INPUTTING]: '输入中...',
+    [PipelineStatus.CONVERSING]: '对话中',
     [PipelineStatus.ERROR]: '错误'
   }
 

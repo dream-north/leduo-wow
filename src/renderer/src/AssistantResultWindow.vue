@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, reactive } from 'vue'
 import type { OverlayResultStat, OverlayResultStatKind } from '@shared/types'
 import { renderMarkdown } from '@renderer/utils/markdown'
 
@@ -18,6 +18,26 @@ interface AssistantResultPayload {
   reasoningCollapsed?: boolean
   codeMarkdown?: string
   codeCollapsed?: boolean
+  turnIndex?: number
+  userMessage?: string
+  isConversation?: boolean
+}
+
+interface ConversationTurn {
+  turnIndex: number
+  userMessage: string
+  text: string
+  detailsMarkdown: string
+  stats: OverlayResultStat[]
+  sources: AssistantResultSource[]
+  reasoningMarkdown: string
+  reasoningCollapsed: boolean
+  codeMarkdown: string
+  codeCollapsed: boolean
+  // Cached rendered HTML - avoids re-running renderMarkdown on every Vue render cycle
+  _answerHtml: string
+  _reasoningHtml: string
+  _codeHtml: string
 }
 
 declare global {
@@ -29,22 +49,23 @@ declare global {
       onHide: (callback: () => void) => () => void
       copyToClipboard: (text: string) => void
       closeWindow: () => void
+      sendFollowUpText: (text: string) => void
+      requestVoiceFollowUp: () => void
+      onPipelineStatus: (callback: (status: string) => void) => () => void
     }
   }
 }
 
-const text = ref('')
-const detailsMarkdown = ref('')
-const stats = ref<OverlayResultStat[]>([])
-const sources = ref<AssistantResultSource[]>([])
-const reasoningMarkdown = ref('')
-const reasoningCollapsed = ref(false)
-const codeMarkdown = ref('')
-const codeCollapsed = ref(true)
+const turns = reactive<ConversationTurn[]>([])
+const isConversation = ref(false)
+const followUpText = ref('')
+const pipelineStatus = ref('idle')
 const copied = ref(false)
-const hoveredStatDetail = ref('')
+const scrollContainer = ref<HTMLElement | null>(null)
+const hoveredStat = ref<{ turnIndex: number; detail: string } | null>(null)
 let cleanupUpdate: (() => void) | null = null
 let cleanupHide: (() => void) | null = null
+let cleanupStatus: (() => void) | null = null
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
 const statMeta: Record<OverlayResultStatKind, { label: string }> = {
@@ -56,26 +77,100 @@ const statMeta: Record<OverlayResultStatKind, { label: string }> = {
 }
 
 const copyLabel = computed(() => (copied.value ? '已复制' : '复制'))
-const hasAnswer = computed(() => text.value.trim().length > 0)
-const answerPlaceholder = computed(() => {
-  if (codeMarkdown.value.trim()) return '工具已经开始执行，稍后会在这里显示最终回答。'
-  if (reasoningMarkdown.value.trim()) return '模型正在组织最终答案...'
-  return '等待模型返回结果...'
+const inputDisabled = computed(() => pipelineStatus.value !== 'conversing')
+const inputPlaceholder = computed(() => {
+  switch (pipelineStatus.value) {
+    case 'recording': return '录音中...'
+    case 'finalizing_asr': return '识别中...'
+    case 'enhancing_asr': return '识别增强中...'
+    case 'polishing': return '思考中...'
+    case 'conversing': return '输入追问，或按快捷键语音追问...'
+    default: return '等待中...'
+  }
 })
-const visibleStats = computed(() => stats.value.map((stat) => ({
-  ...stat,
-  meta: statMeta[stat.kind]
-})))
-const visibleSources = computed(() => sources.value.filter((source) => source.url))
-const statDetailText = computed(() => {
-  if (hoveredStatDetail.value) return hoveredStatDetail.value
-  if (detailsMarkdown.value.trim()) return detailsMarkdown.value.trim()
-  if (visibleStats.value.length > 0) return '将鼠标移到上方统计图标上，可以查看每项的具体说明。'
-  return ''
-})
-const answerHtml = computed(() => renderMarkdown(text.value))
-const reasoningHtml = computed(() => renderMarkdown(reasoningMarkdown.value))
-const codeHtml = computed(() => renderMarkdown(codeMarkdown.value))
+
+function createEmptyTurn(turnIndex: number, userMessage: string = ''): ConversationTurn {
+  return {
+    turnIndex,
+    userMessage,
+    text: '',
+    detailsMarkdown: '',
+    stats: [],
+    sources: [],
+    reasoningMarkdown: '',
+    reasoningCollapsed: false,
+    codeMarkdown: '',
+    codeCollapsed: true,
+    _answerHtml: '',
+    _reasoningHtml: '',
+    _codeHtml: ''
+  }
+}
+
+function findOrCreateTurn(turnIndex: number): ConversationTurn {
+  let turn = turns.find((t) => t.turnIndex === turnIndex)
+  if (!turn) {
+    turn = createEmptyTurn(turnIndex)
+    turns.push(turn)
+  }
+  return turn
+}
+
+function applyPayloadToTurn(turn: ConversationTurn, data: AssistantResultPayload): void {
+  const newText = data.text
+  const newReasoning = data.reasoningMarkdown ?? ''
+  const newCode = data.codeMarkdown ?? ''
+  // Only re-render markdown when the source text actually changed
+  if (turn.text !== newText) {
+    turn.text = newText
+    turn._answerHtml = renderMarkdown(newText)
+  }
+  if (turn.reasoningMarkdown !== newReasoning) {
+    turn.reasoningMarkdown = newReasoning
+    turn._reasoningHtml = renderMarkdown(newReasoning)
+  }
+  if (turn.codeMarkdown !== newCode) {
+    turn.codeMarkdown = newCode
+    turn._codeHtml = renderMarkdown(newCode)
+  }
+  turn.detailsMarkdown = data.detailsMarkdown ?? ''
+  turn.stats = data.stats ?? []
+  turn.sources = data.sources ?? []
+  turn.reasoningCollapsed = data.reasoningCollapsed ?? false
+  turn.codeCollapsed = data.codeCollapsed ?? true
+  if (data.userMessage !== undefined) {
+    turn.userMessage = data.userMessage
+  }
+}
+
+function applyPayload(data: AssistantResultPayload): void {
+  if (data.isConversation && data.turnIndex !== undefined) {
+    isConversation.value = true
+    const turn = findOrCreateTurn(data.turnIndex)
+    applyPayloadToTurn(turn, data)
+  } else {
+    isConversation.value = false
+    turns.length = 0
+    const turn = createEmptyTurn(0)
+    applyPayloadToTurn(turn, data)
+    turns.push(turn)
+  }
+  copied.value = false
+  clearCopiedTimer()
+  scrollToBottom()
+}
+
+let scrollPending = false
+function scrollToBottom(): void {
+  if (scrollPending) return
+  scrollPending = true
+  requestAnimationFrame(() => {
+    scrollPending = false
+    if (scrollContainer.value) {
+      scrollContainer.value.scrollTop = scrollContainer.value.scrollHeight
+    }
+  })
+}
 
 function clearCopiedTimer(): void {
   if (copiedTimer) {
@@ -86,7 +181,9 @@ function clearCopiedTimer(): void {
 
 function handleCopy(): void {
   if (!window.assistantResultAPI) return
-  window.assistantResultAPI.copyToClipboard(text.value)
+  const lastTurn = turns[turns.length - 1]
+  if (!lastTurn) return
+  window.assistantResultAPI.copyToClipboard(lastTurn.text)
   copied.value = true
   clearCopiedTimer()
   copiedTimer = setTimeout(() => {
@@ -100,39 +197,84 @@ function handleClose(): void {
   window.assistantResultAPI.closeWindow()
 }
 
-function setHoveredDetail(detail: string | null): void {
-  hoveredStatDetail.value = detail ?? ''
+function handleSendText(): void {
+  const text = followUpText.value.trim()
+  if (!text || !window.assistantResultAPI || inputDisabled.value) return
+  window.assistantResultAPI.sendFollowUpText(text)
+  followUpText.value = ''
+  // Reset textarea height
+  const textarea = document.querySelector('.input-bar textarea') as HTMLTextAreaElement | null
+  if (textarea) textarea.style.height = ''
 }
 
-function applyPayload(data: AssistantResultPayload): void {
-  text.value = data.text
-  detailsMarkdown.value = data.detailsMarkdown ?? ''
-  stats.value = data.stats ?? []
-  sources.value = data.sources ?? []
-  reasoningMarkdown.value = data.reasoningMarkdown ?? ''
-  reasoningCollapsed.value = data.reasoningCollapsed ?? false
-  codeMarkdown.value = data.codeMarkdown ?? ''
-  codeCollapsed.value = data.codeCollapsed ?? true
-  copied.value = false
-  hoveredStatDetail.value = ''
-  clearCopiedTimer()
+function handleTextareaKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handleSendText()
+  }
+}
+
+function handleTextareaInput(e: Event): void {
+  const el = e.target as HTMLTextAreaElement
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+
+function setHoveredDetail(turnIndex: number, detail: string): void {
+  hoveredStat.value = { turnIndex, detail }
+}
+
+function clearHoveredDetail(): void {
+  hoveredStat.value = null
+}
+
+function turnHasAnswer(turn: ConversationTurn): boolean {
+  return turn.text.trim().length > 0
+}
+
+function turnVisibleStats(turn: ConversationTurn) {
+  return turn.stats.map((stat) => ({
+    ...stat,
+    meta: statMeta[stat.kind]
+  }))
+}
+
+function turnVisibleSources(turn: ConversationTurn) {
+  return turn.sources.filter((source) => source.url)
+}
+
+function turnStatDetailText(turn: ConversationTurn): string {
+  if (hoveredStat.value?.turnIndex === turn.turnIndex) {
+    return hoveredStat.value.detail
+  }
+  if (turn.detailsMarkdown.trim()) return turn.detailsMarkdown.trim()
+  const stats = turnVisibleStats(turn)
+  if (stats.length > 0) return '将鼠标移到上方统计图标上，可以查看每项的具体说明。'
+  return ''
 }
 
 onMounted(() => {
   if (!window.assistantResultAPI) {
-    text.value = '# 示例回答\n\n这里会显示最终回答。现在这个示例态主要用来检查结果窗的视觉、信息层级和 Markdown 排版细节。\n\n- 支持列表\n- 支持 **强调**\n- 支持 [链接](https://example.com/source-1)'
-    stats.value = [
+    // Demo / dev mode
+    const demoTurn = createEmptyTurn(0)
+    demoTurn.text =
+      '# 示例回答\n\n这里会显示最终回答。现在这个示例态主要用来检查结果窗的视觉、信息层级和 Markdown 排版细节。\n\n- 支持列表\n- 支持 **强调**\n- 支持 [链接](https://example.com/source-1)'
+    demoTurn._answerHtml = renderMarkdown(demoTurn.text)
+    demoTurn.stats = [
       { kind: 'tokens-total', value: '321', detail: '总 Token 321，输入 120，输出 201' },
       { kind: 'tokens-thinking', value: '88', detail: '思考 Token 88' },
       { kind: 'web-search', value: '2', detail: '联网搜索调用 2 次' }
     ]
-    reasoningMarkdown.value = '先理解用户问题，再检索相关资料，最后整理成可以直接交付的答案。'
-    codeMarkdown.value = '```python\nprint("hello from tool")\n```'
-    codeCollapsed.value = true
-    sources.value = [
+    demoTurn.reasoningMarkdown = '先理解用户问题，再检索相关资料，最后整理成可以直接交付的答案。'
+    demoTurn._reasoningHtml = renderMarkdown(demoTurn.reasoningMarkdown)
+    demoTurn.codeMarkdown = '```python\nprint("hello from tool")\n```'
+    demoTurn._codeHtml = renderMarkdown(demoTurn.codeMarkdown)
+    demoTurn.codeCollapsed = true
+    demoTurn.sources = [
       { index: 1, title: '示例来源一', url: 'https://example.com/source-1' },
       { index: 2, title: '示例来源二', url: 'https://example.com/source-2' }
     ]
+    turns.push(demoTurn)
     return
   }
 
@@ -144,9 +286,16 @@ onMounted(() => {
   })
 
   cleanupHide = window.assistantResultAPI.onHide(() => {
+    turns.length = 0
+    isConversation.value = false
+    followUpText.value = ''
     copied.value = false
-    hoveredStatDetail.value = ''
+    hoveredStat.value = null
     clearCopiedTimer()
+  })
+
+  cleanupStatus = window.assistantResultAPI.onPipelineStatus((status) => {
+    pipelineStatus.value = status
   })
 
   window.assistantResultAPI.notifyReady()
@@ -161,6 +310,7 @@ onMounted(() => {
 onUnmounted(() => {
   cleanupUpdate?.()
   cleanupHide?.()
+  cleanupStatus?.()
   clearCopiedTimer()
 })
 </script>
@@ -171,7 +321,7 @@ onUnmounted(() => {
       <header class="result-header">
         <div class="hero-copy">
           <p class="eyebrow">语音助手</p>
-          <h1>回答结果</h1>
+          <h1>{{ turns.length > 1 ? '多轮对话' : '回答结果' }}</h1>
         </div>
 
         <div class="actions">
@@ -180,92 +330,176 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div v-if="visibleStats.length || statDetailText" class="meta-strip">
-        <div v-if="visibleStats.length" class="stat-badges">
-          <button
-            v-for="stat in visibleStats"
-            :key="`${stat.kind}-${stat.detail}`"
-            type="button"
-            class="stat-badge"
-            :aria-label="stat.meta.label"
-            @mouseenter="setHoveredDetail(stat.detail)"
-            @mouseleave="setHoveredDetail(null)"
-            @focus="setHoveredDetail(stat.detail)"
-            @blur="setHoveredDetail(null)"
-          >
-            <span class="stat-icon" :title="stat.meta.label" aria-hidden="true">
-              <svg v-if="stat.kind === 'tokens-total'" viewBox="0 0 16 16" fill="none">
-                <circle cx="5" cy="8" r="2.2" />
-                <circle cx="11" cy="5.5" r="2.2" />
-                <circle cx="11" cy="10.5" r="2.2" />
-              </svg>
-              <svg v-else-if="stat.kind === 'tokens-thinking'" viewBox="0 0 16 16" fill="none">
-                <path d="M8 1.8 9.7 5l3.5.7-2.5 2.4.5 3.5L8 10l-3.2 1.6.6-3.5L2.8 5.7 6.2 5 8 1.8Z" />
-              </svg>
-              <svg v-else-if="stat.kind === 'code-interpreter'" viewBox="0 0 16 16" fill="none">
-                <path d="M2.5 3.2h11v9.6h-11z" />
-                <path d="m5 6.1 1.9 1.9L5 9.9" />
-                <path d="M8.8 10h2.2" />
-              </svg>
-              <svg v-else-if="stat.kind === 'web-search'" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="5.2" />
-                <path d="M2.8 8h10.4" />
-                <path d="M8 2.8c1.7 1.4 2.6 3.2 2.6 5.2S9.7 11.8 8 13.2" />
-                <path d="M8 2.8C6.3 4.2 5.4 6 5.4 8s.9 3.8 2.6 5.2" />
-              </svg>
-              <svg v-else viewBox="0 0 16 16" fill="none">
-                <path d="M4 2.5h5l3 3v8H4z" />
-                <path d="M9 2.5v3h3" />
-                <circle cx="10.8" cy="10.8" r="1.8" />
-                <path d="m12.1 12.1 1.4 1.4" />
-              </svg>
-            </span>
-            <span class="stat-value">{{ stat.value }}</span>
-          </button>
-        </div>
+      <div ref="scrollContainer" class="result-body">
+        <div v-for="turn in turns" :key="turn.turnIndex" class="conversation-turn">
+          <!-- User message bubble -->
+          <div v-if="turn.userMessage" class="user-bubble">
+            <div class="user-bubble-content">{{ turn.userMessage }}</div>
+          </div>
 
-        <p v-if="statDetailText" class="stat-detail-line">{{ statDetailText }}</p>
+          <!-- Assistant response -->
+          <div class="assistant-response">
+            <div
+              v-if="turnVisibleStats(turn).length || turnStatDetailText(turn)"
+              class="turn-meta-strip"
+            >
+              <div v-if="turnVisibleStats(turn).length" class="stat-badges">
+                <button
+                  v-for="stat in turnVisibleStats(turn)"
+                  :key="`${turn.turnIndex}-${stat.kind}-${stat.detail}`"
+                  type="button"
+                  class="stat-badge"
+                  :aria-label="stat.meta.label"
+                  @mouseenter="setHoveredDetail(turn.turnIndex, stat.detail)"
+                  @mouseleave="clearHoveredDetail()"
+                  @focus="setHoveredDetail(turn.turnIndex, stat.detail)"
+                  @blur="clearHoveredDetail()"
+                >
+                  <span class="stat-icon" :title="stat.meta.label" aria-hidden="true">
+                    <svg v-if="stat.kind === 'tokens-total'" viewBox="0 0 16 16" fill="none">
+                      <circle cx="5" cy="8" r="2.2" />
+                      <circle cx="11" cy="5.5" r="2.2" />
+                      <circle cx="11" cy="10.5" r="2.2" />
+                    </svg>
+                    <svg
+                      v-else-if="stat.kind === 'tokens-thinking'"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
+                      <path
+                        d="M8 1.8 9.7 5l3.5.7-2.5 2.4.5 3.5L8 10l-3.2 1.6.6-3.5L2.8 5.7 6.2 5 8 1.8Z"
+                      />
+                    </svg>
+                    <svg
+                      v-else-if="stat.kind === 'code-interpreter'"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
+                      <path d="M2.5 3.2h11v9.6h-11z" />
+                      <path d="m5 6.1 1.9 1.9L5 9.9" />
+                      <path d="M8.8 10h2.2" />
+                    </svg>
+                    <svg
+                      v-else-if="stat.kind === 'web-search'"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
+                      <circle cx="8" cy="8" r="5.2" />
+                      <path d="M2.8 8h10.4" />
+                      <path
+                        d="M8 2.8c1.7 1.4 2.6 3.2 2.6 5.2S9.7 11.8 8 13.2"
+                      />
+                      <path
+                        d="M8 2.8C6.3 4.2 5.4 6 5.4 8s.9 3.8 2.6 5.2"
+                      />
+                    </svg>
+                    <svg v-else viewBox="0 0 16 16" fill="none">
+                      <path d="M4 2.5h5l3 3v8H4z" />
+                      <path d="M9 2.5v3h3" />
+                      <circle cx="10.8" cy="10.8" r="1.8" />
+                      <path d="m12.1 12.1 1.4 1.4" />
+                    </svg>
+                  </span>
+                  <span class="stat-value">{{ stat.value }}</span>
+                </button>
+              </div>
+
+              <p v-if="turnStatDetailText(turn)" class="stat-detail-line">
+                {{ turnStatDetailText(turn) }}
+              </p>
+            </div>
+
+            <details
+              v-if="turn.reasoningMarkdown"
+              class="panel fold-panel"
+              :open="!turn.reasoningCollapsed"
+            >
+              <summary>
+                <span>思考过程</span>
+                <small>{{ turn.reasoningCollapsed ? '已折叠' : '展开查看' }}</small>
+              </summary>
+              <div class="markdown-body support-markdown" v-html="turn._reasoningHtml"></div>
+            </details>
+
+            <details
+              v-if="turn.codeMarkdown"
+              class="panel fold-panel code-panel"
+              :open="!turn.codeCollapsed"
+            >
+              <summary>
+                <span>工具与代码执行</span>
+                <small>{{ turn.codeCollapsed ? '已折叠' : '展开查看' }}</small>
+              </summary>
+              <div class="markdown-body code-markdown" v-html="turn._codeHtml"></div>
+            </details>
+
+            <section v-if="turnHasAnswer(turn)" class="panel">
+              <div class="panel-head">
+                <h2>回答</h2>
+                <span class="panel-kicker">最终输出</span>
+              </div>
+
+              <div
+                class="markdown-body answer-markdown"
+                v-html="turn._answerHtml"
+              ></div>
+            </section>
+
+            <div v-else class="loading-indicator">
+              <span class="spinner"></span>
+              <span class="loading-text">思考中...</span>
+            </div>
+
+            <section
+              v-if="turnVisibleSources(turn).length"
+              class="panel sources-panel"
+            >
+              <div class="panel-head">
+                <h2>来源</h2>
+                <span class="panel-kicker">{{ turnVisibleSources(turn).length }} 项</span>
+              </div>
+              <ol class="source-list">
+                <li
+                  v-for="source in turnVisibleSources(turn)"
+                  :id="`ref-${turn.turnIndex}-${source.index}`"
+                  :key="`${turn.turnIndex}-${source.index}-${source.url}`"
+                >
+                  <a :href="source.url" target="_blank" rel="noreferrer">{{
+                    source.title || source.url
+                  }}</a>
+                  <span class="source-url">{{ source.url }}</span>
+                </li>
+              </ol>
+            </section>
+          </div>
+        </div>
       </div>
 
-      <div class="result-body">
-        <details v-if="reasoningMarkdown" class="panel fold-panel" :open="!reasoningCollapsed">
-          <summary>
-            <span>思考过程</span>
-            <small>{{ reasoningCollapsed ? '已折叠' : '展开查看' }}</small>
-          </summary>
-          <div class="markdown-body support-markdown" v-html="reasoningHtml"></div>
-        </details>
-
-        <details v-if="codeMarkdown" class="panel fold-panel code-panel" :open="!codeCollapsed">
-          <summary>
-            <span>工具与代码执行</span>
-            <small>{{ codeCollapsed ? '已折叠' : '展开查看' }}</small>
-          </summary>
-          <div class="markdown-body code-markdown" v-html="codeHtml"></div>
-        </details>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h2>回答</h2>
-            <span class="panel-kicker">{{ hasAnswer ? '最终输出' : '生成中' }}</span>
+      <!-- Follow-up input bar -->
+      <div v-if="isConversation" class="input-bar">
+        <div class="input-wrapper">
+          <textarea
+            v-model="followUpText"
+            class="input-textarea"
+            :placeholder="inputPlaceholder"
+            :disabled="inputDisabled"
+            rows="1"
+            @keydown="handleTextareaKeydown"
+            @input="handleTextareaInput"
+          ></textarea>
+          <div class="input-actions">
+            <button
+              class="input-icon-btn send-btn"
+              :disabled="inputDisabled || !followUpText.trim()"
+              title="发送"
+              @click="handleSendText"
+            >
+              <svg viewBox="0 0 20 20" fill="none">
+                <path d="M3 10h14M12 5l5 5-5 5" />
+              </svg>
+            </button>
           </div>
-
-          <div v-if="hasAnswer" class="markdown-body answer-markdown" v-html="answerHtml"></div>
-          <p v-else class="result-placeholder">{{ answerPlaceholder }}</p>
-        </section>
-
-        <section v-if="visibleSources.length" class="panel sources-panel">
-          <div class="panel-head">
-            <h2>来源</h2>
-            <span class="panel-kicker">{{ visibleSources.length }} 项</span>
-          </div>
-          <ol class="source-list">
-            <li v-for="source in visibleSources" :id="`ref-${source.index}`" :key="`${source.index}-${source.url}`">
-              <a :href="source.url" target="_blank" rel="noreferrer">{{ source.title || source.url }}</a>
-              <span class="source-url">{{ source.url }}</span>
-            </li>
-          </ol>
-        </section>
+        </div>
       </div>
     </div>
   </div>
@@ -366,13 +600,68 @@ h1 {
   color: #ffffff;
 }
 
-.meta-strip {
+.result-body {
+  flex: 1;
+  padding: 18px 22px 22px;
+  overflow: auto;
+}
+
+.result-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.result-body::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.24);
+  background-clip: padding-box;
+}
+
+.result-body > :first-child {
+  margin-top: 0;
+}
+
+/* ── Conversation turn layout ── */
+
+.conversation-turn + .conversation-turn {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e7edf4;
+}
+
+/* ── User message bubble ── */
+
+.user-bubble {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+.user-bubble-content {
+  max-width: 85%;
+  padding: 10px 16px;
+  border-radius: 18px 18px 4px 18px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ── Assistant response ── */
+
+.assistant-response > :first-child {
+  margin-top: 0;
+}
+
+/* ── Per-turn stats strip ── */
+
+.turn-meta-strip {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 22px 10px;
-  border-bottom: 1px solid #e7edf4;
-  background: #f9fbfd;
+  margin-bottom: 10px;
 }
 
 .stat-badges {
@@ -433,26 +722,7 @@ h1 {
   line-height: 1.5;
 }
 
-.result-body {
-  flex: 1;
-  padding: 18px 22px 22px;
-  overflow: auto;
-}
-
-.result-body::-webkit-scrollbar {
-  width: 10px;
-}
-
-.result-body::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: rgba(100, 116, 139, 0.24);
-  background-clip: padding-box;
-}
-
-.result-body > :first-child {
-  margin-top: 0;
-}
+/* ── Panels ── */
 
 .panel {
   margin-top: 14px;
@@ -495,6 +765,37 @@ h1 {
   color: #64748b;
   font-size: 14px;
   line-height: 1.72;
+}
+
+/* ── Loading spinner ── */
+
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 16px 18px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #0f766e;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .fold-panel summary {
@@ -551,6 +852,8 @@ h1 {
   line-height: 1.45;
   word-break: break-all;
 }
+
+/* ── Markdown body ── */
 
 .markdown-body {
   color: #0f172a;
@@ -688,14 +991,112 @@ h1 {
   vertical-align: super;
 }
 
+/* ── Input bar ── */
+
+.input-bar {
+  flex: none;
+  padding: 12px 22px 16px;
+  border-top: 1px solid #e5ebf2;
+  background: #fbfcfe;
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #d6dee9;
+  border-radius: 16px;
+  background: #ffffff;
+  transition: border-color 0.15s;
+}
+
+.input-wrapper:focus-within {
+  border-color: #0f766e;
+}
+
+.input-textarea {
+  flex: 1;
+  min-height: 22px;
+  max-height: 120px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+}
+
+.input-textarea::placeholder {
+  color: #94a3b8;
+}
+
+.input-textarea:disabled {
+  opacity: 0.5;
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.input-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.input-icon-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.input-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.input-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.input-icon-btn.send-btn:not(:disabled) {
+  color: #0f766e;
+}
+
+.input-icon-btn.send-btn:hover:not(:disabled) {
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
 @media (max-width: 560px) {
   .result-shell {
     padding: 2px;
   }
 
-  .meta-strip,
   .result-body,
-  .result-header {
+  .result-header,
+  .input-bar {
     padding-left: 16px;
     padding-right: 16px;
   }

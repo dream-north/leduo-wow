@@ -70,14 +70,21 @@ export class OverlayManager implements OverlayBackend {
   }
 
   showResult(payload: OverlayResultPayload): void {
-    this.activeBackend.showResult(payload)
+    // Always use Electron fallback backend for result window,
+    // because the native Swift result window does not support multi-turn conversation.
+    this.fallbackBackend.showResult(payload)
   }
 
   hideResult(): void {
-    this.activeBackend.hideResult()
+    this.fallbackBackend.hideResult()
   }
 
   dismissAll(): void {
     this.activeBackend.dismissAll()
+    // Also dismiss Electron result window if native backend is active,
+    // since result window always goes through fallback.
+    if (this._activeBackend !== this.fallbackBackend) {
+      this.fallbackBackend.hideResult()
+    }
   }
 }
