@@ -303,6 +303,15 @@ if (!gotSingleInstanceLock) {
   keyboardListener.onOverlayResultClosed((position, size) => {
     pipeline?.handleAssistantResultWindowClosed(position, size)
   })
+  keyboardListener.onOverlayConversationSendText((text) => {
+    void pipeline?.handleFollowUpText(text)
+  })
+  keyboardListener.onOverlayConversationVoiceRequest(() => {
+    void pipeline?.startFollowUpRecording()
+  })
+  keyboardListener.onOverlayConversationStopGeneration(() => {
+    pipeline?.stopCurrentGeneration()
+  })
 
   // Initialize shortcut service
   shortcutService = new ShortcutService(configStore, pipeline)

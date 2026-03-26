@@ -214,6 +214,10 @@ export function registerIpcHandlers(
     void pipeline.startFollowUpRecording()
   })
 
+  ipcMain.on(IPC.ASSISTANT_CONVERSATION_STOP_GENERATION, () => {
+    pipeline.stopCurrentGeneration()
+  })
+
   // Vocabulary handlers
   ipcMain.handle(IPC.VOCABULARY_GET_PERSONAL, () => {
     return getPersonalVocabulary(vocabularyStore)

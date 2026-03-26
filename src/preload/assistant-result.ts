@@ -59,6 +59,10 @@ const assistantResultAPI = {
     const handler = (_event: Electron.IpcRendererEvent, status: string) => callback(status)
     ipcRenderer.on(IPC.PIPELINE_STATUS, handler)
     return () => ipcRenderer.removeListener(IPC.PIPELINE_STATUS, handler)
+  },
+
+  stopGeneration: () => {
+    ipcRenderer.send(IPC.ASSISTANT_CONVERSATION_STOP_GENERATION)
   }
 }
 

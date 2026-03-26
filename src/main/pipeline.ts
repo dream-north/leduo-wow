@@ -38,6 +38,10 @@ export class Pipeline extends EventEmitter {
   private conversationHistory: ConversationMessage[] = []
   private conversationTurnIndex: number = 0
   private isFollowUp: boolean = false
+  private backgroundRecordingActive: boolean = false
+  private pendingFollowUpText: string | null = null
+  private latestStreamedAnswerText: string = ''
+  private isStopGeneration: boolean = false
 
   constructor(overlay: OverlayBackend, configStore: ConfigStore, vocabularyStore: VocabularyStore) {
     super()
@@ -54,6 +58,7 @@ export class Pipeline extends EventEmitter {
     this.status = status
     this.emit('status', status)
     this.broadcastToWindows(IPC.PIPELINE_STATUS, status)
+    this.overlay.updatePipelineStatus?.(status)
   }
 
   private broadcastToWindows(channel: string, ...args: unknown[]): void {
@@ -68,21 +73,30 @@ export class Pipeline extends EventEmitter {
     if (this.status === PipelineStatus.IDLE) {
       await this.startRecording(mode)
     } else if (this.status === PipelineStatus.CONVERSING) {
-      if (mode === 'assistant') {
-        await this.startFollowUpRecording()
-      } else {
-        console.log('[Pipeline] Transcription toggle during CONVERSING, ending conversation')
-        this.endConversation()
-        await this.startRecording(mode)
-      }
+      await this.startFollowUpRecording()
     } else if (this.status === PipelineStatus.RECORDING) {
       await this.stopRecording()
     } else {
-      console.log(`[Pipeline] Toggle pressed during ${this.status}, force cancelling`)
-      if (this.isFollowUp) {
-        this.cancelFollowUp()
+      // In processing states (POLISHING, FINALIZING_ASR, ENHANCING_ASR)
+      if (this.currentMode === 'assistant' && (
+        this.status === PipelineStatus.POLISHING ||
+        this.status === PipelineStatus.FINALIZING_ASR ||
+        this.status === PipelineStatus.ENHANCING_ASR
+      )) {
+        if (!this.backgroundRecordingActive) {
+          console.log('[Pipeline] Starting background recording during', this.status)
+          await this.startBackgroundRecording()
+        } else {
+          console.log('[Pipeline] Stopping background recording')
+          await this.stopBackgroundRecording()
+        }
       } else {
-        this.forceCancel()
+        console.log(`[Pipeline] Toggle pressed during ${this.status}, force cancelling`)
+        if (this.isFollowUp) {
+          this.cancelFollowUp()
+        } else {
+          this.forceCancel()
+        }
       }
     }
   }
@@ -95,6 +109,16 @@ export class Pipeline extends EventEmitter {
     } else {
       this.forceCancel()
     }
+  }
+
+  stopCurrentGeneration(): void {
+    if (this.status !== PipelineStatus.POLISHING) {
+      console.log(`[Pipeline] stopCurrentGeneration called in ${this.status}, ignoring`)
+      return
+    }
+    console.log('[Pipeline] Stopping current generation')
+    this.isStopGeneration = true
+    this.llmAbortController?.abort()
   }
 
   handleAssistantResultWindowClosed(position?: OverlayWindowPosition, size?: OverlayWindowSize): void {
@@ -456,6 +480,7 @@ export class Pipeline extends EventEmitter {
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
               ({ answerText, reasoningText, isAnswering, codeMarkdown, codeCollapsed }) => {
+                this.latestStreamedAnswerText = answerText || ''
                 if (this.status === PipelineStatus.POLISHING && !showsAssistantResultWindow) {
                   this.showHud(
                     answerText
@@ -506,6 +531,7 @@ export class Pipeline extends EventEmitter {
               config.assistantPrompt,
               this.screenshotBase64 || undefined,
               ({ answerText, reasoningText, isAnswering }) => {
+                this.latestStreamedAnswerText = answerText || ''
                 if (this.status === PipelineStatus.POLISHING && !showsAssistantResultWindow) {
                   this.showHud('正在思考...', 'processing')
                 }
@@ -543,6 +569,46 @@ export class Pipeline extends EventEmitter {
           this.conversationHistory.push({ role: 'assistant', content: outputText })
         } catch (err) {
           if (this.isAbortError(err, llmSignal)) {
+            if (this.isStopGeneration && this.latestStreamedAnswerText && showsAssistantResultWindow) {
+              console.log('[Pipeline] Stop generation: preserving partial output')
+              this.isStopGeneration = false
+              this.clearLLMAbortSignal(llmSignal)
+              this.conversationHistory.push({ role: 'assistant', content: this.latestStreamedAnswerText })
+              this.overlay.showResult({
+                text: this.latestStreamedAnswerText,
+                format: 'markdown',
+                position: config.assistantResultWindowPosition,
+                size: config.assistantResultWindowSize,
+                detailsMarkdown: this.latestAssistantDetailsMarkdown,
+                reasoningMarkdown: this.latestAssistantReasoningMarkdown,
+                reasoningCollapsed: true,
+                codeMarkdown: this.latestAssistantCodeMarkdown,
+                codeCollapsed: true,
+                stats: this.latestAssistantStats,
+                sources: this.latestAssistantSources,
+                turnIndex: this.conversationTurnIndex,
+                isConversation: true
+              })
+              this.conversationTurnIndex++
+              this.isFollowUp = false
+              this.isProcessingComplete = false
+              this.partialText = ''
+              this.screenshotBase64 = ''
+              this.screenshotActive = false
+              this.audioChunks = []
+              this.latestStreamedAnswerText = ''
+              if (this.asrClient) {
+                this.asrClient.abort()
+                this.asrClient = null
+              }
+              this.setStatus(PipelineStatus.CONVERSING)
+              if (this.pendingFollowUpText) {
+                const pendingText = this.pendingFollowUpText
+                this.pendingFollowUpText = null
+                void this.handleFollowUpText(pendingText)
+              }
+              return
+            }
             // Remove the user message we added if the request was cancelled
             if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
               this.conversationHistory.pop()
@@ -606,11 +672,17 @@ export class Pipeline extends EventEmitter {
         this.screenshotBase64 = ''
         this.screenshotActive = false
         this.audioChunks = []
+        this.latestStreamedAnswerText = ''
         if (this.asrClient) {
           this.asrClient.abort()
           this.asrClient = null
         }
         this.setStatus(PipelineStatus.CONVERSING)
+        if (this.pendingFollowUpText) {
+          const pendingText = this.pendingFollowUpText
+          this.pendingFollowUpText = null
+          void this.handleFollowUpText(pendingText)
+        }
       } else {
         this.setStatus(PipelineStatus.INPUTTING)
         const inputter = new TextInputter()
@@ -635,7 +707,7 @@ export class Pipeline extends EventEmitter {
   }
 
   appendAudioChunk(chunk: Buffer): void {
-    if (this.status === PipelineStatus.RECORDING && this.asrClient) {
+    if ((this.status === PipelineStatus.RECORDING || this.backgroundRecordingActive) && this.asrClient) {
       this.asrClient.appendAudio(chunk)
       this.audioChunks.push(Buffer.from(chunk))
     }
@@ -662,6 +734,10 @@ export class Pipeline extends EventEmitter {
     this.conversationHistory = []
     this.conversationTurnIndex = 0
     this.isFollowUp = false
+    this.backgroundRecordingActive = false
+    this.pendingFollowUpText = null
+    this.latestStreamedAnswerText = ''
+    this.isStopGeneration = false
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
     this.broadcastToWindows(IPC.AUDIO_STOP)
@@ -686,6 +762,10 @@ export class Pipeline extends EventEmitter {
     this.conversationHistory = []
     this.conversationTurnIndex = 0
     this.isFollowUp = false
+    this.backgroundRecordingActive = false
+    this.pendingFollowUpText = null
+    this.latestStreamedAnswerText = ''
+    this.isStopGeneration = false
     this.broadcastToWindows(IPC.AUDIO_STOP)
     this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
@@ -713,6 +793,10 @@ export class Pipeline extends EventEmitter {
     this.audioChunks = []
     this.isProcessingComplete = false
     this.isFollowUp = false
+    this.backgroundRecordingActive = false
+    this.pendingFollowUpText = null
+    this.latestStreamedAnswerText = ''
+    this.isStopGeneration = false
     this.broadcastToWindows(IPC.AUDIO_STOP)
     this.overlay.hideHud()
     this.setStatus(PipelineStatus.CONVERSING)
@@ -734,6 +818,10 @@ export class Pipeline extends EventEmitter {
     this.conversationHistory = []
     this.conversationTurnIndex = 0
     this.isFollowUp = false
+    this.backgroundRecordingActive = false
+    this.pendingFollowUpText = null
+    this.latestStreamedAnswerText = ''
+    this.isStopGeneration = false
     this.latestAssistantDetailsMarkdown = undefined
     this.latestAssistantReasoningMarkdown = undefined
     this.latestAssistantCodeMarkdown = undefined
@@ -754,6 +842,64 @@ export class Pipeline extends EventEmitter {
     this.isFollowUp = true
     this.isProcessingComplete = false
     await this.startRecording('assistant')
+  }
+
+  private async startBackgroundRecording(): Promise<void> {
+    const config = getConfig(this.configStore)
+    if (!config.asrApiKey) {
+      console.warn('[Pipeline] No ASR API key for background recording')
+      return
+    }
+
+    this.backgroundRecordingActive = true
+    try {
+      this.asrClient = new ASRClient(config.asrApiKey, config.asrModel, config.asrBaseUrl)
+
+      this.asrClient.on('partial', (text: string) => {
+        if (this.backgroundRecordingActive) {
+          this.showHud(text || '正在聆听...', 'recording')
+        }
+      })
+
+      this.asrClient.once('completed', (text: string) => {
+        console.log(`[Pipeline] Background ASR completed: "${text.substring(0, 50)}"`)
+        this.backgroundRecordingActive = false
+        if (text.trim()) {
+          this.pendingFollowUpText = text
+          console.log('[Pipeline] Queued pending follow-up text')
+        }
+        this.overlay.hideHud()
+      })
+
+      this.asrClient.on('error', (err: Error) => {
+        console.error('[Pipeline] Background ASR error:', err.message)
+        this.backgroundRecordingActive = false
+        this.overlay.hideHud()
+      })
+
+      const connectPromise = this.asrClient.start()
+      this.showHud('正在聆听...', 'recording')
+      this.broadcastToWindows(IPC.AUDIO_START, config.audioThreshold ?? 0, config.selectedMicrophoneId ?? '', 'assistant')
+      await connectPromise
+    } catch (err) {
+      console.error('[Pipeline] Failed to start background recording:', err)
+      this.backgroundRecordingActive = false
+      this.overlay.hideHud()
+    }
+  }
+
+  private async stopBackgroundRecording(): Promise<void> {
+    this.broadcastToWindows(IPC.AUDIO_STOP)
+    this.showHud('正在识别...', 'processing')
+    if (this.asrClient) {
+      try {
+        await this.asrClient.finish()
+      } catch (err) {
+        console.error('[Pipeline] Background ASR finish error:', err)
+        this.backgroundRecordingActive = false
+        this.overlay.hideHud()
+      }
+    }
   }
 
   async handleFollowUpText(text: string): Promise<void> {
@@ -839,6 +985,7 @@ export class Pipeline extends EventEmitter {
           config.assistantPrompt,
           this.screenshotBase64 || undefined,
           ({ answerText, reasoningText, isAnswering, codeMarkdown, codeCollapsed }) => {
+            this.latestStreamedAnswerText = answerText || ''
             this.latestAssistantCodeMarkdown = codeMarkdown
             if (showsAssistantResultWindow) {
               this.overlay.showResult({
@@ -877,6 +1024,7 @@ export class Pipeline extends EventEmitter {
           config.assistantPrompt,
           this.screenshotBase64 || undefined,
           ({ answerText, reasoningText, isAnswering }) => {
+            this.latestStreamedAnswerText = answerText || ''
             if (showsAssistantResultWindow) {
               this.overlay.showResult({
                 text: answerText || (reasoningText ? '' : '正在生成...'),
@@ -951,9 +1099,47 @@ export class Pipeline extends EventEmitter {
       this.conversationTurnIndex++
       this.isFollowUp = false
       this.screenshotBase64 = ''
+      this.latestStreamedAnswerText = ''
       this.setStatus(PipelineStatus.CONVERSING)
+      if (this.pendingFollowUpText) {
+        const pendingText = this.pendingFollowUpText
+        this.pendingFollowUpText = null
+        void this.handleFollowUpText(pendingText)
+      }
     } catch (err) {
       if (this.isAbortError(err, llmSignal)) {
+        if (this.isStopGeneration && this.latestStreamedAnswerText && showsAssistantResultWindow) {
+          console.log('[Pipeline] Stop generation (follow-up): preserving partial output')
+          this.isStopGeneration = false
+          this.clearLLMAbortSignal(llmSignal)
+          this.conversationHistory.push({ role: 'assistant', content: this.latestStreamedAnswerText })
+          this.overlay.showResult({
+            text: this.latestStreamedAnswerText,
+            format: 'markdown',
+            position: config.assistantResultWindowPosition,
+            size: config.assistantResultWindowSize,
+            detailsMarkdown: this.latestAssistantDetailsMarkdown,
+            reasoningMarkdown: this.latestAssistantReasoningMarkdown,
+            reasoningCollapsed: true,
+            codeMarkdown: this.latestAssistantCodeMarkdown,
+            codeCollapsed: true,
+            stats: this.latestAssistantStats,
+            sources: this.latestAssistantSources,
+            turnIndex: this.conversationTurnIndex,
+            isConversation: true
+          })
+          this.conversationTurnIndex++
+          this.isFollowUp = false
+          this.screenshotBase64 = ''
+          this.latestStreamedAnswerText = ''
+          this.setStatus(PipelineStatus.CONVERSING)
+          if (this.pendingFollowUpText) {
+            const pendingText = this.pendingFollowUpText
+            this.pendingFollowUpText = null
+            void this.handleFollowUpText(pendingText)
+          }
+          return
+        }
         if (this.conversationHistory.length > 0 && this.conversationHistory[this.conversationHistory.length - 1].role === 'user') {
           this.conversationHistory.pop()
         }

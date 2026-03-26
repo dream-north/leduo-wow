@@ -95,6 +95,10 @@ export class ElectronOverlayBackend implements OverlayBackend {
     this.hideResult()
   }
 
+  updatePipelineStatus(_status: string): void {
+    /* noop - Electron result window receives status via IPC broadcast */
+  }
+
   private getOrCreateAssistantResultWindow(): BrowserWindow | null {
     const existing = this.options.getAssistantResultWindow?.() ?? null
     if (existing && !existing.isDestroyed()) {

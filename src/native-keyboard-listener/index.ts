@@ -354,6 +354,10 @@ class SwiftKeyboardListener extends EventEmitter {
     this.sendCommand({ command: 'overlayDismissAll' })
   }
 
+  updateOverlayPipelineStatus(status: string): void {
+    this.sendCommand({ command: 'overlayResultUpdateStatus', status })
+  }
+
   /**
    * Send command to Swift process
    */
@@ -434,6 +438,12 @@ class SwiftKeyboardListener extends EventEmitter {
       const position = event.position as OverlayWindowPosition | undefined
       const size = event.size as OverlayWindowSize | undefined
       this.emit('overlay-result-closed', position, size)
+    } else if (type === 'overlayConversationSendText') {
+      this.emit('overlay-conversation-send-text', event.text as string)
+    } else if (type === 'overlayConversationVoiceRequest') {
+      this.emit('overlay-conversation-voice-request')
+    } else if (type === 'overlayConversationStopGeneration') {
+      this.emit('overlay-conversation-stop-generation')
     }
   }
 
@@ -493,6 +503,18 @@ class SwiftKeyboardListener extends EventEmitter {
 
   onOverlayResultClosed(handler: (position?: OverlayWindowPosition, size?: OverlayWindowSize) => void): void {
     this.on('overlay-result-closed', handler)
+  }
+
+  onOverlayConversationSendText(handler: (text: string) => void): void {
+    this.on('overlay-conversation-send-text', handler)
+  }
+
+  onOverlayConversationVoiceRequest(handler: () => void): void {
+    this.on('overlay-conversation-voice-request', handler)
+  }
+
+  onOverlayConversationStopGeneration(handler: () => void): void {
+    this.on('overlay-conversation-stop-generation', handler)
   }
 
   /**

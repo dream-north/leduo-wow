@@ -48,4 +48,9 @@ export class MacNativeOverlayBackend implements OverlayBackend {
     if (!this.isAvailable()) return
     keyboardListener.dismissAllOverlays()
   }
+
+  updatePipelineStatus(status: string): void {
+    if (!this.isAvailable()) return
+    keyboardListener.updateOverlayPipelineStatus(status)
+  }
 }

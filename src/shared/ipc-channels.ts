@@ -30,6 +30,7 @@ export const IPC = {
   ASSISTANT_RESULT_CLOSE: 'assistant-result:close',
   ASSISTANT_CONVERSATION_SEND_TEXT: 'assistant-conversation:send-text',
   ASSISTANT_CONVERSATION_VOICE_REQUEST: 'assistant-conversation:voice-request',
+  ASSISTANT_CONVERSATION_STOP_GENERATION: 'assistant-conversation:stop-generation',
   OPEN_SETTINGS: 'open:settings',
   DIALOG_SELECT_FOLDER: 'dialog:select-folder',
   SHELL_OPEN_PATH: 'shell:open-path',

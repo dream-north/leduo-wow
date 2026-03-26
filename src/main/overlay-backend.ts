@@ -11,4 +11,5 @@ export interface OverlayBackend {
   showResult(payload: OverlayResultPayload): void
   hideResult(): void
   dismissAll(): void
+  updatePipelineStatus?(status: string): void
 }

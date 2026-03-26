@@ -969,7 +969,21 @@ final class RecordingHUDPanelController {
 
 // MARK: - Result Window
 
-final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
+final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKScriptMessageHandler, NSTextFieldDelegate {
+    struct ConversationTurn {
+        var turnIndex: Int
+        var userMessage: String
+        var markdown: String
+        var detailsMarkdown: String
+        var stats: [[String: String]]
+        var sources: [[String: Any]]
+        var reasoningMarkdown: String
+        var reasoningCollapsed: Bool
+        var codeMarkdown: String
+        var codeCollapsed: Bool
+        var cachedHTML: String?
+    }
+
     private let panel: NSPanel
     private let rootView = NSView()
     private let surfaceView = NSView()
@@ -1003,12 +1017,30 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
     private var streamingGeneration: UInt64 = 0
     private let renderQueue = DispatchQueue(label: "com.leduo.markdown-render", qos: .userInitiated)
 
+    // Multi-turn conversation state
+    private var turns: [ConversationTurn] = []
+    private var isConversationMode: Bool = false
+    private var currentPipelineStatus: String = "idle"
+
+    // Input bar controls
+    private let inputBar = NSView()
+    private let inputField = NSTextField()
+    private let sendButton = NSButton(title: "发送", target: nil, action: nil)
+    private let voiceButton = NSButton(title: "🎤", target: nil, action: nil)
+    private let stopButton = NSButton(title: "停止", target: nil, action: nil)
+    private var inputBarBottomConstraint: NSLayoutConstraint?
+    private var webViewBottomToInputBar: NSLayoutConstraint?
+    private var webViewBottomToSurface: NSLayoutConstraint?
+
     override init() {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(false, forKey: "developerExtrasEnabled")
+        let contentController = WKUserContentController()
+        config.userContentController = contentController
         webView = WKWebView(frame: .zero, configuration: config)
         panel = makePanel(level: .screenSaver, focusable: true)
         super.init()
+        contentController.add(self, name: "nativeBridge")
         panel.contentView = rootView
         panel.minSize = NSSize(width: minWidth, height: minHeight)
         configureViews()
@@ -1080,7 +1112,49 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         webView.allowsBackForwardNavigationGestures = false
         webView.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [surfaceView, titleBar, metaStatsStackView, statDetailView, statDetailLabel, eyebrowLabel, titleLabel, copyButton, closeButton, webView] {
+        // Configure input bar
+        inputBar.wantsLayer = true
+        inputBar.layer?.backgroundColor = NSColor(white: 0.96, alpha: 1).cgColor
+        inputBar.isHidden = true
+
+        inputField.placeholderString = "输入追问，或按快捷键语音追问..."
+        inputField.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        inputField.textColor = OverlayTheme.ink
+        inputField.isBordered = true
+        inputField.bezelStyle = .roundedBezel
+        inputField.focusRingType = .none
+        inputField.delegate = self
+        inputField.lineBreakMode = .byWordWrapping
+        inputField.usesSingleLineMode = false
+        inputField.cell?.wraps = true
+        inputField.cell?.isScrollable = true
+
+        sendButton.target = self
+        sendButton.action = #selector(handleSend)
+        sendButton.isBordered = false
+        sendButton.wantsLayer = true
+        sendButton.layer?.cornerRadius = 6
+        sendButton.layer?.backgroundColor = OverlayTheme.assistantAccent.cgColor
+        sendButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        sendButton.contentTintColor = .white
+        sendButton.isEnabled = false
+
+        voiceButton.target = self
+        voiceButton.action = #selector(handleVoiceRequest)
+        voiceButton.isBordered = false
+        voiceButton.font = NSFont.systemFont(ofSize: 16)
+
+        stopButton.target = self
+        stopButton.action = #selector(handleStopGeneration)
+        stopButton.isBordered = false
+        stopButton.wantsLayer = true
+        stopButton.layer?.cornerRadius = 6
+        stopButton.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.15).cgColor
+        stopButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        stopButton.contentTintColor = .systemRed
+        stopButton.isHidden = true
+
+        for view in [surfaceView, titleBar, metaStatsStackView, statDetailView, statDetailLabel, eyebrowLabel, titleLabel, copyButton, closeButton, webView, inputBar, inputField, sendButton, voiceButton, stopButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
 
@@ -1094,11 +1168,20 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         titleBar.addSubview(copyButton)
         titleBar.addSubview(closeButton)
         surfaceView.addSubview(webView)
+        surfaceView.addSubview(inputBar)
+        inputBar.addSubview(inputField)
+        inputBar.addSubview(sendButton)
+        inputBar.addSubview(voiceButton)
+        inputBar.addSubview(stopButton)
 
         metaStatsHeightConstraint = metaStatsStackView.heightAnchor.constraint(equalToConstant: 0)
         metaStatsHeightConstraint?.isActive = true
         statDetailHeightConstraint = statDetailView.heightAnchor.constraint(equalToConstant: 0)
         statDetailHeightConstraint?.isActive = true
+
+        webViewBottomToInputBar = webView.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -4)
+        webViewBottomToSurface = webView.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor, constant: -18)
+        webViewBottomToSurface?.isActive = true
 
         NSLayoutConstraint.activate([
             surfaceView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: outerInset),
@@ -1143,7 +1226,41 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
             webView.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor, constant: 18),
             webView.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor, constant: -18),
             webView.topAnchor.constraint(equalTo: statDetailView.bottomAnchor, constant: 8),
-            webView.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor, constant: -18)
+
+            // Input bar layout
+            inputBar.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor),
+            inputBar.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor),
+            inputBar.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor),
+            inputBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
+            {
+                let h = inputBar.heightAnchor.constraint(equalToConstant: 52)
+                h.priority = .defaultHigh
+                return h
+            }(),
+
+            inputField.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: 18),
+            inputField.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            inputField.topAnchor.constraint(greaterThanOrEqualTo: inputBar.topAnchor, constant: 10),
+            inputField.bottomAnchor.constraint(lessThanOrEqualTo: inputBar.bottomAnchor, constant: -10),
+            inputField.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            inputField.heightAnchor.constraint(lessThanOrEqualToConstant: 100),
+
+            stopButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
+            stopButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            stopButton.widthAnchor.constraint(equalToConstant: 52),
+            stopButton.heightAnchor.constraint(equalToConstant: 32),
+
+            sendButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
+            sendButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            sendButton.widthAnchor.constraint(equalToConstant: 52),
+            sendButton.heightAnchor.constraint(equalToConstant: 32),
+
+            voiceButton.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -8),
+            voiceButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            voiceButton.widthAnchor.constraint(equalToConstant: 32),
+            voiceButton.heightAnchor.constraint(equalToConstant: 32),
+
+            inputField.trailingAnchor.constraint(equalTo: voiceButton.leadingAnchor, constant: -8)
         ])
     }
 
@@ -1169,7 +1286,11 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         reasoningMarkdown: String? = nil,
         reasoningCollapsed: Bool = false,
         codeMarkdown: String? = nil,
-        codeCollapsed: Bool = true
+        codeCollapsed: Bool = true,
+        turnIndex: Int? = nil,
+        userMessage: String? = nil,
+        isConversation: Bool = false,
+        pipelineStatus: String? = nil
     ) {
         currentMarkdown = markdown
         currentSources = sources
@@ -1183,21 +1304,88 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
                 return value
             }
             .joined(separator: "\n\n")
+
+        if isConversation, let turnIndex {
+            isConversationMode = true
+            setInputBarVisible(true)
+
+            // Find or create turn
+            if let existingIdx = turns.firstIndex(where: { $0.turnIndex == turnIndex }) {
+                turns[existingIdx].markdown = markdown
+                turns[existingIdx].detailsMarkdown = detailsMarkdown ?? ""
+                turns[existingIdx].stats = stats
+                turns[existingIdx].sources = sources
+                turns[existingIdx].reasoningMarkdown = reasoningMarkdown ?? ""
+                turns[existingIdx].reasoningCollapsed = reasoningCollapsed
+                turns[existingIdx].codeMarkdown = codeMarkdown ?? ""
+                turns[existingIdx].codeCollapsed = codeCollapsed
+                if let userMessage, !userMessage.isEmpty {
+                    turns[existingIdx].userMessage = userMessage
+                }
+                // Clear cache since content changed
+                turns[existingIdx].cachedHTML = nil
+            } else {
+                // Cache previous turns
+                for i in 0..<turns.count {
+                    if turns[i].cachedHTML == nil {
+                        turns[i].cachedHTML = MarkdownTemplateRenderer.renderBody(
+                            turns[i].markdown,
+                            sources: turns[i].sources,
+                            reasoningMarkdown: turns[i].reasoningMarkdown,
+                            reasoningCollapsed: turns[i].reasoningCollapsed,
+                            codeMarkdown: turns[i].codeMarkdown,
+                            codeCollapsed: turns[i].codeCollapsed
+                        )
+                    }
+                }
+                turns.append(ConversationTurn(
+                    turnIndex: turnIndex,
+                    userMessage: userMessage ?? "",
+                    markdown: markdown,
+                    detailsMarkdown: detailsMarkdown ?? "",
+                    stats: stats,
+                    sources: sources,
+                    reasoningMarkdown: reasoningMarkdown ?? "",
+                    reasoningCollapsed: reasoningCollapsed,
+                    codeMarkdown: codeMarkdown ?? "",
+                    codeCollapsed: codeCollapsed,
+                    cachedHTML: nil
+                ))
+            }
+            titleLabel.stringValue = turns.count > 1 ? "多轮对话" : "回答结果"
+        } else {
+            isConversationMode = false
+            turns.removeAll()
+            setInputBarVisible(false)
+            titleLabel.stringValue = "回答结果"
+        }
+
+        if let pipelineStatus {
+            updatePipelineStatus(pipelineStatus)
+        }
+
         let wasVisible = panel.isVisible
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
         updateStats(stats)
 
-        if isInitialPageLoaded {
-            scheduleIncrementalUpdate()
-        } else {
-            loadMarkdown(currentDisplayMarkdown)
-        }
-
+        // Ensure panel is visible BEFORE loading HTML, so webView has a non-zero frame.
+        // WKWebView may not render content loaded while its frame is zero.
         if !wasVisible {
             applyPanelSize(savedSize: size)
             positionPanel(savedPosition: position)
             panel.orderFrontRegardless()
+        }
+
+        if isInitialPageLoaded {
+            scheduleIncrementalUpdate()
+        } else {
+            if isConversationMode {
+                let html = MarkdownTemplateRenderer.renderConversationPage(turns: turns)
+                webView.loadHTMLString(html, baseURL: nil)
+            } else {
+                loadMarkdown(currentDisplayMarkdown)
+            }
         }
     }
 
@@ -1214,6 +1402,13 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
         currentReasoningMarkdown = ""
         currentCodeMarkdown = ""
         currentSources = []
+        // Clear conversation state
+        turns.removeAll()
+        isConversationMode = false
+        currentPipelineStatus = "idle"
+        inputField.stringValue = ""
+        setInputBarVisible(false)
+        updateInputBarState()
     }
 
     private func positionOnActiveScreen() {
@@ -1267,27 +1462,45 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, self.streamingGeneration == generation else { return }
-            // Capture snapshot on main thread
-            let dm = self.currentDisplayMarkdown
-            let src = self.currentSources
-            let rm = self.currentReasoningMarkdown
-            let rc = self.currentReasoningCollapsed
-            let cm = self.currentCodeMarkdown
-            let cc = self.currentCodeCollapsed
 
-            self.renderQueue.async { [weak self] in
-                guard let self, self.streamingGeneration == generation else { return }
-                let escaped: String = autoreleasepool {
-                    let bodyHTML = MarkdownTemplateRenderer.renderBody(
-                        dm, sources: src,
-                        reasoningMarkdown: rm, reasoningCollapsed: rc,
-                        codeMarkdown: cm, codeCollapsed: cc
-                    )
-                    return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
-                }
-                DispatchQueue.main.async { [weak self] in
+            if self.isConversationMode {
+                // Snapshot turns array for background rendering
+                let turnsCopy = self.turns
+                self.renderQueue.async { [weak self] in
                     guard let self, self.streamingGeneration == generation else { return }
-                    self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
+                    let escaped: String = autoreleasepool {
+                        let bodyHTML = MarkdownTemplateRenderer.renderConversation(turns: turnsCopy)
+                        return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
+                    }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.streamingGeneration == generation else { return }
+                        let js = "document.body.innerHTML='\(escaped)';window.scrollTo(0,document.body.scrollHeight)"
+                        self.webView.evaluateJavaScript(js)
+                    }
+                }
+            } else {
+                // Capture snapshot on main thread
+                let dm = self.currentDisplayMarkdown
+                let src = self.currentSources
+                let rm = self.currentReasoningMarkdown
+                let rc = self.currentReasoningCollapsed
+                let cm = self.currentCodeMarkdown
+                let cc = self.currentCodeCollapsed
+
+                self.renderQueue.async { [weak self] in
+                    guard let self, self.streamingGeneration == generation else { return }
+                    let escaped: String = autoreleasepool {
+                        let bodyHTML = MarkdownTemplateRenderer.renderBody(
+                            dm, sources: src,
+                            reasoningMarkdown: rm, reasoningCollapsed: rc,
+                            codeMarkdown: cm, codeCollapsed: cc
+                        )
+                        return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
+                    }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.streamingGeneration == generation else { return }
+                        self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
+                    }
                 }
             }
         }
@@ -1389,6 +1602,95 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate {
             ]
         ])
         hide()
+    }
+
+    @objc private func handleSend() {
+        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        outputJSON(["type": "overlayConversationSendText", "text": text])
+        inputField.stringValue = ""
+        updateInputBarState()
+    }
+
+    @objc private func handleVoiceRequest() {
+        outputJSON(["type": "overlayConversationVoiceRequest"])
+    }
+
+    @objc private func handleStopGeneration() {
+        outputJSON(["type": "overlayConversationStopGeneration"])
+    }
+
+    // MARK: - WKScriptMessageHandler
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let action = body["action"] as? String else { return }
+        switch action {
+        case "sendText":
+            if let text = body["text"] as? String, !text.isEmpty {
+                outputJSON(["type": "overlayConversationSendText", "text": text])
+            }
+        case "voiceRequest":
+            outputJSON(["type": "overlayConversationVoiceRequest"])
+        case "stopGeneration":
+            outputJSON(["type": "overlayConversationStopGeneration"])
+        default: break
+        }
+    }
+
+    // MARK: - NSTextFieldDelegate
+
+    func controlTextDidChange(_ obj: Notification) {
+        updateInputBarState()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            // Enter sends, Shift+Enter inserts newline
+            if NSEvent.modifierFlags.contains(.shift) {
+                textView.insertNewlineIgnoringFieldEditor(nil)
+                return true
+            }
+            handleSend()
+            return true
+        }
+        return false
+    }
+
+    // MARK: - Input bar state
+
+    func updatePipelineStatus(_ status: String) {
+        currentPipelineStatus = status
+        updateInputBarState()
+    }
+
+    private func updateInputBarState() {
+        let isConversing = currentPipelineStatus == "conversing"
+        inputField.isEnabled = isConversing
+        sendButton.isEnabled = isConversing && !inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        voiceButton.isEnabled = isConversing
+        let isPolishing = currentPipelineStatus == "polishing"
+        stopButton.isHidden = !isPolishing
+        sendButton.isHidden = isPolishing
+
+        switch currentPipelineStatus {
+        case "recording": inputField.placeholderString = "录音中..."
+        case "finalizing_asr", "enhancing_asr": inputField.placeholderString = "识别中..."
+        case "polishing": inputField.placeholderString = "思考中..."
+        case "conversing": inputField.placeholderString = "输入追问，或按快捷键语音追问..."
+        default: inputField.placeholderString = "等待中..."
+        }
+    }
+
+    private func setInputBarVisible(_ visible: Bool) {
+        inputBar.isHidden = !visible
+        if visible {
+            webViewBottomToSurface?.isActive = false
+            webViewBottomToInputBar?.isActive = true
+        } else {
+            webViewBottomToInputBar?.isActive = false
+            webViewBottomToSurface?.isActive = true
+        }
     }
 
     private func copyCurrentSelectionOrMarkdown() {
@@ -1988,6 +2290,7 @@ enum MarkdownTemplateRenderer {
             case ">": result += "&gt;"
             case "\"": result += "&quot;"
             case "'": result += "&#39;"
+            case "\n": result += "<br>"
             default:  result.append(ch)
             }
         }
@@ -2054,6 +2357,94 @@ enum MarkdownTemplateRenderer {
         </section>
         """
     }
+
+    // MARK: - Multi-turn conversation rendering
+
+    static let conversationCSS = """
+    .conversation { padding: 4px 0 24px; }
+    .user-bubble {
+        margin: 16px 0 8px;
+        padding: 10px 16px;
+        background: rgba(2, 132, 199, 0.10);
+        border-radius: 16px 16px 4px 16px;
+        max-width: 85%;
+        margin-left: auto;
+        text-align: left;
+        color: var(--ink);
+        font-size: 14px;
+        line-height: 1.6;
+        word-break: break-word;
+    }
+    .assistant-response {
+        margin: 4px 0 16px;
+    }
+    .turn-divider {
+        border: none;
+        border-top: 1px solid var(--rule);
+        margin: 20px 0 16px;
+    }
+    """
+
+    static func renderConversation(
+        turns: [AssistantResultPanelController.ConversationTurn],
+        currentMarkdown: String = "",
+        currentSources: [[String: Any]] = [],
+        currentReasoningMarkdown: String = "",
+        currentReasoningCollapsed: Bool = false,
+        currentCodeMarkdown: String = "",
+        currentCodeCollapsed: Bool = true
+    ) -> String {
+        var html = "<div class=\"conversation\">"
+        for (i, turn) in turns.enumerated() {
+            if i > 0 {
+                html += "<hr class=\"turn-divider\">"
+            }
+
+            // User bubble
+            if !turn.userMessage.isEmpty {
+                let escapedUser = escapeHTML(turn.userMessage)
+                html += "<div class=\"user-bubble\">\(escapedUser)</div>"
+            }
+
+            // Assistant response
+            html += "<div class=\"assistant-response\">"
+            if let cached = turn.cachedHTML {
+                html += cached
+            } else {
+                html += renderBody(
+                    turn.markdown,
+                    sources: turn.sources,
+                    reasoningMarkdown: turn.reasoningMarkdown,
+                    reasoningCollapsed: turn.reasoningCollapsed,
+                    codeMarkdown: turn.codeMarkdown,
+                    codeCollapsed: turn.codeCollapsed
+                )
+            }
+            html += "</div>"
+        }
+        html += "</div>"
+        return html
+    }
+
+    static func renderConversationPage(
+        turns: [AssistantResultPanelController.ConversationTurn]
+    ) -> String {
+        let body = renderConversation(turns: turns)
+        // Get the base render to extract the full CSS, then add conversation CSS
+        let baseHTML = render("")
+        let cssEnd = "</style>"
+        if let range = baseHTML.range(of: cssEnd) {
+            var fullHTML = baseHTML
+            fullHTML.insert(contentsOf: "\n\(conversationCSS)", at: range.lowerBound)
+            // Replace the body content
+            if let bodyStart = fullHTML.range(of: "<body>"),
+               let bodyEnd = fullHTML.range(of: "</body>") {
+                fullHTML.replaceSubrange(bodyStart.upperBound..<bodyEnd.lowerBound, with: body)
+            }
+            return fullHTML
+        }
+        return render(body)
+    }
 }
 
 // MARK: - Overlay Coordinator
@@ -2113,6 +2504,10 @@ final class OverlayCoordinator {
         let reasoningCollapsed = payload["reasoningCollapsed"] as? Bool ?? false
         let codeMarkdown = payload["codeMarkdown"] as? String
         let codeCollapsed = payload["codeCollapsed"] as? Bool ?? true
+        let turnIndex = payload["turnIndex"] as? Int
+        let userMessage = payload["userMessage"] as? String
+        let isConversation = payload["isConversation"] as? Bool ?? false
+        let pipelineStatus = payload["pipelineStatus"] as? String
         resultController.show(
             markdown: text,
             position: position,
@@ -2123,8 +2518,16 @@ final class OverlayCoordinator {
             reasoningMarkdown: reasoningMarkdown,
             reasoningCollapsed: reasoningCollapsed,
             codeMarkdown: codeMarkdown,
-            codeCollapsed: codeCollapsed
+            codeCollapsed: codeCollapsed,
+            turnIndex: turnIndex,
+            userMessage: userMessage,
+            isConversation: isConversation,
+            pipelineStatus: pipelineStatus
         )
+    }
+
+    func updateResultPipelineStatus(_ status: String) {
+        resultController.updatePipelineStatus(status)
     }
 
     func hideResult() {
@@ -2248,6 +2651,14 @@ func processCommand(_ command: [String: Any]) {
     case "overlayDismissAll":
         runOnMain { overlayCoordinator.dismissAll() }
         outputStatus("ok")
+
+    case "overlayResultUpdateStatus":
+        if let status = command["status"] as? String {
+            runOnMain { overlayCoordinator.updateResultPipelineStatus(status) }
+            outputStatus("ok")
+        } else {
+            outputStatus("error")
+        }
 
     default:
         outputStatus("unknown_command")

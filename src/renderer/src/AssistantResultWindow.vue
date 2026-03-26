@@ -52,6 +52,7 @@ declare global {
       sendFollowUpText: (text: string) => void
       requestVoiceFollowUp: () => void
       onPipelineStatus: (callback: (status: string) => void) => () => void
+      stopGeneration: () => void
     }
   }
 }
@@ -78,6 +79,7 @@ const statMeta: Record<OverlayResultStatKind, { label: string }> = {
 
 const copyLabel = computed(() => (copied.value ? '已复制' : '复制'))
 const inputDisabled = computed(() => pipelineStatus.value !== 'conversing')
+const isGenerating = computed(() => pipelineStatus.value === 'polishing')
 const inputPlaceholder = computed(() => {
   switch (pipelineStatus.value) {
     case 'recording': return '录音中...'
@@ -218,6 +220,11 @@ function handleTextareaInput(e: Event): void {
   const el = e.target as HTMLTextAreaElement
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
+
+function handleStopGeneration(): void {
+  if (!window.assistantResultAPI) return
+  window.assistantResultAPI.stopGeneration()
 }
 
 function setHoveredDetail(turnIndex: number, detail: string): void {
@@ -489,6 +496,17 @@ onUnmounted(() => {
           ></textarea>
           <div class="input-actions">
             <button
+              v-if="isGenerating"
+              class="input-icon-btn stop-btn"
+              title="停止生成"
+              @click="handleStopGeneration"
+            >
+              <svg viewBox="0 0 20 20" fill="none">
+                <rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" />
+              </svg>
+            </button>
+            <button
+              v-else
               class="input-icon-btn send-btn"
               :disabled="inputDisabled || !followUpText.trim()"
               title="发送"
@@ -1087,6 +1105,15 @@ h1 {
 .input-icon-btn.send-btn:hover:not(:disabled) {
   background: #ecfdf5;
   color: #0f766e;
+}
+
+.input-icon-btn.stop-btn {
+  color: #dc2626;
+}
+
+.input-icon-btn.stop-btn:hover {
+  background: #fef2f2;
+  color: #dc2626;
 }
 
 @media (max-width: 560px) {
