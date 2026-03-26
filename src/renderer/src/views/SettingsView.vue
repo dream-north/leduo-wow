@@ -1151,7 +1151,6 @@ async function importVocabulary() {
         await loadVocabulary()
         let msg = `已导入 ${result.added} 条词汇`
         if (result.skipped > 0) msg += `，跳过 ${result.skipped} 条重复`
-        if (result.limitReached) msg += '（已达上限 200 条）'
         showSaveMessage(msg)
       }
     }

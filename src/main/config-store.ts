@@ -66,7 +66,6 @@ interface StoreSchema {
   // Vocabulary enhancement
   vocabularyEnabled: boolean
   vocabularyModel: string
-  vocabularyMaxEntries: number
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   customModels: { asr: string[]; text: string[]; vocab: string[] }
@@ -155,7 +154,6 @@ export function initConfigStore(): Store<StoreSchema> {
       // Vocabulary enhancement
       vocabularyEnabled: DEFAULT_CONFIG.vocabularyEnabled,
       vocabularyModel: DEFAULT_CONFIG.vocabularyModel,
-      vocabularyMaxEntries: DEFAULT_CONFIG.vocabularyMaxEntries,
       sharedVocabularySyncUrl: DEFAULT_CONFIG.sharedVocabularySyncUrl,
       sharedVocabularySyncToken: DEFAULT_CONFIG.sharedVocabularySyncToken,
       customModels: { asr: [], text: [], vocab: [] },
@@ -267,7 +265,6 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     // Vocabulary enhancement
     vocabularyEnabled: s.get('vocabularyEnabled') ?? DEFAULT_CONFIG.vocabularyEnabled,
     vocabularyModel: s.get('vocabularyModel') ?? DEFAULT_CONFIG.vocabularyModel,
-    vocabularyMaxEntries: s.get('vocabularyMaxEntries') ?? DEFAULT_CONFIG.vocabularyMaxEntries,
     sharedVocabularySyncUrl: s.get('sharedVocabularySyncUrl') ?? DEFAULT_CONFIG.sharedVocabularySyncUrl,
     sharedVocabularySyncToken: s.get('sharedVocabularySyncToken') ?? DEFAULT_CONFIG.sharedVocabularySyncToken,
     sharedVocabSyncSources: (() => {

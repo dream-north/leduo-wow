@@ -48,13 +48,9 @@ export function addVocabularyEntry(
   s: Store<VocabularySchema>,
   source: VocabularySource,
   entry: Omit<VocabularyEntry, 'id' | 'createdAt' | 'updatedAt'>
-): { entry: VocabularyEntry; duplicate: boolean; limitReached?: boolean } {
+): { entry: VocabularyEntry; duplicate: boolean } {
   const key = getKey(source)
   const entries = s.get(key) ?? []
-
-  if (entries.length >= 200) {
-    return { entry: entries[0], duplicate: false, limitReached: true }
-  }
 
   // Check for duplicate term
   const existing = entries.find((e) => e.term === entry.term)
@@ -112,7 +108,7 @@ export function importVocabularyEntries(
   s: Store<VocabularySchema>,
   source: VocabularySource,
   rawEntries: Array<{ term: string; description?: string; category?: string }>
-): { added: number; skipped: number; limitReached: boolean } {
+): { added: number; skipped: number } {
   const key = getKey(source)
   const existing = s.get(key) ?? []
   const existingTerms = new Set(existing.map((e) => e.term))
@@ -126,7 +122,6 @@ export function importVocabularyEntries(
       skipped++
       continue
     }
-    if (existing.length >= 200) break
     existing.push({
       id: randomUUID(),
       term: raw.term,
@@ -142,7 +137,7 @@ export function importVocabularyEntries(
 
   s.set(key, existing as never)
   if (added > 0) broadcastUpdate()
-  return { added, skipped, limitReached: existing.length >= 200 }
+  return { added, skipped }
 }
 
 export interface VocabularyExportData {
@@ -246,8 +241,7 @@ export function replaceSourceEntries(
       sourceUrl
     })
   }
-  // Enforce 200 limit across all shared entries
-  const combined = [...kept, ...newEntries].slice(0, 200)
+  const combined = [...kept, ...newEntries]
   s.set('sharedEntries', combined as never)
   broadcastUpdate()
   return { total: newEntries.length }

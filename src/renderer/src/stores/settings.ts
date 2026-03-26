@@ -75,7 +75,7 @@ declare global {
       importVocabulary: (
         source: string,
         entries: Array<{ term: string; description?: string; category?: string }>
-      ) => Promise<{ added: number; skipped: number; limitReached: boolean }>
+      ) => Promise<{ added: number; skipped: number }>
       exportVocabulary: (source: string, name?: string) => Promise<{
         version: number
         name?: string
@@ -170,7 +170,6 @@ export const useSettingsStore = defineStore('settings', () => {
   // Vocabulary enhancement
   const vocabularyEnabled = ref(true)
   const vocabularyModel = ref('qwen3-asr-flash')
-  const vocabularyMaxEntries = ref(200)
   const sharedVocabularySyncUrl = ref('')
   const sharedVocabularySyncToken = ref('')
   const customModels = ref<{ asr: string[]; text: string[]; vocab: string[] }>({ asr: [], text: [], vocab: [] })
@@ -299,7 +298,6 @@ export const useSettingsStore = defineStore('settings', () => {
     // Vocabulary enhancement
     vocabularyEnabled,
     vocabularyModel,
-    vocabularyMaxEntries,
     sharedVocabularySyncUrl,
     sharedVocabularySyncToken,
     customModels,

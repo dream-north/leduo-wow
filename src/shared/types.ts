@@ -230,7 +230,6 @@ export interface AppConfig {
   // Vocabulary enhancement
   vocabularyEnabled: boolean
   vocabularyModel: string
-  vocabularyMaxEntries: number
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   sharedVocabSyncSources: SharedVocabSyncSource[]
@@ -373,7 +372,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Vocabulary enhancement
   vocabularyEnabled: true,
   vocabularyModel: 'qwen3-asr-flash',
-  vocabularyMaxEntries: 200,
   sharedVocabularySyncUrl: '',
   sharedVocabularySyncToken: '',
   sharedVocabSyncSources: [] as SharedVocabSyncSource[],
