@@ -1025,6 +1025,11 @@ const filteredMergeItems = computed(() => {
     })
 })
 
+const unresolvedConflictCount = computed(() => {
+  if (!mergePreview.value) return 0
+  return mergePreview.value.items.filter(item => item.conflict && !item.resolution).length
+})
+
 const activeSharedSourceEntries = computed(() => {
   const source = activeSharedSource.value
   if (!source) return []
@@ -1352,7 +1357,8 @@ function toggleMergeItem(index: number): void {
 
 function setConflictResolution(index: number, resolution: 'keep-personal' | 'keep-remote'): void {
   if (!mergePreview.value) return
-  mergePreview.value.items[index].resolution = resolution
+  const item = mergePreview.value.items[index]
+  item.resolution = item.resolution === resolution ? undefined : resolution
 }
 
 async function doExecuteMerge(): Promise<void> {
@@ -2545,8 +2551,8 @@ function closeMergeDialog(): void {
             <button :class="['merge-stat merge-stat-remote', { active: mergeFilter === 'remote' }]" @click="mergeFilter = 'remote'">仅远端 {{ mergePreview.remoteOnlyCount }}</button>
           </div>
 
-        <!-- Conflict resolution section -->
-        <div v-if="mergePreview.conflictCount > 0 && (mergeFilter === 'all' || mergeFilter === 'conflict')" class="merge-conflicts">
+        <!-- Conflict resolution section (only in conflict tab) -->
+        <div v-if="mergePreview.conflictCount > 0 && mergeFilter === 'conflict'" class="merge-conflicts">
           <h4 class="merge-section-title">冲突项（同名但内容不同，点击选择保留版本）</h4>
           <div v-for="{ item, index } in filteredMergeItems.filter(e => !!e.item.conflict)" :key="'conflict-' + index">
             <div class="merge-conflict-item">
@@ -2563,6 +2569,13 @@ function closeMergeDialog(): void {
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Conflict banner in "all" tab -->
+        <div v-if="mergeFilter === 'all' && unresolvedConflictCount > 0" class="merge-conflict-banner">
+          <span>有 {{ unresolvedConflictCount }} 个冲突未解决，请前往</span>
+          <button class="merge-conflict-banner-link" @click="mergeFilter = 'conflict'">冲突</button>
+          <span>标签页处理</span>
         </div>
 
         <!-- Item list -->
@@ -2589,8 +2602,8 @@ function closeMergeDialog(): void {
         <!-- Action bar -->
         <div class="merge-actions">
           <button class="btn btn-text" @click="closeMergeDialog">取消</button>
-          <button v-if="mergePreview" class="btn btn-primary" :disabled="mergeExecuting" @click="doExecuteMerge">
-            {{ mergeExecuting ? '推送中...' : '确认合并推送' }}
+          <button v-if="mergePreview" class="btn btn-primary" :disabled="mergeExecuting || unresolvedConflictCount > 0" @click="doExecuteMerge">
+            {{ mergeExecuting ? '推送中...' : unresolvedConflictCount > 0 ? `还有 ${unresolvedConflictCount} 个冲突未解决` : '确认合并推送' }}
           </button>
         </div>
         </template>
@@ -3992,6 +4005,31 @@ function closeMergeDialog(): void {
 .merge-stat-remote {
   background: rgba(142, 142, 147, 0.12);
   color: #8e8e93;
+}
+
+/* Conflict banner */
+.merge-conflict-banner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  margin: 0 16px 8px;
+  background: rgba(255, 149, 0, 0.1);
+  border: 1px solid rgba(255, 149, 0, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.merge-conflict-banner-link {
+  background: none;
+  border: none;
+  color: #ff9500;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  font-size: 13px;
 }
 
 /* Conflict section */
