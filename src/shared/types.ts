@@ -239,6 +239,9 @@ export interface AppConfig {
   // Vocabulary enhancement
   vocabularyEnabled: boolean
   vocabularyModel: string
+  vocabularyPrompt: string
+  vocabularyPromptPresets: PolishPreset[]
+  vocabularyPromptActivePresetIndex: number
   sharedVocabularySyncUrl: string
   sharedVocabularySyncToken: string
   sharedVocabSyncSources: SharedVocabSyncSource[]
@@ -315,6 +318,17 @@ export const ASSISTANT_PRESET_STANDARD: PolishPreset = {
 
 export const ASSISTANT_BUILTIN_PRESETS: PolishPreset[] = [ASSISTANT_PRESET_STANDARD]
 
+// Vocabulary prompt template
+export const VOCAB_PROMPT_DEFAULT_TEMPLATE = `以下是可能出现的专有名词：\n{vocabulary_list}`
+
+export const VOCAB_PROMPT_PRESET_STANDARD: PolishPreset = {
+  name: '标准',
+  builtIn: true,
+  prompt: VOCAB_PROMPT_DEFAULT_TEMPLATE
+}
+
+export const VOCAB_PROMPT_BUILTIN_PRESETS: PolishPreset[] = [VOCAB_PROMPT_PRESET_STANDARD]
+
 function getRuntimePlatform(): NodeJS.Platform {
   if (typeof process !== 'undefined' && typeof process.platform === 'string') {
     return process.platform as NodeJS.Platform
@@ -381,6 +395,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   // Vocabulary enhancement
   vocabularyEnabled: true,
   vocabularyModel: 'qwen3-asr-flash',
+  vocabularyPrompt: VOCAB_PROMPT_DEFAULT_TEMPLATE,
+  vocabularyPromptPresets: [...VOCAB_PROMPT_BUILTIN_PRESETS],
+  vocabularyPromptActivePresetIndex: 0,
   sharedVocabularySyncUrl: '',
   sharedVocabularySyncToken: '',
   sharedVocabSyncSources: [] as SharedVocabSyncSource[],

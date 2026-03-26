@@ -10,6 +10,7 @@ import {
   TEXT_MODEL_PRESETS,
   FLASH_ASR_MODEL_PRESETS,
   VOCABULARY_CATEGORY_PRESETS,
+  VOCAB_PROMPT_BUILTIN_PRESETS,
   getDefaultAssistantShortcut,
   getDefaultTranscriptionShortcut,
   parseGitPlatformUrl
@@ -71,6 +72,9 @@ const vocabEditDesc = ref('')
 const vocabEditCategory = ref('')
 const vocabSyncLoading = ref(false)
 const vocabSyncResult = ref('')
+// Vocabulary prompt preset editing
+const editingVocabPresetName = ref(false)
+const editVocabPresetNameValue = ref('')
 // Merge & Token config
 const showTokenConfig = ref(false)
 const tokenInput = ref('')
@@ -740,6 +744,90 @@ async function saveVocabModel(): Promise<void> {
     await addCustomModel('vocab', store.vocabularyModel)
   }
   showSaveMessage('增强识别模型已保存')
+}
+
+// --- Vocabulary prompt preset management ---
+
+async function saveVocabPrompt(): Promise<void> {
+  const idx = store.vocabularyPromptActivePresetIndex
+  if (idx >= 0 && idx < store.vocabularyPromptPresets.length) {
+    store.vocabularyPromptPresets[idx].prompt = store.vocabularyPrompt
+    await store.saveSetting('vocabularyPromptPresets', store.vocabularyPromptPresets)
+  }
+  await store.saveSetting('vocabularyPrompt', store.vocabularyPrompt)
+  showSaveMessage('词汇提示词已保存')
+}
+
+async function switchVocabPromptPreset(index: number): Promise<void> {
+  store.vocabularyPromptActivePresetIndex = index
+  store.vocabularyPrompt = store.vocabularyPromptPresets[index].prompt
+  await store.saveSetting('vocabularyPromptActivePresetIndex', index)
+  await store.saveSetting('vocabularyPrompt', store.vocabularyPrompt)
+  showSaveMessage(`已切换到「${store.vocabularyPromptPresets[index].name}」`)
+}
+
+async function addVocabPromptPreset(): Promise<void> {
+  const preset: PolishPreset = {
+    name: `自定义词汇提示 ${store.vocabularyPromptPresets.filter((p) => !p.builtIn).length + 1}`,
+    prompt: ''
+  }
+  store.vocabularyPromptPresets.push(preset)
+  const newIndex = store.vocabularyPromptPresets.length - 1
+  store.vocabularyPromptActivePresetIndex = newIndex
+  store.vocabularyPrompt = preset.prompt
+  await store.saveSetting('vocabularyPromptPresets', store.vocabularyPromptPresets)
+  await store.saveSetting('vocabularyPromptActivePresetIndex', newIndex)
+  await store.saveSetting('vocabularyPrompt', '')
+}
+
+async function deleteVocabPromptPreset(index: number): Promise<void> {
+  if (store.vocabularyPromptPresets[index]?.builtIn) return
+  store.vocabularyPromptPresets.splice(index, 1)
+  if (store.vocabularyPromptActivePresetIndex >= store.vocabularyPromptPresets.length) {
+    store.vocabularyPromptActivePresetIndex = store.vocabularyPromptPresets.length - 1
+  }
+  if (store.vocabularyPromptActivePresetIndex === index || store.vocabularyPromptActivePresetIndex >= store.vocabularyPromptPresets.length) {
+    store.vocabularyPromptActivePresetIndex = 0
+  }
+  store.vocabularyPrompt = store.vocabularyPromptPresets[store.vocabularyPromptActivePresetIndex].prompt
+  await store.saveSetting('vocabularyPromptPresets', store.vocabularyPromptPresets)
+  await store.saveSetting('vocabularyPromptActivePresetIndex', store.vocabularyPromptActivePresetIndex)
+  await store.saveSetting('vocabularyPrompt', store.vocabularyPrompt)
+  showSaveMessage('已删除')
+}
+
+function startEditVocabPresetName(index: number): void {
+  editingVocabPresetName.value = true
+  editVocabPresetNameValue.value = store.vocabularyPromptPresets[index].name
+}
+
+async function saveVocabPresetName(index: number): Promise<void> {
+  if (editVocabPresetNameValue.value.trim()) {
+    store.vocabularyPromptPresets[index].name = editVocabPresetNameValue.value.trim()
+    await store.saveSetting('vocabularyPromptPresets', store.vocabularyPromptPresets)
+  }
+  editingVocabPresetName.value = false
+}
+
+function isVocabBuiltInModified(index: number): boolean {
+  const preset = store.vocabularyPromptPresets[index]
+  if (!preset?.builtIn) return false
+  const original = VOCAB_PROMPT_BUILTIN_PRESETS.find((p) => p.name === preset.name)
+  return !!original && preset.prompt !== original.prompt
+}
+
+async function resetVocabPreset(index: number): Promise<void> {
+  const preset = store.vocabularyPromptPresets[index]
+  if (!preset?.builtIn) return
+  const original = VOCAB_PROMPT_BUILTIN_PRESETS.find((p) => p.name === preset.name)
+  if (!original) return
+  preset.prompt = original.prompt
+  if (store.vocabularyPromptActivePresetIndex === index) {
+    store.vocabularyPrompt = original.prompt
+    await store.saveSetting('vocabularyPrompt', store.vocabularyPrompt)
+  }
+  await store.saveSetting('vocabularyPromptPresets', store.vocabularyPromptPresets)
+  showSaveMessage('已重置为默认提示词')
 }
 
 async function savePolishBaseUrl(): Promise<void> {
@@ -2212,9 +2300,74 @@ function closeMergeDialog(): void {
                 <button class="btn btn-primary" @click="saveVocabModel(); showCustomVocabModel = false">保存</button>
               </div>
             </div>
+
+            <!-- Vocabulary prompt presets -->
+            <div class="setting-group">
+              <label class="setting-label">提示词预设</label>
+              <div class="preset-list">
+                <button
+                  v-for="(preset, index) in store.vocabularyPromptPresets"
+                  :key="index"
+                  :class="['preset-chip', { active: store.vocabularyPromptActivePresetIndex === index }]"
+                  @click="switchVocabPromptPreset(index)"
+                >
+                  {{ preset.name }}
+                  <span v-if="preset.builtIn" class="preset-badge">内置</span>
+                </button>
+                <button class="preset-chip preset-add" @click="addVocabPromptPreset">+ 新建</button>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <div class="preset-header">
+                <template v-if="editingVocabPresetName">
+                  <input
+                    v-model="editVocabPresetNameValue"
+                    class="input-field preset-name-input"
+                    @keyup.enter="saveVocabPresetName(store.vocabularyPromptActivePresetIndex)"
+                  />
+                  <button class="btn btn-primary btn-sm" @click="saveVocabPresetName(store.vocabularyPromptActivePresetIndex)">
+                    确定
+                  </button>
+                </template>
+                <template v-else>
+                  <label class="setting-label" style="margin-bottom:0">
+                    {{ store.vocabularyPromptPresets[store.vocabularyPromptActivePresetIndex]?.name }}
+                  </label>
+                  <button
+                    v-if="!store.vocabularyPromptPresets[store.vocabularyPromptActivePresetIndex]?.builtIn"
+                    class="btn btn-secondary btn-sm"
+                    @click="startEditVocabPresetName(store.vocabularyPromptActivePresetIndex)"
+                  >重命名</button>
+                  <button
+                    v-if="!store.vocabularyPromptPresets[store.vocabularyPromptActivePresetIndex]?.builtIn"
+                    class="btn btn-secondary btn-sm btn-danger"
+                    @click="deleteVocabPromptPreset(store.vocabularyPromptActivePresetIndex)"
+                  >删除</button>
+                  <button
+                    v-if="isVocabBuiltInModified(store.vocabularyPromptActivePresetIndex)"
+                    class="btn btn-secondary btn-sm"
+                    @click="resetVocabPreset(store.vocabularyPromptActivePresetIndex)"
+                  >重置</button>
+                </template>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <p class="setting-description">
+                自定义词汇增强识别的系统提示词模板。使用 <code>{vocabulary_list}</code> 占位符指定词汇列表的插入位置。
+              </p>
+              <textarea
+                v-model="store.vocabularyPrompt"
+                class="input-field"
+                rows="6"
+                placeholder="以下是可能出现的专有名词：&#10;{vocabulary_list}"
+              ></textarea>
+              <div class="prompt-actions">
+                <button class="btn btn-primary" @click="saveVocabPrompt">保存提示词</button>
+              </div>
+            </div>
           </template>
-
-
         </div>
 
         <!-- Personal vocabulary sub-tab -->

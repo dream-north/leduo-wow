@@ -301,7 +301,7 @@ export class Pipeline extends EventEmitter {
       const activeVocab = getActiveVocabulary(this.vocabularyStore)
       if (activeVocab.length > 0) {
         const vocabEntries = activeVocab.slice(0, 200)
-        const systemPrompt = FlashASRClient.buildVocabularySystemPrompt(vocabEntries)
+        const systemPrompt = FlashASRClient.buildVocabularySystemPrompt(vocabEntries, config.vocabularyPrompt)
         const apiKey = config.asrApiKey || config.polishApiKey
         if (apiKey) {
           this.setStatus(PipelineStatus.ENHANCING_ASR)

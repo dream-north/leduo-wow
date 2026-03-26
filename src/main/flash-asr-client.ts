@@ -1,4 +1,4 @@
-import { FLASH_ASR_DEFAULT_API_URL } from '../shared/types'
+import { FLASH_ASR_DEFAULT_API_URL, VOCAB_PROMPT_DEFAULT_TEMPLATE } from '../shared/types'
 import type { VocabularyEntry } from '../shared/types'
 
 export class FlashASRClient {
@@ -58,15 +58,22 @@ export class FlashASRClient {
   /**
    * Build a system prompt from vocabulary entries.
    * Personal entries should come first in the array (higher priority).
+   * Supports a customizable template with {vocabulary_list} placeholder.
    */
-  static buildVocabularySystemPrompt(entries: VocabularyEntry[]): string {
+  static buildVocabularySystemPrompt(entries: VocabularyEntry[], template?: string): string {
     if (entries.length === 0) return ''
 
     const lines = entries.map((e) => {
       if (e.description) return `- ${e.term}：${e.description}`
       return `- ${e.term}`
     })
-    return `以下是可能出现的专有名词：\n${lines.join('\n')}`
+    const vocabList = lines.join('\n')
+
+    const tpl = template?.trim() ? template : VOCAB_PROMPT_DEFAULT_TEMPLATE
+    if (tpl.includes('{vocabulary_list}')) {
+      return tpl.replace('{vocabulary_list}', vocabList)
+    }
+    return `${tpl}\n${vocabList}`
   }
 
   /**

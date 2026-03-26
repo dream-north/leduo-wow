@@ -17,6 +17,8 @@ import type {
 import {
   BUILTIN_PRESETS,
   ASSISTANT_BUILTIN_PRESETS,
+  VOCAB_PROMPT_BUILTIN_PRESETS,
+  VOCAB_PROMPT_DEFAULT_TEMPLATE,
   ASR_DEFAULT_BASE_URL,
   POLISH_DEFAULT_BASE_URL,
   getDefaultAssistantShortcut,
@@ -170,6 +172,9 @@ export const useSettingsStore = defineStore('settings', () => {
   // Vocabulary enhancement
   const vocabularyEnabled = ref(true)
   const vocabularyModel = ref('qwen3-asr-flash')
+  const vocabularyPrompt = ref(VOCAB_PROMPT_DEFAULT_TEMPLATE)
+  const vocabularyPromptPresets = ref<PolishPreset[]>([...VOCAB_PROMPT_BUILTIN_PRESETS])
+  const vocabularyPromptActivePresetIndex = ref(0)
   const sharedVocabularySyncUrl = ref('')
   const sharedVocabularySyncToken = ref('')
   const customModels = ref<{ asr: string[]; text: string[]; vocab: string[] }>({ asr: [], text: [], vocab: [] })
@@ -231,6 +236,10 @@ export const useSettingsStore = defineStore('settings', () => {
       // Shared vocab sync sources
       sharedVocabSyncSources.value = config.sharedVocabSyncSources ?? []
       customVocabularyCategories.value = config.customVocabularyCategories ?? []
+      // Vocabulary prompt
+      vocabularyPrompt.value = config.vocabularyPrompt ?? VOCAB_PROMPT_DEFAULT_TEMPLATE
+      vocabularyPromptPresets.value = config.vocabularyPromptPresets ?? [...VOCAB_PROMPT_BUILTIN_PRESETS]
+      vocabularyPromptActivePresetIndex.value = config.vocabularyPromptActivePresetIndex ?? 0
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {
@@ -298,6 +307,9 @@ export const useSettingsStore = defineStore('settings', () => {
     // Vocabulary enhancement
     vocabularyEnabled,
     vocabularyModel,
+    vocabularyPrompt,
+    vocabularyPromptPresets,
+    vocabularyPromptActivePresetIndex,
     sharedVocabularySyncUrl,
     sharedVocabularySyncToken,
     customModels,
