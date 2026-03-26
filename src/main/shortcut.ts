@@ -230,6 +230,41 @@ class MacNativeShortcutBackend extends EventEmitter implements ShortcutBackend {
     return this.started && keyboardListener.isReady()
   }
 
+  waitForAvailability(timeoutMs: number): Promise<boolean> {
+    if (this.isAvailable()) return Promise.resolve(true)
+
+    return new Promise((resolve) => {
+      let settled = false
+
+      const cleanup = (): void => {
+        keyboardListener.off('start-success', onSuccess)
+        keyboardListener.off('start-error', onFail)
+        keyboardListener.off('exit', onFail)
+        clearTimeout(timer)
+      }
+
+      const onSuccess = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(this.isAvailable())
+      }
+
+      const onFail = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(false)
+      }
+
+      keyboardListener.on('start-success', onSuccess)
+      keyboardListener.on('start-error', onFail)
+      keyboardListener.on('exit', onFail)
+
+      const timer = setTimeout(onFail, timeoutMs)
+    })
+  }
+
   private applyShortcuts(): void {
     if (!this.started) return
     keyboardListener.setShortcuts(this.shortcuts.map((shortcut) => ({
@@ -767,7 +802,7 @@ export class ShortcutService extends EventEmitter {
     this.accessibilityPollAttempts = 0
   }
 
-  async ensureNativeBackendReady(maxAttempts = 15, delayMs = 300): Promise<boolean> {
+  async ensureNativeBackendReady(maxAttempts = 5, perAttemptTimeoutMs = 2000): Promise<boolean> {
     if (!this.nativeBackend) {
       return false
     }
@@ -796,9 +831,9 @@ export class ShortcutService extends EventEmitter {
     try {
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         this.macNativeBackend.forceRestart()
-        await new Promise((resolve) => setTimeout(resolve, delayMs))
+        const ready = await this.macNativeBackend.waitForAvailability(perAttemptTimeoutMs)
 
-        if (this.macNativeBackend.isAvailable()) {
+        if (ready) {
           this.nativeBackendReady = true
           this.consecutiveNativeExitCount = 0
           this.refresh()

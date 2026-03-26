@@ -47,6 +47,7 @@ class SwiftKeyboardListener extends EventEmitter {
   private refCount = 0
   private stopping = false
   private eventTapReady: boolean = false
+  private processGeneration = 0
 
   private resetProcessState(): void {
     this.running = false
@@ -139,6 +140,9 @@ class SwiftKeyboardListener extends EventEmitter {
 
     try {
       this.stopping = false
+      this.processGeneration++
+      const gen = this.processGeneration
+
       this.process = spawn(executablePath, [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: false
@@ -152,6 +156,7 @@ class SwiftKeyboardListener extends EventEmitter {
       activeChildPid = this.process.pid ?? null
 
       this.process.stdin.on('error', (err) => {
+        if (this.processGeneration !== gen) return
         if (this.stopping || (err as NodeJS.ErrnoException).code === 'EPIPE') {
           this.resetProcessState()
           this.emit('exit', null)
@@ -163,11 +168,13 @@ class SwiftKeyboardListener extends EventEmitter {
       })
 
       this.process.on('error', (err) => {
+        if (this.processGeneration !== gen) return
         console.error('[SwiftKeyboardListener] Process error:', err)
         this.resetProcessState()
       })
 
       this.process.on('exit', (code, signal) => {
+        if (this.processGeneration !== gen) return
         console.log('[SwiftKeyboardListener] Process exited with code:', code, 'signal:', signal)
         this.resetProcessState()
         this.emit('exit', code)
@@ -175,11 +182,13 @@ class SwiftKeyboardListener extends EventEmitter {
 
       // Handle stdout data
       this.process.stdout.on('data', (data: Buffer) => {
+        if (this.processGeneration !== gen) return
         this.handleData(data)
       })
 
       // Handle stderr
       this.process.stderr?.on('data', (data: Buffer) => {
+        if (this.processGeneration !== gen) return
         console.error('[SwiftKeyboardListener] stderr:', data.toString())
       })
 
@@ -206,6 +215,7 @@ class SwiftKeyboardListener extends EventEmitter {
       return this.start()
     }
 
+    this.processGeneration++
     const preservedRefCount = Math.max(1, this.refCount)
 
     try {
@@ -232,6 +242,7 @@ class SwiftKeyboardListener extends EventEmitter {
   forceRestart(): boolean {
     console.log('[SwiftKeyboardListener] Force restarting...')
 
+    this.processGeneration++
     const preservedRefCount = Math.max(1, this.refCount)
 
     // Force kill any existing process
@@ -288,6 +299,7 @@ class SwiftKeyboardListener extends EventEmitter {
 
     // SIGKILL fallback: if SIGTERM didn't work within 500ms, force kill
     if (pid !== null && pid !== undefined) {
+      const gen = this.processGeneration
       setTimeout(() => {
         try {
           process.kill(pid, 0) // Check if still alive (throws if dead)
@@ -296,7 +308,9 @@ class SwiftKeyboardListener extends EventEmitter {
         } catch {
           // ESRCH: already exited — good
         }
-        activeChildPid = null
+        if (this.processGeneration === gen) {
+          activeChildPid = null
+        }
       }, 500)
     }
   }
