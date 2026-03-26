@@ -96,8 +96,14 @@ const electronAPI = {
   exportVocabulary: (source: string, name?: string) => ipcRenderer.invoke(IPC.VOCABULARY_EXPORT, source, name),
   getVocabularyStats: () => ipcRenderer.invoke(IPC.VOCABULARY_GET_STATS),
   syncSharedVocabulary: () => ipcRenderer.invoke(IPC.VOCABULARY_SYNC_SHARED),
-  syncVocabularyFromUrl: (url: string) => ipcRenderer.invoke(IPC.VOCABULARY_SYNC_URL, url),
+  syncVocabularyFromUrl: (url: string, token?: string) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_SYNC_URL, url, token),
   removeVocabularySource: (sourceUrl: string) => ipcRenderer.invoke(IPC.VOCABULARY_REMOVE_SOURCE, sourceUrl),
+  previewMerge: (sourceUrl: string) => ipcRenderer.invoke(IPC.VOCABULARY_PREVIEW_MERGE, sourceUrl),
+  executeMerge: (sourceUrl: string, resolvedItems: unknown[]) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_EXECUTE_MERGE, sourceUrl, resolvedItems),
+  testWriteToken: (sourceUrl: string, token: string) =>
+    ipcRenderer.invoke(IPC.VOCABULARY_TEST_WRITE_TOKEN, sourceUrl, token),
   onVocabularyUpdated: (callback: () => void) => {
     const handler = () => callback()
     ipcRenderer.on(IPC.VOCABULARY_UPDATED, handler)

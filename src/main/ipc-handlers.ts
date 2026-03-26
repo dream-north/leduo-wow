@@ -13,7 +13,9 @@ import {
   removeSourceEntries
 } from './vocabulary-store'
 import type { VocabularyStore } from './vocabulary-store'
-import { syncSharedVocabulary, syncFromUrl } from './vocabulary-sync'
+import { syncSharedVocabulary, syncFromUrl, previewMerge, executeMerge, testWriteToken } from './vocabulary-sync'
+import { parseGitPlatformUrl } from '../shared/types'
+import type { VocabMergeItem } from '../shared/types'
 import { Pipeline } from './pipeline'
 import { ShortcutService } from './shortcut'
 import { checkPermissions, requestMicrophonePermission, requestAccessibilityPermission, requestScreenPermission } from './permissions'
@@ -256,12 +258,51 @@ export function registerIpcHandlers(
     return await syncSharedVocabulary(vocabularyStore, config)
   })
 
-  ipcMain.handle(IPC.VOCABULARY_SYNC_URL, async (_event, url: string) => {
-    return await syncFromUrl(vocabularyStore, url)
+  ipcMain.handle(IPC.VOCABULARY_SYNC_URL, async (_event, url: string, token?: string) => {
+    // Use provided token first (e.g. during initial add), fallback to saved writeToken
+    const config = getConfig(configStore)
+    const source = config.sharedVocabSyncSources.find((s) => s.url === url)
+    return await syncFromUrl(vocabularyStore, url, token || source?.writeToken)
   })
 
   ipcMain.handle(IPC.VOCABULARY_REMOVE_SOURCE, (_event, sourceUrl: string) => {
     removeSourceEntries(vocabularyStore, sourceUrl)
+  })
+
+  // Vocabulary merge (push to remote)
+  ipcMain.handle(IPC.VOCABULARY_PREVIEW_MERGE, async (_event, sourceUrl: string) => {
+    const config = getConfig(configStore)
+    const source = config.sharedVocabSyncSources.find((s) => s.url === sourceUrl)
+    const platformInfo = parseGitPlatformUrl(sourceUrl)
+    if (!platformInfo)
+      return { items: [], newCount: 0, conflictCount: 0, unchangedCount: 0, remoteOnlyCount: 0, error: '不支持的平台' }
+    const token = source?.writeToken
+    if (!token)
+      return { items: [], newCount: 0, conflictCount: 0, unchangedCount: 0, remoteOnlyCount: 0, error: '未配置写入凭证' }
+    try {
+      return await previewMerge(vocabularyStore, platformInfo, token)
+    } catch (err) {
+      return { items: [], newCount: 0, conflictCount: 0, unchangedCount: 0, remoteOnlyCount: 0, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle(
+    IPC.VOCABULARY_EXECUTE_MERGE,
+    async (_event, sourceUrl: string, resolvedItems: VocabMergeItem[]) => {
+      const config = getConfig(configStore)
+      const source = config.sharedVocabSyncSources.find((s) => s.url === sourceUrl)
+      const platformInfo = parseGitPlatformUrl(sourceUrl)
+      if (!platformInfo) return { success: false, error: '不支持的平台' }
+      const token = source?.writeToken
+      if (!token) return { success: false, error: '未配置写入凭证' }
+      return await executeMerge(vocabularyStore, sourceUrl, platformInfo, token, resolvedItems)
+    }
+  )
+
+  ipcMain.handle(IPC.VOCABULARY_TEST_WRITE_TOKEN, async (_event, sourceUrl: string, token: string) => {
+    const platformInfo = parseGitPlatformUrl(sourceUrl)
+    if (!platformInfo) return { success: false, error: '不支持的平台' }
+    return await testWriteToken(platformInfo, token)
   })
 
   // Auto-update

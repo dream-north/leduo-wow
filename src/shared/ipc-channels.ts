@@ -50,5 +50,8 @@ export const IPC = {
   VOCABULARY_SYNC_SHARED: 'vocabulary:sync-shared',
   VOCABULARY_SYNC_URL: 'vocabulary:sync-url',
   VOCABULARY_REMOVE_SOURCE: 'vocabulary:remove-source',
+  VOCABULARY_PREVIEW_MERGE: 'vocabulary:preview-merge',
+  VOCABULARY_EXECUTE_MERGE: 'vocabulary:execute-merge',
+  VOCABULARY_TEST_WRITE_TOKEN: 'vocabulary:test-write-token',
   VOCABULARY_UPDATED: 'vocabulary:updated'
 } as const

@@ -11,7 +11,8 @@ import {
   FLASH_ASR_MODEL_PRESETS,
   VOCABULARY_CATEGORY_PRESETS,
   getDefaultAssistantShortcut,
-  getDefaultTranscriptionShortcut
+  getDefaultTranscriptionShortcut,
+  parseGitPlatformUrl
 } from '../../../shared/types'
 import { getRendererPlatform } from '../utils/platform'
 import type {
@@ -21,7 +22,8 @@ import type {
   TranscriptionRecord,
   VoiceMode,
   UpdateStatusPayload,
-  VocabularyEntry
+  VocabularyEntry,
+  VocabMergePreview
 } from '../../../shared/types'
 
 const store = useSettingsStore()
@@ -60,6 +62,7 @@ const showVocabAddForm = ref(false)
 const showSyncSourceForm = ref(false)
 const syncSourceName = ref('')
 const syncSourceUrl = ref('')
+const syncSourceToken = ref('')
 const exportName = ref('')
 const showExportNameInput = ref(false)
 const vocabEditingId = ref<string | null>(null)
@@ -68,6 +71,17 @@ const vocabEditDesc = ref('')
 const vocabEditCategory = ref('')
 const vocabSyncLoading = ref(false)
 const vocabSyncResult = ref('')
+// Merge & Token config
+const showTokenConfig = ref(false)
+const tokenInput = ref('')
+const tokenTestLoading = ref(false)
+const tokenTestResult = ref('')
+const showMergeDialog = ref(false)
+const mergePreview = ref<VocabMergePreview | null>(null)
+const mergeLoading = ref(false)
+const mergeExecuting = ref(false)
+const mergeResult = ref('')
+const mergeFilter = ref<'all' | 'new' | 'conflict' | 'unchanged' | 'remote'>('all')
 watch(activeTab, (val, oldVal) => {
   sessionStorage.setItem('settings-active-tab', val)
   // Save scroll position for old tab
@@ -978,6 +992,39 @@ const activeSharedSource = computed(() => {
   return store.sharedVocabSyncSources[sharedSourceTabIndex.value] ?? null
 })
 
+const syncSourcePlatform = computed(() => {
+  const url = syncSourceUrl.value.trim()
+  if (!url) return null
+  return parseGitPlatformUrl(url)
+})
+
+const activeSourcePlatform = computed(() => {
+  const url = activeSharedSource.value?.url
+  if (!url) return null
+  return parseGitPlatformUrl(url)
+})
+
+const isActiveSourceWritable = computed(() => activeSourcePlatform.value !== null)
+
+const activeSourceHasToken = computed(() => {
+  return !!(activeSharedSource.value?.writeToken)
+})
+
+const filteredMergeItems = computed(() => {
+  if (!mergePreview.value) return []
+  const items = mergePreview.value.items
+  return items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => {
+      if (mergeFilter.value === 'all') return true
+      if (mergeFilter.value === 'new') return item.origin === 'personal'
+      if (mergeFilter.value === 'conflict') return !!item.conflict
+      if (mergeFilter.value === 'unchanged') return item.origin === 'both' && !item.conflict
+      if (mergeFilter.value === 'remote') return item.origin === 'remote'
+      return true
+    })
+})
+
 const activeSharedSourceEntries = computed(() => {
   const source = activeSharedSource.value
   if (!source) return []
@@ -1117,21 +1164,30 @@ async function importVocabulary() {
 async function addSyncSource(): Promise<void> {
   const url = syncSourceUrl.value.trim()
   if (!url) return
+  if (syncSourcePlatform.value && !syncSourceToken.value.trim()) {
+    vocabSyncResult.value = '请填写 Token 后再添加'
+    return
+  }
+  const token = syncSourceToken.value.trim() || undefined
   vocabSyncLoading.value = true
   vocabSyncResult.value = ''
   try {
-    const result = await window.electronAPI.syncVocabularyFromUrl(url)
+    const result = await window.electronAPI.syncVocabularyFromUrl(url, token)
     if (result.error) {
       vocabSyncResult.value = `同步失败: ${result.error}`
       vocabSyncLoading.value = false
       return
     }
     const name = syncSourceName.value.trim() || result.name || '未命名词典'
-    const sources = [...store.sharedVocabSyncSources, { name, url, lastSyncAt: Date.now() }]
+    const newSource: { name: string; url: string; lastSyncAt: number; writeToken?: string } = { name, url, lastSyncAt: Date.now() }
+    if (token) newSource.writeToken = token
+    const sources = [...store.sharedVocabSyncSources, newSource]
     store.sharedVocabSyncSources = sources
     await store.saveSetting('sharedVocabSyncSources', sources)
+    sharedSourceTabIndex.value = sources.length - 1
     syncSourceName.value = ''
     syncSourceUrl.value = ''
+    syncSourceToken.value = ''
     showSyncSourceForm.value = false
     vocabSyncResult.value = `已同步 ${result.total} 条词汇`
     await loadVocabulary()
@@ -1225,6 +1281,107 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
     vocabEditCategory.value = name
     vocabEditCategoryCustom.value = ''
   }
+}
+
+// ---- Merge & Token config functions ----
+
+function loadSourceToken(): void {
+  const source = activeSharedSource.value
+  tokenInput.value = source?.writeToken || ''
+  tokenTestResult.value = ''
+  showTokenConfig.value = false
+}
+
+watch(sharedSourceTabIndex, () => loadSourceToken())
+
+async function saveSourceToken(): Promise<void> {
+  const idx = sharedSourceTabIndex.value
+  const source = store.sharedVocabSyncSources[idx]
+  if (!source) return
+  const sources = [...store.sharedVocabSyncSources]
+  sources[idx] = { ...sources[idx], writeToken: tokenInput.value.trim() }
+  store.sharedVocabSyncSources = sources
+  await store.saveSetting('sharedVocabSyncSources', sources)
+  showSaveMessage('Token 已保存')
+}
+
+async function testSourceToken(): Promise<void> {
+  const source = activeSharedSource.value
+  if (!source) return
+  const token = tokenInput.value.trim()
+  if (!token) {
+    tokenTestResult.value = '请先输入 Token'
+    return
+  }
+  tokenTestLoading.value = true
+  tokenTestResult.value = ''
+  try {
+    const result = await window.electronAPI.testWriteToken(source.url, token)
+    tokenTestResult.value = result.success ? '连接成功' : `连接失败: ${result.error}`
+  } catch (err) {
+    tokenTestResult.value = `测试出错: ${(err as Error).message}`
+  } finally {
+    tokenTestLoading.value = false
+  }
+}
+
+async function startMergePreview(): Promise<void> {
+  const source = activeSharedSource.value
+  if (!source) return
+  mergeLoading.value = true
+  mergeResult.value = ''
+  mergePreview.value = null
+  showMergeDialog.value = true
+  try {
+    const result = await window.electronAPI.previewMerge(source.url)
+    if (result.error) {
+      mergeResult.value = `预览失败: ${result.error}`
+      return
+    }
+    mergePreview.value = result
+  } catch (err) {
+    mergeResult.value = `预览出错: ${(err as Error).message}`
+  } finally {
+    mergeLoading.value = false
+  }
+}
+
+function toggleMergeItem(index: number): void {
+  if (!mergePreview.value) return
+  mergePreview.value.items[index].selected = !mergePreview.value.items[index].selected
+}
+
+function setConflictResolution(index: number, resolution: 'keep-personal' | 'keep-remote'): void {
+  if (!mergePreview.value) return
+  mergePreview.value.items[index].resolution = resolution
+}
+
+async function doExecuteMerge(): Promise<void> {
+  const source = activeSharedSource.value
+  if (!source || !mergePreview.value) return
+  mergeExecuting.value = true
+  try {
+    const result = await window.electronAPI.executeMerge(source.url, JSON.parse(JSON.stringify(mergePreview.value.items)))
+    if (result.success) {
+      showMergeDialog.value = false
+      mergePreview.value = null
+      showSaveMessage('合并推送成功')
+      await loadVocabulary()
+    } else {
+      mergeResult.value = `合并失败: ${result.error}`
+    }
+  } catch (err) {
+    mergeResult.value = `合并出错: ${(err as Error).message}`
+  } finally {
+    mergeExecuting.value = false
+  }
+}
+
+function closeMergeDialog(): void {
+  showMergeDialog.value = false
+  mergePreview.value = null
+  mergeResult.value = ''
+  mergeFilter.value = 'all'
 }
 </script>
 
@@ -2163,19 +2320,28 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
         <div v-if="vocabSubTab === 'shared'">
           <!-- Add sync source form -->
           <div class="setting-group">
-            <div v-if="showSyncSourceForm" class="vocab-add-form">
-              <input class="input-field" v-model="syncSourceUrl" placeholder="同步地址 *" style="flex: 2">
-              <input class="input-field" v-model="syncSourceName" placeholder="名称（可选，自动识别）" style="flex: 1">
+            <div v-if="showSyncSourceForm" class="vocab-add-form" style="flex-wrap: wrap;">
+              <input class="input-field" v-model="syncSourceUrl" placeholder="同步地址 *" style="flex: 2; min-width: 200px;">
+              <input class="input-field" v-model="syncSourceName" placeholder="名称（可选，自动识别）" style="flex: 1; min-width: 100px;">
+              <template v-if="syncSourcePlatform">
+                <input class="input-field" v-model="syncSourceToken" type="password" :placeholder="syncSourcePlatform.platform === 'github' ? 'GitHub Token *' : 'Aone Code Token *'" style="flex: 2; min-width: 200px;">
+                <p class="setting-description" style="flex-basis: 100%; margin: 0;" v-if="syncSourcePlatform.platform === 'github'">
+                  前往 GitHub Settings &gt; Developer settings &gt; Personal access tokens 获取（需要 repo scope）
+                </p>
+                <p class="setting-description" style="flex-basis: 100%; margin: 0;" v-else-if="syncSourcePlatform.platform === 'aone-code'">
+                  前往 <a href="https://code.alibaba-inc.com/profile/account" target="_blank" style="color: var(--accent-color); cursor: pointer;">code.alibaba-inc.com</a> 获取 Private Token
+                </p>
+              </template>
               <button class="btn btn-primary btn-sm" @click="addSyncSource" :disabled="!syncSourceUrl.trim() || vocabSyncLoading">
                 {{ vocabSyncLoading ? '同步中...' : '确认' }}
               </button>
-              <button class="btn btn-text btn-sm" @click="showSyncSourceForm = false">取消</button>
+              <button class="btn btn-text btn-sm" @click="showSyncSourceForm = false; syncSourceToken = ''">取消</button>
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <button v-if="!showSyncSourceForm" class="btn btn-text btn-sm" @click="showSyncSourceForm = true">
                 + 添加同步源
               </button>
-              <span v-if="vocabSyncResult" class="vocab-sync-result">{{ vocabSyncResult }}</span>
+              <span v-if="vocabSyncResult" :class="['vocab-sync-result', { 'vocab-sync-error': vocabSyncResult.includes('失败') || vocabSyncResult.includes('出错') || vocabSyncResult.includes('请填写') }]">{{ vocabSyncResult }}</span>
             </div>
           </div>
 
@@ -2204,6 +2370,13 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
                 <div class="sync-source-actions">
                   <button class="vocab-icon-btn" title="同步" :disabled="vocabSyncLoading" @click="syncSource(sharedSourceTabIndex)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  </button>
+                  <button v-if="isActiveSourceWritable && activeSourceHasToken" class="vocab-icon-btn" title="合并推送个人词汇到此源" :disabled="mergeLoading" @click="startMergePreview">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  </button>
+                  <button v-if="isActiveSourceWritable" class="vocab-icon-btn" :title="activeSourceHasToken ? 'Token 已配置，点击修改' : '配置写入 Token'" @click="showTokenConfig = true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                    <span v-if="activeSourceHasToken" class="token-dot"></span>
                   </button>
                   <button class="vocab-icon-btn vocab-icon-btn-danger" title="移除" @click="removeSyncSource(sharedSourceTabIndex)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
@@ -2342,6 +2515,118 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
       </div>
     </main>
   </div>
+
+  <!-- Merge Preview Dialog -->
+  <Teleport to="body">
+    <div v-if="showMergeDialog" class="merge-dialog-overlay" @click.self="closeMergeDialog">
+      <div class="merge-dialog">
+        <div class="merge-dialog-header">
+          <h3>合并个人词汇到「{{ activeSharedSource?.name }}」</h3>
+          <button class="merge-dialog-close" @click="closeMergeDialog">&times;</button>
+        </div>
+
+        <!-- Loading state -->
+        <div v-if="mergeLoading && !mergePreview" class="merge-loading">
+          <span class="merge-loading-spinner"></span>
+          <span>正在获取远端词汇并对比差异...</span>
+        </div>
+
+        <!-- Error without data -->
+        <div v-else-if="!mergePreview && mergeResult" class="merge-result-msg" style="padding: 24px 20px;">{{ mergeResult }}</div>
+
+        <!-- Loaded content -->
+        <template v-else-if="mergePreview">
+          <!-- Stats / filter tabs -->
+          <div class="merge-summary">
+            <button :class="['merge-stat', { active: mergeFilter === 'all' }]" @click="mergeFilter = 'all'">全部 {{ mergePreview.items.length }}</button>
+            <button :class="['merge-stat merge-stat-new', { active: mergeFilter === 'new' }]" @click="mergeFilter = 'new'">新增 {{ mergePreview.newCount }}</button>
+            <button :class="['merge-stat merge-stat-conflict', { active: mergeFilter === 'conflict' }]" @click="mergeFilter = 'conflict'">冲突 {{ mergePreview.conflictCount }}</button>
+            <button :class="['merge-stat merge-stat-unchanged', { active: mergeFilter === 'unchanged' }]" @click="mergeFilter = 'unchanged'">匹配 {{ mergePreview.unchangedCount }}</button>
+            <button :class="['merge-stat merge-stat-remote', { active: mergeFilter === 'remote' }]" @click="mergeFilter = 'remote'">仅远端 {{ mergePreview.remoteOnlyCount }}</button>
+          </div>
+
+        <!-- Conflict resolution section -->
+        <div v-if="mergePreview.conflictCount > 0 && (mergeFilter === 'all' || mergeFilter === 'conflict')" class="merge-conflicts">
+          <h4 class="merge-section-title">冲突项（同名但内容不同，点击选择保留版本）</h4>
+          <div v-for="{ item, index } in filteredMergeItems.filter(e => !!e.item.conflict)" :key="'conflict-' + index">
+            <div class="merge-conflict-item">
+              <div class="merge-conflict-term">{{ item.term }}</div>
+              <div class="merge-conflict-compare">
+                <div :class="['merge-conflict-side', { active: item.resolution === 'keep-personal' }]" @click="setConflictResolution(index, 'keep-personal')">
+                  <span class="merge-conflict-label">本地</span>
+                  <span class="merge-conflict-detail">{{ item.conflict!.personalDescription || '-' }} / {{ item.conflict!.personalCategory || '-' }}</span>
+                </div>
+                <div :class="['merge-conflict-side', { active: item.resolution === 'keep-remote' }]" @click="setConflictResolution(index, 'keep-remote')">
+                  <span class="merge-conflict-label">远端</span>
+                  <span class="merge-conflict-detail">{{ item.conflict!.remoteDescription || '-' }} / {{ item.conflict!.remoteCategory || '-' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Item list -->
+        <div class="merge-item-list">
+          <h4 class="merge-section-title">取消勾选的项目不会包含在最终结果中（{{ filteredMergeItems.length }} 项）</h4>
+          <div class="merge-items-scroll">
+            <div v-for="{ item, index } in filteredMergeItems" :key="'item-' + index" :class="['merge-item', { deselected: !item.selected }]">
+              <label class="merge-item-check">
+                <input type="checkbox" :checked="item.selected" @change="toggleMergeItem(index)">
+              </label>
+              <span class="merge-item-term">{{ item.term }}</span>
+              <span :class="['merge-item-origin', 'origin-' + item.origin]">
+                {{ item.origin === 'personal' ? '仅本地' : item.origin === 'remote' ? '仅远端' : item.conflict ? '冲突' : '匹配' }}
+              </span>
+              <span class="merge-item-desc">{{ item.description || '' }}</span>
+              <span class="merge-item-cat">{{ item.category || '' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Merge result message -->
+        <div v-if="mergeResult && mergePreview" class="merge-result-msg">{{ mergeResult }}</div>
+
+        <!-- Action bar -->
+        <div class="merge-actions">
+          <button class="btn btn-text" @click="closeMergeDialog">取消</button>
+          <button v-if="mergePreview" class="btn btn-primary" :disabled="mergeExecuting" @click="doExecuteMerge">
+            {{ mergeExecuting ? '推送中...' : '确认合并推送' }}
+          </button>
+        </div>
+        </template>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Token Config Dialog -->
+  <Teleport to="body">
+    <div v-if="showTokenConfig" class="merge-dialog-overlay" @click.self="showTokenConfig = false">
+      <div class="token-dialog">
+        <div class="merge-dialog-header">
+          <h3>写入 Token 配置</h3>
+          <button class="merge-dialog-close" @click="showTokenConfig = false">&times;</button>
+        </div>
+        <div class="token-dialog-body">
+          <p class="setting-description" v-if="activeSourcePlatform?.platform === 'github'">
+            前往 GitHub Settings &gt; Developer settings &gt; Personal access tokens 获取 Token（需要 repo scope）
+          </p>
+          <p class="setting-description" v-else-if="activeSourcePlatform?.platform === 'aone-code'">
+            前往 <a href="https://code.alibaba-inc.com/profile/account" target="_blank" style="color: var(--accent-color); cursor: pointer;">code.alibaba-inc.com</a> 获取 Private Token
+          </p>
+          <div class="api-key-row">
+            <input class="input-field" :type="tokenInput ? 'password' : 'text'" v-model="tokenInput" placeholder="Token" style="flex: 1">
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn btn-primary btn-sm" @click="saveSourceToken(); showTokenConfig = false">保存</button>
+            <button class="btn btn-text btn-sm" @click="testSourceToken" :disabled="tokenTestLoading">
+              {{ tokenTestLoading ? '测试中...' : '测试连接' }}
+            </button>
+            <span v-if="tokenTestResult" class="vocab-sync-result">{{ tokenTestResult }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -3416,6 +3701,10 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
   color: var(--text-secondary);
 }
 
+.vocab-sync-error {
+  color: #ff3b30;
+}
+
 .sync-source-list {
   display: flex;
   flex-direction: column;
@@ -3567,6 +3856,329 @@ async function confirmInlineCategory(target: 'new' | 'edit'): Promise<void> {
   gap: 8px;
   flex: 1;
   min-width: 0;
+}
+
+/* Token dot indicator on key icon */
+.vocab-icon-btn {
+  position: relative;
+}
+
+.token-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34c759;
+}
+
+/* Token config dialog */
+.token-dialog {
+  background: var(--bg-primary);
+  border-radius: 12px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.token-dialog-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Merge Dialog Overlay */
+.merge-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.merge-dialog {
+  background: var(--bg-primary);
+  border-radius: 12px;
+  width: 580px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.merge-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.merge-dialog-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.merge-dialog-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.merge-dialog-close:hover {
+  color: var(--text-primary);
+}
+
+/* Merge summary stats */
+.merge-summary {
+  display: flex;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+
+.merge-stat {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-weight: 500;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, opacity 0.15s;
+  opacity: 0.6;
+}
+
+.merge-stat:hover {
+  opacity: 0.85;
+}
+
+.merge-stat.active {
+  opacity: 1;
+  border-color: currentColor;
+}
+
+.merge-stat-new {
+  background: rgba(52, 199, 89, 0.12);
+  color: #34c759;
+}
+
+.merge-stat-conflict {
+  background: rgba(255, 149, 0, 0.12);
+  color: #ff9500;
+}
+
+.merge-stat-unchanged {
+  background: rgba(0, 113, 227, 0.1);
+  color: var(--accent-color);
+}
+
+.merge-stat-remote {
+  background: rgba(142, 142, 147, 0.12);
+  color: #8e8e93;
+}
+
+/* Conflict section */
+.merge-conflicts {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.merge-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+}
+
+.merge-conflict-item {
+  margin-bottom: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.merge-conflict-term {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.merge-conflict-compare {
+  display: flex;
+  gap: 6px;
+}
+
+.merge-conflict-side {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.merge-conflict-side:hover {
+  border-color: rgba(0, 113, 227, 0.3);
+}
+
+.merge-conflict-side.active {
+  border-color: var(--accent-color);
+  background: rgba(0, 113, 227, 0.05);
+}
+
+.merge-conflict-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.merge-conflict-detail {
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* Item list */
+.merge-item-list {
+  padding: 12px 20px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.merge-items-scroll {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 280px;
+}
+
+.merge-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: opacity 0.15s;
+}
+
+.merge-item:hover {
+  background: var(--bg-secondary);
+}
+
+.merge-item.deselected {
+  opacity: 0.4;
+}
+
+.merge-item-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.merge-item-term {
+  font-weight: 500;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+.merge-item-origin {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.origin-personal {
+  background: rgba(52, 199, 89, 0.12);
+  color: #34c759;
+}
+
+.origin-remote {
+  background: rgba(142, 142, 147, 0.12);
+  color: #8e8e93;
+}
+
+.origin-both {
+  background: rgba(0, 113, 227, 0.1);
+  color: var(--accent-color);
+}
+
+.merge-item-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.merge-item-cat {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Merge result message */
+.merge-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.merge-loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.merge-result-msg {
+  padding: 8px 20px;
+  font-size: 12px;
+  color: #ff3b30;
+}
+
+/* Action bar */
+.merge-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-color);
 }
 
 </style>

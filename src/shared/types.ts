@@ -97,6 +97,71 @@ export interface SharedVocabSyncSource {
   name: string
   url: string
   lastSyncAt?: number
+  writeToken?: string
+}
+
+export type GitPlatformType = 'github' | 'aone-code'
+
+export interface GitPlatformInfo {
+  platform: GitPlatformType
+  owner: string
+  repo: string
+  branch: string
+  filePath: string
+}
+
+/**
+ * Parse a sync source URL into Git platform info.
+ * Returns null if the URL doesn't match any supported platform.
+ */
+export function parseGitPlatformUrl(url: string): GitPlatformInfo | null {
+  // GitHub raw: https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}
+  const ghMatch = url.match(
+    /^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/
+  )
+  if (ghMatch) {
+    return {
+      platform: 'github',
+      owner: ghMatch[1],
+      repo: ghMatch[2],
+      branch: ghMatch[3],
+      filePath: ghMatch[4]
+    }
+  }
+
+  // Aone Code raw: https://code.alibaba-inc.com/{owner}/{repo}/raw/{branch}/{path}
+  const aoneMatch = url.match(
+    /^https?:\/\/code\.alibaba-inc\.com\/([^/]+)\/([^/]+)\/raw\/([^/?]+)\/([^?]+)/
+  )
+  if (aoneMatch) {
+    return {
+      platform: 'aone-code',
+      owner: aoneMatch[1],
+      repo: aoneMatch[2],
+      branch: aoneMatch[3],
+      filePath: aoneMatch[4]
+    }
+  }
+
+  return null
+}
+
+export interface VocabMergeItem {
+  term: string
+  description: string
+  category: string
+  origin: 'personal' | 'remote' | 'both'
+  conflict?: { personalDescription: string; personalCategory: string; remoteDescription: string; remoteCategory: string }
+  selected: boolean
+  resolution?: 'keep-personal' | 'keep-remote'
+}
+
+export interface VocabMergePreview {
+  items: VocabMergeItem[]
+  newCount: number
+  conflictCount: number
+  unchangedCount: number
+  remoteOnlyCount: number
 }
 
 export const VOCABULARY_CATEGORY_PRESETS = [

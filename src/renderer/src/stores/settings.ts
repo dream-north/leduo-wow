@@ -10,7 +10,9 @@ import type {
   ShortcutServiceStatus,
   UpdateStatusPayload,
   VocabularyEntry,
-  SharedVocabSyncSource
+  SharedVocabSyncSource,
+  VocabMergeItem,
+  VocabMergePreview
 } from '../../../shared/types'
 import {
   BUILTIN_PRESETS,
@@ -87,13 +89,23 @@ declare global {
       }>
       syncSharedVocabulary: () => Promise<{ synced: number; error?: string }>
       syncVocabularyFromUrl: (
-        url: string
+        url: string,
+        token?: string
       ) => Promise<{
         total: number
         name?: string
         error?: string
       }>
       removeVocabularySource: (sourceUrl: string) => Promise<void>
+      previewMerge: (sourceUrl: string) => Promise<VocabMergePreview & { error?: string }>
+      executeMerge: (
+        sourceUrl: string,
+        resolvedItems: VocabMergeItem[]
+      ) => Promise<{ success: boolean; error?: string }>
+      testWriteToken: (
+        sourceUrl: string,
+        token: string
+      ) => Promise<{ success: boolean; error?: string }>
       onVocabularyUpdated: (callback: () => void) => () => void
     }
   }
