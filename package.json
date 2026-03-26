@@ -1,6 +1,6 @@
 {
   "name": "leduo-wow",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "author": "DreamNorth",
   "description": "Cross-platform voice input and assistant app powered by Qwen ASR and LLM",
   "main": "./out/main/index.js",
