@@ -583,6 +583,9 @@ export class ShortcutService extends EventEmitter {
   private accessibilityPollAttempts = 0
   private nativeBackendReady = false
   private shortcutCaptureActive = false
+  private consecutiveNativeExitCount = 0
+  private readonly maxConsecutiveNativeExits = 3
+  private suppressExitRefresh = false
 
   constructor(configStore: ConfigStore, pipeline: Pipeline, platform: NodeJS.Platform = process.platform) {
     super()
@@ -607,7 +610,11 @@ export class ShortcutService extends EventEmitter {
     })
     this.nativeBackend?.on('exit', () => {
       this.nativeBackendReady = false
-      this.refresh()
+      if (this.suppressExitRefresh) return
+      this.consecutiveNativeExitCount++
+      if (this.consecutiveNativeExitCount <= this.maxConsecutiveNativeExits) {
+        this.refresh()
+      }
     })
 
     this.fallbackBackend.on('trigger', (mode: VoiceMode) => this.handleShortcutTriggered(mode))
@@ -644,6 +651,7 @@ export class ShortcutService extends EventEmitter {
       if (started && this.nativeBackend.isAvailable()) {
         this.nativeBackend.setShortcuts(shortcuts.filter((shortcut) => isValidShortcut(shortcut.shortcut)))
         this.nativeBackendReady = true
+        this.consecutiveNativeExitCount = 0
         backendState = 'native'
         reason = 'ready'
       } else {
@@ -768,6 +776,7 @@ export class ShortcutService extends EventEmitter {
       const started = this.nativeBackend.start()
       if (started) {
         this.nativeBackendReady = true
+        this.consecutiveNativeExitCount = 0
         this.refresh()
       }
       return started
@@ -782,19 +791,25 @@ export class ShortcutService extends EventEmitter {
     }
 
     this.nativeBackendReady = false
+    this.suppressExitRefresh = true
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      this.macNativeBackend.forceRestart()
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    try {
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        this.macNativeBackend.forceRestart()
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
 
-      if (this.macNativeBackend.isAvailable()) {
-        this.nativeBackendReady = true
-        this.refresh()
-        return true
+        if (this.macNativeBackend.isAvailable()) {
+          this.nativeBackendReady = true
+          this.consecutiveNativeExitCount = 0
+          this.refresh()
+          return true
+        }
       }
-    }
 
-    return false
+      return false
+    } finally {
+      this.suppressExitRefresh = false
+    }
   }
 
   private handleShortcutTriggered(mode: VoiceMode): void {

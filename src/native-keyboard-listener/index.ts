@@ -167,8 +167,8 @@ class SwiftKeyboardListener extends EventEmitter {
         this.resetProcessState()
       })
 
-      this.process.on('exit', (code) => {
-        console.log('[SwiftKeyboardListener] Process exited with code:', code)
+      this.process.on('exit', (code, signal) => {
+        console.log('[SwiftKeyboardListener] Process exited with code:', code, 'signal:', signal)
         this.resetProcessState()
         this.emit('exit', code)
       })
