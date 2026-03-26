@@ -1024,6 +1024,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 
     // Input bar controls
     private let inputBar = NSView()
+    private let inputFieldWrapper = NSView()
     private let inputField = NSTextField()
     private let sendButton = NSButton(title: "发送", target: nil, action: nil)
     private let voiceButton = NSButton(title: "🎤", target: nil, action: nil)
@@ -1031,6 +1032,8 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
     private var inputBarBottomConstraint: NSLayoutConstraint?
     private var webViewBottomToInputBar: NSLayoutConstraint?
     private var webViewBottomToSurface: NSLayoutConstraint?
+    private var webViewTopToStatDetail: NSLayoutConstraint?
+    private var webViewTopToTitleBar: NSLayoutConstraint?
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -1114,14 +1117,25 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 
         // Configure input bar
         inputBar.wantsLayer = true
-        inputBar.layer?.backgroundColor = NSColor(white: 0.96, alpha: 1).cgColor
+        inputBar.layer?.backgroundColor = NSColor.white.cgColor
+        let separator = NSView()
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = NSColor(white: 0, alpha: 0.08).cgColor
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        inputBar.addSubview(separator)
+        NSLayoutConstraint.activate([
+            separator.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: 18),
+            separator.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
+            separator.topAnchor.constraint(equalTo: inputBar.topAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1)
+        ])
         inputBar.isHidden = true
 
         inputField.placeholderString = "输入追问，或按快捷键语音追问..."
         inputField.font = NSFont.systemFont(ofSize: 14, weight: .regular)
         inputField.textColor = OverlayTheme.ink
-        inputField.isBordered = true
-        inputField.bezelStyle = .roundedBezel
+        inputField.drawsBackground = false
+        inputField.isBordered = false
         inputField.focusRingType = .none
         inputField.delegate = self
         inputField.lineBreakMode = .byWordWrapping
@@ -1129,32 +1143,35 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         inputField.cell?.wraps = true
         inputField.cell?.isScrollable = true
 
+        inputFieldWrapper.wantsLayer = true
+        inputFieldWrapper.layer?.cornerRadius = 18
+        inputFieldWrapper.layer?.backgroundColor = NSColor(white: 0, alpha: 0.04).cgColor
+        inputFieldWrapper.layer?.borderWidth = 1
+        inputFieldWrapper.layer?.borderColor = NSColor(white: 0, alpha: 0.08).cgColor
+
         sendButton.target = self
         sendButton.action = #selector(handleSend)
         sendButton.isBordered = false
         sendButton.wantsLayer = true
-        sendButton.layer?.cornerRadius = 6
+        sendButton.layer?.cornerRadius = 14
+        sendButton.layer?.cornerCurve = .continuous
         sendButton.layer?.backgroundColor = OverlayTheme.assistantAccent.cgColor
         sendButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         sendButton.contentTintColor = .white
         sendButton.isEnabled = false
 
-        voiceButton.target = self
-        voiceButton.action = #selector(handleVoiceRequest)
-        voiceButton.isBordered = false
-        voiceButton.font = NSFont.systemFont(ofSize: 16)
-
         stopButton.target = self
         stopButton.action = #selector(handleStopGeneration)
         stopButton.isBordered = false
         stopButton.wantsLayer = true
-        stopButton.layer?.cornerRadius = 6
-        stopButton.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.15).cgColor
+        stopButton.layer?.cornerRadius = 14
+        stopButton.layer?.cornerCurve = .continuous
+        stopButton.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.12).cgColor
         stopButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         stopButton.contentTintColor = .systemRed
         stopButton.isHidden = true
 
-        for view in [surfaceView, titleBar, metaStatsStackView, statDetailView, statDetailLabel, eyebrowLabel, titleLabel, copyButton, closeButton, webView, inputBar, inputField, sendButton, voiceButton, stopButton] {
+        for view in [surfaceView, titleBar, metaStatsStackView, statDetailView, statDetailLabel, eyebrowLabel, titleLabel, copyButton, closeButton, webView, inputBar, inputFieldWrapper, inputField, sendButton, stopButton] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
 
@@ -1169,9 +1186,9 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         titleBar.addSubview(closeButton)
         surfaceView.addSubview(webView)
         surfaceView.addSubview(inputBar)
-        inputBar.addSubview(inputField)
+        inputBar.addSubview(inputFieldWrapper)
+        inputFieldWrapper.addSubview(inputField)
         inputBar.addSubview(sendButton)
-        inputBar.addSubview(voiceButton)
         inputBar.addSubview(stopButton)
 
         metaStatsHeightConstraint = metaStatsStackView.heightAnchor.constraint(equalToConstant: 0)
@@ -1182,6 +1199,10 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         webViewBottomToInputBar = webView.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -4)
         webViewBottomToSurface = webView.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor, constant: -18)
         webViewBottomToSurface?.isActive = true
+
+        webViewTopToStatDetail = webView.topAnchor.constraint(equalTo: statDetailView.bottomAnchor, constant: 8)
+        webViewTopToTitleBar = webView.topAnchor.constraint(equalTo: titleBar.bottomAnchor, constant: 4)
+        webViewTopToStatDetail?.isActive = true
 
         NSLayoutConstraint.activate([
             surfaceView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: outerInset),
@@ -1225,7 +1246,6 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 
             webView.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor, constant: 18),
             webView.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor, constant: -18),
-            webView.topAnchor.constraint(equalTo: statDetailView.bottomAnchor, constant: 8),
 
             // Input bar layout
             inputBar.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor),
@@ -1238,29 +1258,29 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                 return h
             }(),
 
-            inputField.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: 18),
-            inputField.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
-            inputField.topAnchor.constraint(greaterThanOrEqualTo: inputBar.topAnchor, constant: 10),
-            inputField.bottomAnchor.constraint(lessThanOrEqualTo: inputBar.bottomAnchor, constant: -10),
-            inputField.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
-            inputField.heightAnchor.constraint(lessThanOrEqualToConstant: 100),
+            // Input field wrapper (provides rounded capsule visual)
+            inputFieldWrapper.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: 18),
+            inputFieldWrapper.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            inputFieldWrapper.topAnchor.constraint(greaterThanOrEqualTo: inputBar.topAnchor, constant: 8),
+            inputFieldWrapper.bottomAnchor.constraint(lessThanOrEqualTo: inputBar.bottomAnchor, constant: -8),
+            inputFieldWrapper.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+
+            // Input field inside wrapper with padding
+            inputField.leadingAnchor.constraint(equalTo: inputFieldWrapper.leadingAnchor, constant: 16),
+            inputField.trailingAnchor.constraint(equalTo: inputFieldWrapper.trailingAnchor, constant: -16),
+            inputField.centerYAnchor.constraint(equalTo: inputFieldWrapper.centerYAnchor),
 
             stopButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
             stopButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
             stopButton.widthAnchor.constraint(equalToConstant: 52),
-            stopButton.heightAnchor.constraint(equalToConstant: 32),
+            stopButton.heightAnchor.constraint(equalToConstant: 28),
 
             sendButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
             sendButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
             sendButton.widthAnchor.constraint(equalToConstant: 52),
-            sendButton.heightAnchor.constraint(equalToConstant: 32),
+            sendButton.heightAnchor.constraint(equalToConstant: 28),
 
-            voiceButton.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -8),
-            voiceButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
-            voiceButton.widthAnchor.constraint(equalToConstant: 32),
-            voiceButton.heightAnchor.constraint(equalToConstant: 32),
-
-            inputField.trailingAnchor.constraint(equalTo: voiceButton.leadingAnchor, constant: -8)
+            inputFieldWrapper.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -10)
         ])
     }
 
@@ -1367,7 +1387,20 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         let wasVisible = panel.isVisible
         copyResetWorkItem?.cancel()
         copyButton.title = "复制"
-        updateStats(stats)
+        // In conversation mode, stats are rendered inline per-turn in the webview;
+        // also skip the native stats area to eliminate dead whitespace.
+        if isConversationMode {
+            updateStats([])
+            metaStatsStackView.isHidden = true
+            statDetailView.isHidden = true
+            webViewTopToStatDetail?.isActive = false
+            webViewTopToTitleBar?.isActive = true
+        } else {
+            updateStats(stats)
+            metaStatsStackView.isHidden = false
+            webViewTopToTitleBar?.isActive = false
+            webViewTopToStatDetail?.isActive = true
+        }
 
         // Ensure panel is visible BEFORE loading HTML, so webView has a non-zero frame.
         // WKWebView may not render content loaded while its frame is zero.
@@ -1668,7 +1701,6 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         let isConversing = currentPipelineStatus == "conversing"
         inputField.isEnabled = isConversing
         sendButton.isEnabled = isConversing && !inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        voiceButton.isEnabled = isConversing
         let isPolishing = currentPipelineStatus == "polishing"
         stopButton.isHidden = !isPolishing
         sendButton.isHidden = isPolishing
@@ -1740,15 +1772,52 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  self.panel.isVisible,
-                  event.modifierFlags.contains(.command),
-                  event.charactersIgnoringModifiers?.lowercased() == "c" else {
-                return event
+            guard let self, self.panel.isVisible else { return event }
+
+            if event.modifierFlags.contains(.command) {
+                let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+                // When input field (or its field editor) is focused, manually dispatch edit commands
+                // because this process has no NSMenu so standard shortcuts won't route automatically.
+                if let firstResponder = self.panel.firstResponder,
+                   (firstResponder === self.inputField || firstResponder === self.inputField.currentEditor()) {
+                    switch key {
+                    case "v":
+                        firstResponder.tryToPerform(#selector(NSText.paste(_:)), with: nil)
+                        return nil
+                    case "x":
+                        firstResponder.tryToPerform(#selector(NSText.cut(_:)), with: nil)
+                        return nil
+                    case "a":
+                        firstResponder.tryToPerform(#selector(NSText.selectAll(_:)), with: nil)
+                        return nil
+                    case "z":
+                        if event.modifierFlags.contains(.shift) {
+                            firstResponder.tryToPerform(Selector(("redo:")), with: nil)
+                        } else {
+                            firstResponder.tryToPerform(Selector(("undo:")), with: nil)
+                        }
+                        return nil
+                    case "c":
+                        if let editor = self.inputField.currentEditor(),
+                           editor.selectedRange.length > 0 {
+                            firstResponder.tryToPerform(#selector(NSText.copy(_:)), with: nil)
+                            return nil
+                        }
+                        self.copyCurrentSelectionOrMarkdown()
+                        return nil
+                    default: break
+                    }
+                }
+
+                // Cmd+C anywhere else: copy markdown/webview selection
+                if key == "c" {
+                    self.copyCurrentSelectionOrMarkdown()
+                    return nil
+                }
             }
 
-            self.copyCurrentSelectionOrMarkdown()
-            return nil
+            return event
         }
     }
 }
@@ -2361,28 +2430,96 @@ enum MarkdownTemplateRenderer {
     // MARK: - Multi-turn conversation rendering
 
     static let conversationCSS = """
-    .conversation { padding: 4px 0 24px; }
+    body { padding: 0 2px 16px; }
+    .conversation { padding: 0; }
+    .conversation > .user-bubble:first-child { margin-top: 2px; }
     .user-bubble {
-        margin: 16px 0 8px;
+        margin: 10px 0 4px;
         padding: 10px 16px;
         background: rgba(2, 132, 199, 0.10);
         border-radius: 16px 16px 4px 16px;
         max-width: 85%;
+        width: fit-content;
         margin-left: auto;
         text-align: left;
         color: var(--ink);
         font-size: 14px;
         line-height: 1.6;
         word-break: break-word;
+        white-space: pre-wrap;
     }
     .assistant-response {
-        margin: 4px 0 16px;
+        margin: 0 0 8px;
     }
+    .assistant-response > :first-child { margin-top: 0; }
+    .conversation .reasoning { margin: 0.25em 0 0.5em; }
     .turn-divider {
         border: none;
         border-top: 1px solid var(--rule);
-        margin: 20px 0 16px;
+        margin: 12px 0 8px;
     }
+    .turn-meta-strip {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 8px;
+    }
+    .stat-badges {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .stat-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 24px;
+        padding: 0 8px;
+        border: 1px solid rgba(148,163,184,0.3);
+        border-radius: 10px;
+        background: rgba(248,250,252,0.8);
+        color: var(--ink);
+        font-size: 11px;
+        font-weight: 600;
+        cursor: default;
+        position: relative;
+    }
+    .stat-badge:hover {
+        background: rgba(2, 132, 199, 0.1);
+    }
+    .stat-badge .stat-tip {
+        display: none;
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        padding: 6px 12px;
+        border-radius: 8px;
+        background: #1e293b;
+        color: #f8fafc;
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 1.5;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 100;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .stat-badge:hover .stat-tip {
+        display: block;
+    }
+    .stat-icon {
+        display: inline-flex;
+        width: 12px;
+        height: 12px;
+        color: var(--accent);
+    }
+    .stat-icon svg {
+        width: 12px;
+        height: 12px;
+        fill: currentColor;
+    }
+    .stat-value { white-space: nowrap; }
     """
 
     static func renderConversation(
@@ -2408,6 +2545,8 @@ enum MarkdownTemplateRenderer {
 
             // Assistant response
             html += "<div class=\"assistant-response\">"
+            // Per-turn inline stats
+            html += renderStatBadges(turn.stats)
             if let cached = turn.cachedHTML {
                 html += cached
             } else {
@@ -2424,6 +2563,36 @@ enum MarkdownTemplateRenderer {
         }
         html += "</div>"
         return html
+    }
+
+    private static func renderStatBadges(_ stats: [[String: String]]) -> String {
+        let badges = stats.compactMap { stat -> String? in
+            guard let kind = stat["kind"],
+                  let value = stat["value"],
+                  let detail = stat["detail"] else { return nil }
+            let svg = statSVGIcon(for: kind)
+            let escapedDetail = escapeHTML(detail)
+            return "<span class=\"stat-badge\"><span class=\"stat-icon\">\(svg)</span><span class=\"stat-value\">\(escapeHTML(value))</span><span class=\"stat-tip\">\(escapedDetail)</span></span>"
+        }
+        guard !badges.isEmpty else { return "" }
+        return "<div class=\"turn-meta-strip\"><div class=\"stat-badges\">\(badges.joined())</div></div>"
+    }
+
+    private static func statSVGIcon(for kind: String) -> String {
+        switch kind {
+        case "tokens-total":
+            return "<svg viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"/><circle cx=\"8\" cy=\"8\" r=\"2\" fill=\"currentColor\"/></svg>"
+        case "tokens-thinking":
+            return "<svg viewBox=\"0 0 16 16\"><path d=\"M8 2a5 5 0 0 0-3.5 8.5L5 14h6l.5-3.5A5 5 0 0 0 8 2z\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linejoin=\"round\"/><line x1=\"6\" y1=\"15\" x2=\"10\" y2=\"15\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/></svg>"
+        case "code-interpreter":
+            return "<svg viewBox=\"0 0 16 16\"><rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\"/><polyline points=\"5,7 7,9 5,11\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><line x1=\"9\" y1=\"11\" x2=\"11\" y2=\"11\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/></svg>"
+        case "web-search":
+            return "<svg viewBox=\"0 0 16 16\"><circle cx=\"7\" cy=\"7\" r=\"5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\"/><line x1=\"7\" y1=\"2\" x2=\"7\" y2=\"12\" stroke=\"currentColor\" stroke-width=\"1\"/><line x1=\"2\" y1=\"7\" x2=\"12\" y2=\"7\" stroke=\"currentColor\" stroke-width=\"1\"/><ellipse cx=\"7\" cy=\"7\" rx=\"2.5\" ry=\"5\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1\"/></svg>"
+        case "web-extractor":
+            return "<svg viewBox=\"0 0 16 16\"><rect x=\"2\" y=\"2\" width=\"12\" height=\"12\" rx=\"2\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\"/><line x1=\"5\" y1=\"5\" x2=\"11\" y2=\"5\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/><line x1=\"5\" y1=\"8\" x2=\"9\" y2=\"8\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/><line x1=\"5\" y1=\"11\" x2=\"11\" y2=\"11\" stroke=\"currentColor\" stroke-width=\"1.2\" stroke-linecap=\"round\"/></svg>"
+        default:
+            return "<svg viewBox=\"0 0 16 16\"><circle cx=\"8\" cy=\"8\" r=\"6\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\"/><circle cx=\"8\" cy=\"5.5\" r=\"0.8\" fill=\"currentColor\"/><line x1=\"8\" y1=\"7.5\" x2=\"8\" y2=\"11.5\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/></svg>"
+        }
     }
 
     static func renderConversationPage(

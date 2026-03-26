@@ -59,6 +59,7 @@ export interface OverlayResultPayload {
   turnIndex?: number
   userMessage?: string
   isConversation?: boolean
+  pipelineStatus?: string
 }
 
 export interface OverlayResultStat {

@@ -42,6 +42,7 @@ export class Pipeline extends EventEmitter {
   private pendingFollowUpText: string | null = null
   private latestStreamedAnswerText: string = ''
   private isStopGeneration: boolean = false
+  private conversationSuspended: boolean = false
 
   constructor(overlay: OverlayBackend, configStore: ConfigStore, vocabularyStore: VocabularyStore) {
     super()
@@ -58,7 +59,11 @@ export class Pipeline extends EventEmitter {
     this.status = status
     this.emit('status', status)
     this.broadcastToWindows(IPC.PIPELINE_STATUS, status)
-    this.overlay.updatePipelineStatus?.(status)
+    // Don't forward pipeline status to the result panel while a conversation is suspended
+    // (e.g. during a transcription triggered while the assistant panel is open)
+    if (!this.conversationSuspended) {
+      this.overlay.updatePipelineStatus?.(status)
+    }
   }
 
   private broadcastToWindows(channel: string, ...args: unknown[]): void {
@@ -73,7 +78,15 @@ export class Pipeline extends EventEmitter {
     if (this.status === PipelineStatus.IDLE) {
       await this.startRecording(mode)
     } else if (this.status === PipelineStatus.CONVERSING) {
-      await this.startFollowUpRecording()
+      if (mode === 'assistant') {
+        await this.startFollowUpRecording()
+      } else {
+        // Transcription while conversing: suspend conversation, start fresh transcription.
+        // The assistant result window stays open and its input bar keeps showing "conversing" state.
+        this.conversationSuspended = true
+        this.setStatus(PipelineStatus.IDLE)
+        await this.startRecording(mode)
+      }
     } else if (this.status === PipelineStatus.RECORDING) {
       await this.stopRecording()
     } else {
@@ -129,6 +142,13 @@ export class Pipeline extends EventEmitter {
       setConfig(this.configStore, 'assistantResultWindowSize', size)
     }
 
+    // If user closes the assistant panel while a transcription is running with conversation suspended,
+    // clear the suspended flag so reset() won't try to restore the conversation.
+    if (this.conversationSuspended) {
+      console.log('[Pipeline] Assistant result window closed while conversation was suspended')
+      this.conversationSuspended = false
+    }
+
     if (this.currentMode === 'assistant' && this.status === PipelineStatus.CONVERSING) {
       console.log('[Pipeline] Assistant result window closed during conversation, ending conversation')
       this.endConversation()
@@ -156,7 +176,7 @@ export class Pipeline extends EventEmitter {
   private async startRecording(mode: VoiceMode = 'transcription'): Promise<void> {
     const config = getConfig(this.configStore)
     this.currentMode = mode
-    if (!this.isFollowUp) {
+    if (!this.isFollowUp && mode === 'assistant') {
       this.overlay.hideResult()
     }
 
@@ -221,7 +241,7 @@ export class Pipeline extends EventEmitter {
 
       this.setStatus(PipelineStatus.RECORDING)
       const needScreenshot = mode === 'assistant' ? true : config.polishEnabled
-      this.screenshotActive = !!(config.screenshotEnabled && needScreenshot)
+      this.screenshotActive = !!(config.screenshotEnabled && needScreenshot && !this.isFollowUp)
       this.showHud('正在聆听...', 'recording')
       this.broadcastToWindows(IPC.AUDIO_START, config.audioThreshold ?? 0, config.selectedMicrophoneId ?? '', mode)
 
@@ -442,7 +462,7 @@ export class Pipeline extends EventEmitter {
         }
 
         try {
-          const selectedText = await getSelectedText()
+          const selectedText = this.isFollowUp ? '' : await getSelectedText()
           let userPrompt = outputText
           if (selectedText) {
             userPrompt = `我的语音指令是："${outputText}"\n\n选中的文本是：\n\`\`\`\n${selectedText}\n\`\`\``
@@ -471,7 +491,8 @@ export class Pipeline extends EventEmitter {
               reasoningCollapsed: false,
               turnIndex: currentTurnIndex,
               userMessage: userPrompt,
-              isConversation: true
+              isConversation: true,
+              pipelineStatus: this.status
             })
           }
           if (config.assistantEnableCodeInterpreter || config.assistantEnableSearch) {
@@ -506,7 +527,8 @@ export class Pipeline extends EventEmitter {
                     codeCollapsed,
                     turnIndex: currentTurnIndex,
                     userMessage: userPrompt,
-                    isConversation: true
+                    isConversation: true,
+                    pipelineStatus: this.status
                   })
                 }
               },
@@ -545,7 +567,8 @@ export class Pipeline extends EventEmitter {
                     reasoningCollapsed: isAnswering,
                     turnIndex: currentTurnIndex,
                     userMessage: userPrompt,
-                    isConversation: true
+                    isConversation: true,
+                    pipelineStatus: this.status
                   })
                 }
               },
@@ -587,7 +610,8 @@ export class Pipeline extends EventEmitter {
                 stats: this.latestAssistantStats,
                 sources: this.latestAssistantSources,
                 turnIndex: this.conversationTurnIndex,
-                isConversation: true
+                isConversation: true,
+                pipelineStatus: PipelineStatus.CONVERSING
               })
               this.conversationTurnIndex++
               this.isFollowUp = false
@@ -652,7 +676,8 @@ export class Pipeline extends EventEmitter {
           stats: this.latestAssistantStats,
           sources: this.latestAssistantSources,
           turnIndex: currentTurnIndex,
-          isConversation: true
+          isConversation: true,
+          pipelineStatus: PipelineStatus.CONVERSING
         })
 
         addHistory(this.configStore, {
@@ -715,6 +740,9 @@ export class Pipeline extends EventEmitter {
 
   private reset(): void {
     console.log('[Pipeline] reset()')
+    const wasSuspended = this.conversationSuspended
+    const savedHistory = this.conversationHistory
+    const savedTurnIndex = this.conversationTurnIndex
     this.stopAppCheckPolling()
     this.cancelActiveLLMRequest()
     if (this.asrClient) {
@@ -731,20 +759,34 @@ export class Pipeline extends EventEmitter {
     this.latestAssistantStats = undefined
     this.latestAssistantSources = undefined
     this.isProcessingComplete = false
-    this.conversationHistory = []
-    this.conversationTurnIndex = 0
     this.isFollowUp = false
     this.backgroundRecordingActive = false
     this.pendingFollowUpText = null
     this.latestStreamedAnswerText = ''
     this.isStopGeneration = false
-    this.setStatus(PipelineStatus.IDLE)
-    this.overlay.hideHud()
     this.broadcastToWindows(IPC.AUDIO_STOP)
+    this.overlay.hideHud()
+
+    if (wasSuspended) {
+      // Restore conversation mode after transcription completes
+      console.log('[Pipeline] Restoring suspended conversation')
+      this.conversationSuspended = false
+      this.conversationHistory = savedHistory
+      this.conversationTurnIndex = savedTurnIndex
+      this.currentMode = 'assistant'
+      this.setStatus(PipelineStatus.CONVERSING)
+    } else {
+      this.conversationHistory = []
+      this.conversationTurnIndex = 0
+      this.setStatus(PipelineStatus.IDLE)
+    }
   }
 
   private forceCancel(): void {
     console.log('[Pipeline] forceCancel()')
+    const wasSuspended = this.conversationSuspended
+    const savedHistory = this.conversationHistory
+    const savedTurnIndex = this.conversationTurnIndex
     this.stopAppCheckPolling()
     this.cancelActiveLLMRequest()
     if (this.asrClient) {
@@ -759,20 +801,34 @@ export class Pipeline extends EventEmitter {
     this.latestAssistantStats = undefined
     this.latestAssistantSources = undefined
     this.isProcessingComplete = true
-    this.conversationHistory = []
-    this.conversationTurnIndex = 0
     this.isFollowUp = false
     this.backgroundRecordingActive = false
     this.pendingFollowUpText = null
     this.latestStreamedAnswerText = ''
     this.isStopGeneration = false
     this.broadcastToWindows(IPC.AUDIO_STOP)
-    this.setStatus(PipelineStatus.IDLE)
     this.overlay.hideHud()
-    this.overlay.hideResult()
-    setTimeout(() => {
-      this.isProcessingComplete = false
-    }, 100)
+
+    if (wasSuspended) {
+      // Restore conversation mode after cancelling transcription
+      console.log('[Pipeline] Restoring suspended conversation after force cancel')
+      this.conversationSuspended = false
+      this.conversationHistory = savedHistory
+      this.conversationTurnIndex = savedTurnIndex
+      this.currentMode = 'assistant'
+      this.setStatus(PipelineStatus.CONVERSING)
+      setTimeout(() => {
+        this.isProcessingComplete = false
+      }, 100)
+    } else {
+      this.conversationHistory = []
+      this.conversationTurnIndex = 0
+      this.setStatus(PipelineStatus.IDLE)
+      this.overlay.hideResult()
+      setTimeout(() => {
+        this.isProcessingComplete = false
+      }, 100)
+    }
   }
 
   private cancelFollowUp(): void {
@@ -804,6 +860,7 @@ export class Pipeline extends EventEmitter {
 
   private endConversation(): void {
     console.log('[Pipeline] endConversation()')
+    this.conversationSuspended = false
     this.stopAppCheckPolling()
     this.cancelActiveLLMRequest()
     if (this.asrClient) {
@@ -841,6 +898,7 @@ export class Pipeline extends EventEmitter {
     console.log('[Pipeline] Starting follow-up voice recording')
     this.isFollowUp = true
     this.isProcessingComplete = false
+    this.screenshotBase64 = ''
     await this.startRecording('assistant')
   }
 
@@ -935,21 +993,11 @@ export class Pipeline extends EventEmitter {
     }
 
     try {
-      // Capture fresh screenshot and selected text
-      if (config.screenshotEnabled) {
-        try {
-          this.screenshotBase64 = await this.captureScreen()
-        } catch (err) {
-          console.error('[Pipeline] Follow-up screenshot capture failed:', err)
-          this.screenshotBase64 = ''
-        }
-      }
-
-      const selectedText = await getSelectedText()
-      let userPrompt = text
-      if (selectedText) {
-        userPrompt = `我的语音指令是："${text}"\n\n选中的文本是：\n\`\`\`\n${selectedText}\n\`\`\``
-      }
+      // Follow-up turns don't capture selected text or screenshot:
+      // the result panel is frontmost, so Cmd+C would copy its content
+      // and screenshot would capture the panel itself, not the user's work context.
+      this.screenshotBase64 = ''
+      const userPrompt = text
 
       // Add user message to history
       this.conversationHistory.push({ role: 'user', content: userPrompt })
@@ -974,7 +1022,8 @@ export class Pipeline extends EventEmitter {
           reasoningCollapsed: false,
           turnIndex: currentTurnIndex,
           userMessage: userPrompt,
-          isConversation: true
+          isConversation: true,
+          pipelineStatus: this.status
         })
       }
 
@@ -999,7 +1048,8 @@ export class Pipeline extends EventEmitter {
                 codeCollapsed,
                 turnIndex: currentTurnIndex,
                 userMessage: userPrompt,
-                isConversation: true
+                isConversation: true,
+                pipelineStatus: this.status
               })
             }
           },
@@ -1035,7 +1085,8 @@ export class Pipeline extends EventEmitter {
                 reasoningCollapsed: isAnswering,
                 turnIndex: currentTurnIndex,
                 userMessage: userPrompt,
-                isConversation: true
+                isConversation: true,
+                pipelineStatus: this.status
               })
             }
           },
@@ -1083,7 +1134,8 @@ export class Pipeline extends EventEmitter {
           stats: this.latestAssistantStats,
           sources: this.latestAssistantSources,
           turnIndex: currentTurnIndex,
-          isConversation: true
+          isConversation: true,
+          pipelineStatus: PipelineStatus.CONVERSING
         })
       }
 
@@ -1126,7 +1178,8 @@ export class Pipeline extends EventEmitter {
             stats: this.latestAssistantStats,
             sources: this.latestAssistantSources,
             turnIndex: this.conversationTurnIndex,
-            isConversation: true
+            isConversation: true,
+            pipelineStatus: PipelineStatus.CONVERSING
           })
           this.conversationTurnIndex++
           this.isFollowUp = false
