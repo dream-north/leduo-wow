@@ -1141,10 +1141,10 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         inputField.lineBreakMode = .byWordWrapping
         inputField.usesSingleLineMode = false
         inputField.cell?.wraps = true
-        inputField.cell?.isScrollable = true
+        inputField.cell?.isScrollable = false
 
         inputFieldWrapper.wantsLayer = true
-        inputFieldWrapper.layer?.cornerRadius = 18
+        inputFieldWrapper.layer?.cornerRadius = 14
         inputFieldWrapper.layer?.backgroundColor = NSColor(white: 0, alpha: 0.04).cgColor
         inputFieldWrapper.layer?.borderWidth = 1
         inputFieldWrapper.layer?.borderColor = NSColor(white: 0, alpha: 0.08).cgColor
@@ -1252,31 +1252,27 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
             inputBar.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor),
             inputBar.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor),
             inputBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 52),
-            {
-                let h = inputBar.heightAnchor.constraint(equalToConstant: 52)
-                h.priority = .defaultHigh
-                return h
-            }(),
 
-            // Input field wrapper (provides rounded capsule visual)
+            // Input field wrapper (grows with content, capped at max height)
             inputFieldWrapper.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: 18),
-            inputFieldWrapper.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
-            inputFieldWrapper.topAnchor.constraint(greaterThanOrEqualTo: inputBar.topAnchor, constant: 8),
-            inputFieldWrapper.bottomAnchor.constraint(lessThanOrEqualTo: inputBar.bottomAnchor, constant: -8),
+            inputFieldWrapper.topAnchor.constraint(equalTo: inputBar.topAnchor, constant: 8),
+            inputFieldWrapper.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -8),
             inputFieldWrapper.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            inputFieldWrapper.heightAnchor.constraint(lessThanOrEqualToConstant: 120),
 
             // Input field inside wrapper with padding
             inputField.leadingAnchor.constraint(equalTo: inputFieldWrapper.leadingAnchor, constant: 16),
             inputField.trailingAnchor.constraint(equalTo: inputFieldWrapper.trailingAnchor, constant: -16),
-            inputField.centerYAnchor.constraint(equalTo: inputFieldWrapper.centerYAnchor),
+            inputField.topAnchor.constraint(equalTo: inputFieldWrapper.topAnchor, constant: 8),
+            inputField.bottomAnchor.constraint(equalTo: inputFieldWrapper.bottomAnchor, constant: -8),
 
             stopButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
-            stopButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            stopButton.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -12),
             stopButton.widthAnchor.constraint(equalToConstant: 52),
             stopButton.heightAnchor.constraint(equalToConstant: 28),
 
             sendButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -18),
-            sendButton.centerYAnchor.constraint(equalTo: inputBar.centerYAnchor),
+            sendButton.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -12),
             sendButton.widthAnchor.constraint(equalToConstant: 52),
             sendButton.heightAnchor.constraint(equalToConstant: 28),
 
