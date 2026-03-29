@@ -41,6 +41,8 @@ export const IPC = {
   SCREEN_DOC_HISTORY_ITEM_GET: 'screen-doc:history-item-get',
   SCREEN_DOC_HISTORY_UPDATED: 'screen-doc:history-updated',
   SCREEN_DOC_RESULT_GET_LATEST: 'screen-doc:result-get-latest',
+  SCREEN_DOC_REANALYZE: 'screen-doc:reanalyze',
+  SCREEN_DOC_OPEN_FOLDER: 'screen-doc:open-folder',
   SCREEN_DOC_PREVIEW: 'screen-doc:preview',
   SCREEN_DOC_EXPORT: 'screen-doc:export',
   SCREEN_DOC_DELETE: 'screen-doc:delete',

@@ -94,6 +94,10 @@ const electronAPI = {
   getScreenDocHistory: () => ipcRenderer.invoke(IPC.SCREEN_DOC_HISTORY_GET) as Promise<ScreenDocHistoryRecord[]>,
   getScreenDocHistoryRecord: (recordId: string) =>
     ipcRenderer.invoke(IPC.SCREEN_DOC_HISTORY_ITEM_GET, recordId) as Promise<ScreenDocHistoryRecord | null>,
+  reanalyzeScreenDocRecord: (recordId: string) =>
+    ipcRenderer.invoke(IPC.SCREEN_DOC_REANALYZE, recordId) as Promise<ScreenDocResultPayload | null>,
+  openScreenDocRecordFolder: (recordId: string) =>
+    ipcRenderer.invoke(IPC.SCREEN_DOC_OPEN_FOLDER, recordId) as Promise<string | null>,
   previewScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_PREVIEW, recordId) as Promise<string | null>,
   exportScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_EXPORT, recordId) as Promise<string | null>,
   deleteScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_DELETE, recordId) as Promise<boolean>,

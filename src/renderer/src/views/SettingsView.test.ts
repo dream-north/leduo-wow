@@ -99,6 +99,8 @@ function createElectronApi(overrides: Partial<Window['electronAPI']> = {}): Wind
     sendScreenDocAudioChunk: vi.fn(),
     getScreenDocHistory: vi.fn(async () => screenDocHistory),
     getScreenDocHistoryRecord: vi.fn(async () => null),
+    reanalyzeScreenDocRecord: vi.fn(async () => null),
+    openScreenDocRecordFolder: vi.fn(async () => null),
     previewScreenDocRecord: vi.fn(async () => null),
     exportScreenDocRecord: vi.fn(async () => null),
     deleteScreenDocRecord: vi.fn(async () => true),
@@ -197,8 +199,47 @@ describe('SettingsView screen doc controls', () => {
     expect(window.electronAPI.stopScreenDoc).toHaveBeenCalledWith()
   })
 
-  it('shows history storage info and triggers preview export delete actions', async () => {
-    const historyRecord: ScreenDocHistoryRecord = {
+  it('hides the cancel button after recording stops and processing begins', async () => {
+    let resolveStop: (() => void) | null = null
+    window.electronAPI = createElectronApi({
+      stopScreenDoc: vi.fn(async (): Promise<null> => await new Promise<null>((resolve) => {
+        resolveStop = () => resolve(null)
+      }))
+    })
+
+    const wrapper = mount(SettingsView, {
+      global: {
+        plugins: [createPinia()]
+      }
+    })
+    await flushPromises()
+
+    const screenDocNavButton = wrapper.findAll('.nav-item').find((item) => item.text().includes('录屏整理'))
+    await screenDocNavButton!.trigger('click')
+    await flushPromises()
+
+    const primaryButton = wrapper.find('.screen-doc-actions .btn-primary')
+    await primaryButton.trigger('click')
+    await flushPromises()
+
+    const cancelButton = wrapper.findAll('.screen-doc-actions .btn-secondary').find((item) => item.text().includes('取消本次'))
+    expect(cancelButton?.exists()).toBe(true)
+
+    await wrapper.find('.screen-doc-actions .btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.screen-doc-actions .btn-secondary').some((item) => item.text().includes('取消本次'))).toBe(false)
+
+    const finishStop = resolveStop as (() => void) | null
+    if (!finishStop) {
+      throw new Error('stopScreenDoc mock did not provide a resolver')
+    }
+    finishStop()
+    await flushPromises()
+  })
+
+  it('shows record actions, allows canceling active analysis, and allows reanalyzing cancelled history items', async () => {
+    const readyRecord: ScreenDocHistoryRecord = {
       id: 'record-1',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -212,10 +253,39 @@ describe('SettingsView screen doc controls', () => {
       recordingFileName: 'recording.mp4',
       previewHtmlPath: 'preview.html'
     }
+    const analyzingRecord: ScreenDocHistoryRecord = {
+      id: 'record-2',
+      createdAt: Date.now() - 800,
+      updatedAt: Date.now() - 300,
+      status: 'analyzing',
+      title: '正在分析的录屏整理',
+      durationMs: 6000,
+      storageBytes: 3 * 1024 * 1024,
+      hasRecordingFile: true,
+      recordingFileName: 'recording.mp4'
+    }
+    const cancelledRecord: ScreenDocHistoryRecord = {
+      id: 'record-3',
+      createdAt: Date.now() - 1000,
+      updatedAt: Date.now() - 500,
+      status: 'cancelled',
+      title: '已取消的录屏整理',
+      durationMs: 4000,
+      storageBytes: 2 * 1024 * 1024,
+      hasRecordingFile: true,
+      recordingFileName: 'recording.mp4'
+    }
 
     window.electronAPI = createElectronApi({
-      getScreenDocHistory: vi.fn(async () => [historyRecord]),
-      getScreenDocHistoryRecord: vi.fn(async () => historyRecord),
+      getScreenDocStatus: vi.fn(async (): Promise<ScreenDocStatusPayload> => ({
+        status: 'analyzing',
+        artifactId: 'record-2',
+        captureBackend: 'native'
+      })),
+      getScreenDocHistory: vi.fn(async () => [readyRecord, analyzingRecord, cancelledRecord]),
+      getScreenDocHistoryRecord: vi.fn(async () => readyRecord),
+      reanalyzeScreenDocRecord: vi.fn(async () => null),
+      openScreenDocRecordFolder: vi.fn(async () => '/tmp/screen-doc-history/artifacts/record-1'),
       previewScreenDocRecord: vi.fn(async () => '/tmp/preview.html'),
       exportScreenDocRecord: vi.fn(async () => '/tmp/export'),
       deleteScreenDocRecord: vi.fn(async () => true)
@@ -241,14 +311,25 @@ describe('SettingsView screen doc controls', () => {
     expect(wrapper.text()).toContain('5.00 MB')
     expect(wrapper.text()).toContain('原始录屏：已保存')
 
-    const buttons = wrapper.findAll('.screen-doc-history-item-actions .btn')
-    await buttons[0].trigger('click')
-    await buttons[1].trigger('click')
-    await buttons[2].trigger('click')
+    const folderButtons = wrapper.findAll('.screen-doc-history-folder-btn')
+    await folderButtons[0].trigger('click')
+
+    const actionRows = wrapper.findAll('.screen-doc-history-item-actions')
+    const readyButtons = actionRows[0].findAll('.btn')
+    await readyButtons[0].trigger('click')
+    await readyButtons[1].trigger('click')
+    await readyButtons[2].trigger('click')
+    const analyzingButtons = actionRows[1].findAll('.btn')
+    await analyzingButtons[0].trigger('click')
+    const cancelledButtons = actionRows[2].findAll('.btn')
+    await cancelledButtons[0].trigger('click')
     await flushPromises()
 
+    expect(window.electronAPI.openScreenDocRecordFolder).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.previewScreenDocRecord).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.exportScreenDocRecord).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.deleteScreenDocRecord).toHaveBeenCalledWith('record-1')
+    expect(window.electronAPI.cancelScreenDoc).toHaveBeenCalledTimes(1)
+    expect(window.electronAPI.reanalyzeScreenDocRecord).toHaveBeenCalledWith('record-3')
   })
 })

@@ -73,6 +73,8 @@ declare global {
       sendScreenDocAudioChunk: (chunk: ArrayBuffer) => void
       getScreenDocHistory: () => Promise<ScreenDocHistoryRecord[]>
       getScreenDocHistoryRecord: (recordId: string) => Promise<ScreenDocHistoryRecord | null>
+      reanalyzeScreenDocRecord: (recordId: string) => Promise<ScreenDocResultPayload | null>
+      openScreenDocRecordFolder: (recordId: string) => Promise<string | null>
       previewScreenDocRecord: (recordId: string) => Promise<string | null>
       exportScreenDocRecord: (recordId: string) => Promise<string | null>
       deleteScreenDocRecord: (recordId: string) => Promise<boolean>

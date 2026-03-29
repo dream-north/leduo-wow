@@ -267,6 +267,23 @@ function extensionForMimeType(mimeType: string): string {
   }
 }
 
+function mimeTypeForFilePath(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case '.mp4':
+      return 'video/mp4'
+    case '.mov':
+      return 'video/quicktime'
+    case '.avi':
+      return 'video/x-msvideo'
+    case '.mkv':
+      return 'video/x-matroska'
+    case '.webm':
+      return 'video/webm'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -487,9 +504,6 @@ export class ScreenDocService extends EventEmitter {
     let recordingArtifact: NativeScreenRecordingArtifact | null = null
     let archivedRecordingPath: string | null = null
     let archivedRecordingFileName: string | undefined
-    let timelineFrames: ScreenDocFrameInput[] = []
-    let frameIntervalMs = 1000
-
     try {
       recordingArtifact = await this.screenRecorder.stopRecording()
       if (this.runId !== currentRunId) return null
@@ -515,127 +529,16 @@ export class ScreenDocService extends EventEmitter {
       await this.finishAsrTranscript()
       if (this.runId !== currentRunId) return null
 
-      const transcript = (this.finalTranscript || this.partialTranscript).trim()
-      let analysis: ScreenDocAnalysis | null = null
-
-      const canUploadVideo = /^(video\/mp4|video\/quicktime|video\/x-msvideo|video\/x-matroska)$/i.test(recordingArtifact.mimeType)
-
-      if (canUploadVideo) {
-        this.setStatus('uploading')
-        await this.updateHistoryRecord(recordId, {
-          status: 'uploading',
-          updatedAt: Date.now(),
-          durationMs: recordingArtifact.durationMs,
-          hasRecordingFile: true,
-          recordingFileName: archivedRecording.fileName,
-          storageBytes: archivedStorageBytes
-        })
-        try {
-          const bytes = await readFile(recordingArtifact.filePath)
-          const ossUrl = await this.uploadTemporaryFile(
-            llmApiKey,
-            SCREEN_DOC_MODEL,
-            basename(recordingArtifact.filePath),
-            recordingArtifact.mimeType,
-            bytes
-          )
-          if (this.runId !== currentRunId) return null
-          this.setStatus('analyzing')
-          await this.updateHistoryRecord(recordId, {
-            status: 'analyzing',
-            updatedAt: Date.now(),
-            durationMs: recordingArtifact.durationMs,
-            hasRecordingFile: true,
-            recordingFileName: archivedRecording.fileName,
-            storageBytes: archivedStorageBytes
-          })
-          analysis = await this.analyzeWithVideo(
-            llmApiKey,
-            config.polishBaseUrl || POLISH_DEFAULT_BASE_URL,
-            ossUrl,
-            transcript,
-            recordingArtifact.durationMs,
-            recordingArtifact.targetDescription,
-            config.screenDocPrompt
-          )
-        } catch (error) {
-          if (this.runId !== currentRunId || isAbortError(error)) {
-            throw error
-          }
-          console.warn('[ScreenDoc] Video upload or analysis failed, falling back to frames:', error)
-        }
-      }
-
-      if (this.runId !== currentRunId) return null
-
-      if (!analysis) {
-        this.setStatus('analyzing')
-        await this.updateHistoryRecord(recordId, {
-          status: 'analyzing',
-          updatedAt: Date.now(),
-          durationMs: recordingArtifact.durationMs,
-          hasRecordingFile: true,
-          recordingFileName: archivedRecording.fileName,
-          storageBytes: archivedStorageBytes
-        })
-        const timelineResult = await this.screenRecorder.extractTimelineFrames(
-          recordingArtifact.filePath,
-          1000,
-          DEFAULT_FRAME_LIMIT
-        )
-        timelineFrames = timelineResult.frames
-        frameIntervalMs = timelineResult.intervalMs
-        analysis = await this.analyzeWithFrames(
-          llmApiKey,
-          config.polishBaseUrl || POLISH_DEFAULT_BASE_URL,
-          timelineFrames,
-          frameIntervalMs,
-          transcript,
-          recordingArtifact.durationMs,
-          recordingArtifact.targetDescription,
-          config.screenDocPrompt
-        )
-      }
-
-      if (this.runId !== currentRunId) return null
-
-      const screenshots = await this.buildScreenshotsForSteps(
-        recordingArtifact.filePath,
-        analysis.steps,
-        timelineFrames
-      )
-      const artifactId = recordId
-      const previewMarkdown = this.buildMarkdown(analysis, screenshots, true)
-      const result: ScreenDocResultPayload = {
-        artifactId,
-        analysis,
-        screenshots,
-        markdown: previewMarkdown,
-        createdAt: Date.now()
-      }
-
-      this.latestResult = result
-      await this.persistHistoryRecord({
-        id: recordId,
-        createdAt: this.startedAt ?? result.createdAt,
-        updatedAt: result.createdAt,
-        status: 'ready',
-        title: analysis.title,
-        summary: analysis.summary,
-        stepCount: analysis.steps.length,
-        durationMs: recordingArtifact.durationMs,
-        storageBytes: archivedStorageBytes,
-        hasRecordingFile: true,
-        recordingFileName: archivedRecording.fileName,
-        previewHtmlPath: PREVIEW_HTML_FILE,
-        analysis,
-        screenshots,
-        markdown: previewMarkdown,
-        transcript: analysis.transcript
+      return await this.processArchivedRecording({
+        currentRunId,
+        recordId,
+        recordingArtifact,
+        transcript: (this.finalTranscript || this.partialTranscript).trim(),
+        createdAt: this.startedAt ?? Date.now(),
+        llmApiKey,
+        promptTemplate: config.screenDocPrompt,
+        baseUrl: config.polishBaseUrl || POLISH_DEFAULT_BASE_URL
       })
-      this.overlay.hideHud()
-      this.setStatus('ready')
-      return result
     } catch (error) {
       console.error('[ScreenDoc] Failed to finalize recording:', error)
       if (this.runId === currentRunId) {
@@ -681,17 +584,13 @@ export class ScreenDocService extends EventEmitter {
     }
     this.asrClient?.abort()
     this.asrClient = null
+    this.overlay.hideHud()
+    if (recordId) {
+      await this.persistCancelledRecord(recordId)
+    }
     this.partialTranscript = ''
     this.finalTranscript = ''
     this.error = undefined
-    this.overlay.hideHud()
-    if (recordId) {
-      await this.updateHistoryRecord(recordId, {
-        status: 'cancelled',
-        updatedAt: Date.now(),
-        title: '已取消的录屏整理'
-      })
-    }
     this.setStatus('idle')
   }
 
@@ -707,6 +606,20 @@ export class ScreenDocService extends EventEmitter {
     }
 
     return await this.writePreviewArtifacts(record, { updateIndex: true })
+  }
+
+  async getRecordDirectoryPath(recordId: string): Promise<string> {
+    const record = await this.getHistoryRecord(recordId)
+    if (!record) {
+      throw new Error('未找到对应的录屏整理记录')
+    }
+
+    const recordDir = this.getRecordDir(recordId)
+    if (!await this.fileExists(recordDir)) {
+      throw new Error('该记录的本地归档目录不存在')
+    }
+
+    return recordDir
   }
 
   async exportRecord(recordId?: string): Promise<string | null> {
@@ -760,6 +673,278 @@ export class ScreenDocService extends EventEmitter {
       this.currentRecordId = null
     }
     return true
+  }
+
+  async reanalyzeRecord(recordId: string): Promise<ScreenDocResultPayload | null> {
+    if (this.status !== 'idle' && this.status !== 'ready' && this.status !== 'error') {
+      throw new Error('已有录屏整理任务正在进行')
+    }
+
+    const config = getConfig(this.configStore)
+    const llmApiKey = config.polishApiKey || config.asrApiKey
+    if (!llmApiKey) {
+      throw new Error('未找到可用的百炼 API Key')
+    }
+
+    const record = await this.getHistoryRecord(recordId)
+    if (!record || record.status !== 'cancelled') {
+      throw new Error('只有已取消的录屏整理才能重新分析')
+    }
+
+    const recordingFileName = record.recordingFileName ?? await this.findArchivedRecordingFileName(recordId)
+    if (!recordingFileName) {
+      throw new Error('该记录缺少原始录屏文件，无法重新分析')
+    }
+
+    const recordingFilePath = this.getRecordingFilePath(recordId, recordingFileName)
+    if (!await this.fileExists(recordingFilePath)) {
+      throw new Error('原始录屏文件不存在，无法重新分析')
+    }
+
+    this.runId += 1
+    const currentRunId = this.runId
+    this.abortController?.abort()
+    this.abortController = null
+    this.asrClient?.abort()
+    this.asrClient = null
+    this.partialTranscript = record.transcript ?? ''
+    this.finalTranscript = record.transcript ?? ''
+    this.error = undefined
+    this.latestResult = null
+    this.currentRecordId = recordId
+    this.startedAt = record.createdAt
+    this.setStatus('finalizing')
+
+    await this.updateHistoryRecord(recordId, {
+      status: 'finalizing',
+      updatedAt: Date.now(),
+      title: record.title,
+      summary: record.summary,
+      stepCount: record.stepCount,
+      durationMs: record.durationMs,
+      hasRecordingFile: true,
+      recordingFileName,
+      storageBytes: await this.getRecordStorageBytes(recordId)
+    })
+
+    try {
+      return await this.processArchivedRecording({
+        currentRunId,
+        recordId,
+        recordingArtifact: {
+          filePath: recordingFilePath,
+          mimeType: mimeTypeForFilePath(recordingFilePath),
+          durationMs: record.durationMs ?? 0
+        },
+        transcript: (record.transcript ?? '').trim(),
+        createdAt: record.createdAt,
+        llmApiKey,
+        promptTemplate: config.screenDocPrompt,
+        baseUrl: config.polishBaseUrl || POLISH_DEFAULT_BASE_URL
+      })
+    } catch (error) {
+      console.error('[ScreenDoc] Failed to reanalyze archived recording:', error)
+      if (this.runId === currentRunId) {
+        const errorMessage = error instanceof Error ? error.message : '重新分析录屏失败'
+        await this.updateHistoryRecord(recordId, {
+          status: 'error',
+          error: errorMessage,
+          updatedAt: Date.now(),
+          title: '录屏整理失败',
+          durationMs: record.durationMs,
+          hasRecordingFile: true,
+          recordingFileName,
+          storageBytes: await this.getRecordStorageBytes(recordId)
+        })
+        this.setStatus('error', errorMessage)
+      }
+      return null
+    } finally {
+      this.abortController = null
+      this.asrClient = null
+    }
+  }
+
+  private async processArchivedRecording(params: {
+    currentRunId: number
+    recordId: string
+    recordingArtifact: NativeScreenRecordingArtifact
+    transcript: string
+    createdAt: number
+    llmApiKey: string
+    promptTemplate: string
+    baseUrl: string
+  }): Promise<ScreenDocResultPayload | null> {
+    const {
+      currentRunId,
+      recordId,
+      recordingArtifact,
+      transcript,
+      createdAt,
+      llmApiKey,
+      promptTemplate,
+      baseUrl
+    } = params
+
+    const recordingFileName = basename(recordingArtifact.filePath)
+    const storageBytes = await this.getRecordStorageBytes(recordId)
+    let analysis: ScreenDocAnalysis | null = null
+    let timelineFrames: ScreenDocFrameInput[] = []
+    let frameIntervalMs = 1000
+
+    const canUploadVideo = /^(video\/mp4|video\/quicktime|video\/x-msvideo|video\/x-matroska)$/i.test(recordingArtifact.mimeType)
+
+    if (canUploadVideo) {
+      this.setStatus('uploading')
+      await this.updateHistoryRecord(recordId, {
+        status: 'uploading',
+        updatedAt: Date.now(),
+        durationMs: recordingArtifact.durationMs,
+        hasRecordingFile: true,
+        recordingFileName,
+        storageBytes
+      })
+      try {
+        const bytes = await readFile(recordingArtifact.filePath)
+        const ossUrl = await this.uploadTemporaryFile(
+          llmApiKey,
+          SCREEN_DOC_MODEL,
+          recordingFileName,
+          recordingArtifact.mimeType,
+          bytes
+        )
+        if (this.runId !== currentRunId) return null
+        this.setStatus('analyzing')
+        await this.updateHistoryRecord(recordId, {
+          status: 'analyzing',
+          updatedAt: Date.now(),
+          durationMs: recordingArtifact.durationMs,
+          hasRecordingFile: true,
+          recordingFileName,
+          storageBytes
+        })
+        analysis = await this.analyzeWithVideo(
+          llmApiKey,
+          baseUrl,
+          ossUrl,
+          transcript,
+          recordingArtifact.durationMs,
+          recordingArtifact.targetDescription,
+          promptTemplate
+        )
+      } catch (error) {
+        if (this.runId !== currentRunId || isAbortError(error)) {
+          throw error
+        }
+        console.warn('[ScreenDoc] Video upload or analysis failed, falling back to frames:', error)
+      }
+    }
+
+    if (this.runId !== currentRunId) return null
+
+    if (!analysis) {
+      this.setStatus('analyzing')
+      await this.updateHistoryRecord(recordId, {
+        status: 'analyzing',
+        updatedAt: Date.now(),
+        durationMs: recordingArtifact.durationMs,
+        hasRecordingFile: true,
+        recordingFileName,
+        storageBytes
+      })
+      const timelineResult = await this.screenRecorder.extractTimelineFrames(
+        recordingArtifact.filePath,
+        1000,
+        DEFAULT_FRAME_LIMIT
+      )
+      timelineFrames = timelineResult.frames
+      frameIntervalMs = timelineResult.intervalMs
+      analysis = await this.analyzeWithFrames(
+        llmApiKey,
+        baseUrl,
+        timelineFrames,
+        frameIntervalMs,
+        transcript,
+        recordingArtifact.durationMs,
+        recordingArtifact.targetDescription,
+        promptTemplate
+      )
+    }
+
+    if (this.runId !== currentRunId) return null
+
+    const screenshots = await this.buildScreenshotsForSteps(
+      recordingArtifact.filePath,
+      analysis.steps,
+      timelineFrames
+    )
+    const result: ScreenDocResultPayload = {
+      artifactId: recordId,
+      analysis,
+      screenshots,
+      markdown: this.buildMarkdown(analysis, screenshots, true),
+      createdAt: Date.now()
+    }
+
+    this.latestResult = result
+    await this.persistHistoryRecord({
+      id: recordId,
+      createdAt,
+      updatedAt: result.createdAt,
+      status: 'ready',
+      title: analysis.title,
+      summary: analysis.summary,
+      stepCount: analysis.steps.length,
+      durationMs: recordingArtifact.durationMs,
+      storageBytes,
+      hasRecordingFile: true,
+      recordingFileName,
+      previewHtmlPath: PREVIEW_HTML_FILE,
+      analysis,
+      screenshots,
+      markdown: result.markdown,
+      transcript: analysis.transcript
+    })
+    this.overlay.hideHud()
+    this.setStatus('ready')
+    return result
+  }
+
+  private async persistCancelledRecord(recordId: string): Promise<void> {
+    const existing = await this.getHistoryRecord(recordId)
+    const recordingFileName = existing?.recordingFileName ?? await this.findArchivedRecordingFileName(recordId)
+    const hasRecordingFile = await this.recordingFileExists(recordId, recordingFileName)
+    const transcript = (existing?.transcript ?? this.finalTranscript ?? this.partialTranscript ?? '').trim()
+    const cancelledRecord: ScreenDocHistoryRecord = {
+      id: recordId,
+      createdAt: existing?.createdAt ?? this.startedAt ?? Date.now(),
+      updatedAt: Date.now(),
+      status: 'cancelled',
+      title: '已取消的录屏整理',
+      summary: existing?.summary,
+      stepCount: existing?.stepCount,
+      durationMs: existing?.durationMs,
+      storageBytes: await this.getRecordStorageBytes(recordId),
+      hasRecordingFile,
+      recordingFileName,
+      previewHtmlPath: existing?.previewHtmlPath,
+      transcript: transcript || undefined
+    }
+
+    if (hasRecordingFile || transcript) {
+      await this.persistHistoryRecord(cancelledRecord)
+      return
+    }
+
+    await this.updateHistoryRecord(recordId, {
+      status: 'cancelled',
+      updatedAt: cancelledRecord.updatedAt,
+      title: cancelledRecord.title,
+      durationMs: cancelledRecord.durationMs,
+      storageBytes: cancelledRecord.storageBytes,
+      hasRecordingFile: cancelledRecord.hasRecordingFile,
+      recordingFileName: cancelledRecord.recordingFileName
+    })
   }
 
   private emitStatus(): void {

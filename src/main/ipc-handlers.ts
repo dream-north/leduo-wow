@@ -161,6 +161,19 @@ export function registerIpcHandlers(
     return screenDocService.getHistoryRecord(recordId)
   })
 
+  ipcMain.handle(IPC.SCREEN_DOC_REANALYZE, async (_event, recordId: string) => {
+    return await screenDocService.reanalyzeRecord(recordId)
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_OPEN_FOLDER, async (_event, recordId: string) => {
+    const folderPath = await screenDocService.getRecordDirectoryPath(recordId)
+    const openError = await shell.openPath(folderPath)
+    if (openError) {
+      throw new Error(openError)
+    }
+    return folderPath
+  })
+
   ipcMain.handle(IPC.SCREEN_DOC_PREVIEW, async (_event, recordId: string) => {
     const previewPath = await screenDocService.preparePreview(recordId)
     if (!previewPath) {

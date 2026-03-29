@@ -983,11 +983,8 @@ const screenDocCanStart = computed(() => (
 ))
 
 const screenDocCanStop = computed(() => screenDocCapturePhase.value === 'recording')
-
-const screenDocCanCancelProcessing = computed(() => (
-  screenDocEffectiveStatus.value === 'finalizing' ||
-  screenDocEffectiveStatus.value === 'uploading' ||
-  screenDocEffectiveStatus.value === 'analyzing'
+const screenDocCanCancelCapture = computed(() => (
+  screenDocCapturePhase.value === 'starting' || screenDocCapturePhase.value === 'recording'
 ))
 
 const screenDocDurationLabel = computed(() => {
@@ -1278,7 +1275,7 @@ async function stopScreenDocCapture(): Promise<void> {
 }
 
 async function cancelScreenDocCapture(showMessage = false): Promise<void> {
-  const shouldNotify = screenDocCapturePhase.value !== 'idle' || screenDocCanCancelProcessing.value
+  const shouldNotify = screenDocCapturePhase.value === 'starting' || screenDocCapturePhase.value === 'recording'
   screenDocCapturePhase.value = 'idle'
   stopScreenDocElapsedTimer()
   await teardownScreenDocAudio()
@@ -1461,6 +1458,59 @@ function screenDocRecordCanExport(record: ScreenDocHistoryRecord): boolean {
 
 function screenDocRecordCanDelete(record: ScreenDocHistoryRecord): boolean {
   return record.status === 'ready' || record.status === 'cancelled' || record.status === 'error'
+}
+
+function screenDocRecordCanCancelAnalysis(record: ScreenDocHistoryRecord): boolean {
+  return (
+    record.id === screenDocStatus.value.artifactId &&
+    (record.status === 'finalizing' || record.status === 'uploading' || record.status === 'analyzing')
+  )
+}
+
+function screenDocRecordCanReanalyze(record: ScreenDocHistoryRecord): boolean {
+  return record.status === 'cancelled' && record.hasRecordingFile === true
+}
+
+async function cancelScreenDocAnalysis(recordId: string): Promise<void> {
+  const target = screenDocHistoryRecords.value.find((record) => record.id === recordId)
+  if (!target || !screenDocRecordCanCancelAnalysis(target)) {
+    showSaveMessage('当前记录没有可取消的分析任务')
+    return
+  }
+
+  try {
+    await window.electronAPI.cancelScreenDoc()
+    screenDocCapturePhase.value = 'idle'
+    stopScreenDocElapsedTimer()
+    screenDocStartedAt = 0
+    showSaveMessage('已取消本次录屏整理')
+    await loadScreenDocHistory()
+  } catch (err) {
+    console.error('Failed to cancel screen doc analysis:', err)
+    showSaveMessage(err instanceof Error ? err.message : '取消分析失败')
+  }
+}
+
+async function reanalyzeScreenDocRecord(recordId: string): Promise<void> {
+  try {
+    await window.electronAPI.reanalyzeScreenDocRecord(recordId)
+    await loadScreenDocHistory()
+  } catch (err) {
+    console.error('Failed to reanalyze screen doc record:', err)
+    showSaveMessage(err instanceof Error ? err.message : '重新分析失败')
+  }
+}
+
+async function openScreenDocRecordFolder(recordId: string): Promise<void> {
+  try {
+    const openedPath = await window.electronAPI.openScreenDocRecordFolder(recordId)
+    if (openedPath) {
+      showSaveMessage('已打开归档目录')
+    }
+  } catch (err) {
+    console.error('Failed to open screen doc record folder:', err)
+    showSaveMessage(err instanceof Error ? err.message : '打开目录失败')
+  }
 }
 
 async function previewScreenDocRecord(recordId: string): Promise<void> {
@@ -2890,7 +2940,7 @@ function closeMergeDialog(): void {
                     {{ screenDocPrimaryActionLabel }}
                   </button>
                   <button
-                    v-if="screenDocCanCancelProcessing || screenDocCapturePhase !== 'idle'"
+                    v-if="screenDocCanCancelCapture"
                     class="btn btn-secondary"
                     @click="cancelScreenDocProcessing"
                   >
@@ -3023,9 +3073,32 @@ function closeMergeDialog(): void {
               >
                 <div class="screen-doc-history-item-top">
                   <span class="screen-doc-history-title">{{ record.title }}</span>
-                  <span :class="['screen-doc-badge', `is-${record.status}`]">
-                    {{ screenDocHistoryStatusLabel(record.status) }}
-                  </span>
+                  <div class="screen-doc-history-top-actions">
+                    <button
+                      class="screen-doc-history-folder-btn"
+                      type="button"
+                      title="打开归档目录"
+                      aria-label="打开归档目录"
+                      @click="openScreenDocRecordFolder(record.id)"
+                    >
+                      <svg
+                        class="screen-doc-history-folder-icon"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M3.75 7.75a2 2 0 0 1 2-2h4.1l1.7 2h6.7a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H5.75a2 2 0 0 1-2-2z" />
+                        <path d="M3.75 9.75h16.5" />
+                      </svg>
+                    </button>
+                    <span :class="['screen-doc-badge', `is-${record.status}`]">
+                      {{ screenDocHistoryStatusLabel(record.status) }}
+                    </span>
+                  </div>
                 </div>
                 <div class="screen-doc-history-meta-line">
                   <span>{{ formatTime(record.createdAt) }}</span>
@@ -3039,7 +3112,21 @@ function closeMergeDialog(): void {
                   <span>原始录屏：{{ record.hasRecordingFile ? '已保存' : '无原始录屏文件' }}</span>
                   <span v-if="record.recordingFileName">文件：{{ record.recordingFileName }}</span>
                 </div>
-                <div v-if="screenDocRecordCanPreview(record) || screenDocRecordCanExport(record) || screenDocRecordCanDelete(record)" class="screen-doc-history-item-actions">
+                <div v-if="screenDocRecordCanCancelAnalysis(record) || screenDocRecordCanReanalyze(record) || screenDocRecordCanPreview(record) || screenDocRecordCanExport(record) || screenDocRecordCanDelete(record)" class="screen-doc-history-item-actions">
+                  <button
+                    v-if="screenDocRecordCanCancelAnalysis(record)"
+                    class="btn btn-secondary btn-sm btn-danger"
+                    @click="cancelScreenDocAnalysis(record.id)"
+                  >
+                    取消分析
+                  </button>
+                  <button
+                    v-if="screenDocRecordCanReanalyze(record)"
+                    class="btn btn-secondary btn-sm"
+                    @click="reanalyzeScreenDocRecord(record.id)"
+                  >
+                    重新分析
+                  </button>
                   <button
                     v-if="screenDocRecordCanPreview(record)"
                     class="btn btn-secondary btn-sm"
@@ -3969,6 +4056,44 @@ function closeMergeDialog(): void {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.screen-doc-history-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.screen-doc-history-folder-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.screen-doc-history-folder-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.screen-doc-history-folder-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(0, 113, 227, 0.32);
+  background: rgba(255, 255, 255, 1);
+}
+
+.screen-doc-history-folder-btn:focus-visible {
+  outline: 2px solid rgba(0, 113, 227, 0.35);
+  outline-offset: 2px;
 }
 
 .screen-doc-history-title,

@@ -487,4 +487,96 @@ describe('ScreenDocService', () => {
     await expect(service.deleteRecord(recordId)).resolves.toBe(true)
     await expect(readFile(join(recordDir, 'recording.mp4'), 'utf8')).rejects.toBeTruthy()
   })
+
+  it('reanalyzes cancelled records from archived recordings', async () => {
+    const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-reanalyze-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
+    const recordId = 'cancelled-record'
+    const recordDir = join(tmpDir, 'screen-doc-history', 'artifacts', recordId)
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(join(recordDir, 'recording.mp4'), 'archived-video')
+    await writeFile(
+      join(recordDir, 'record.json'),
+      JSON.stringify({
+        id: recordId,
+        createdAt: 100,
+        updatedAt: 200,
+        status: 'cancelled',
+        title: '已取消的录屏整理',
+        durationMs: 6000,
+        transcript: '先打开页面，再点击确认按钮',
+        hasRecordingFile: true,
+        recordingFileName: 'recording.mp4'
+      }),
+      'utf8'
+    )
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            upload_dir: 'tmp/uploads',
+            oss_access_key_id: 'ak',
+            signature: 'sig',
+            policy: 'policy',
+            x_oss_object_acl: 'private',
+            x_oss_forbid_overwrite: 'true',
+            upload_host: 'https://upload.example.com'
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => ''
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                title: '重新分析后的结果',
+                summary: '重新分析成功。',
+                notes: [],
+                steps: [{
+                  title: '确认提交',
+                  description: '用户点击确认按钮完成提交。',
+                  timestampMs: 2000,
+                  screenshotTimestampMs: 2000
+                }]
+              })
+            }
+          }]
+        })
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const service = new ScreenDocService({
+      overlay: overlay as never,
+      configStore: createConfigStore() as never,
+      screenRecorder: createScreenRecorderStub() as never
+    })
+
+    ;(service as unknown as { historyFallback: ScreenDocHistoryRecord[] }).historyFallback = [{
+      id: recordId,
+      createdAt: 100,
+      updatedAt: 200,
+      status: 'cancelled',
+      title: '已取消的录屏整理',
+      durationMs: 6000,
+      hasRecordingFile: true,
+      recordingFileName: 'recording.mp4'
+    }]
+
+    const result = await service.reanalyzeRecord(recordId)
+
+    expect(result?.analysis.title).toBe('重新分析后的结果')
+    expect(service.getStatus()).toBe('ready')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    const savedRecord = await service.getHistoryRecord(recordId)
+    expect(savedRecord?.status).toBe('ready')
+    expect(savedRecord?.analysis?.title).toBe('重新分析后的结果')
+  })
 })
