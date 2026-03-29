@@ -687,8 +687,8 @@ export class ScreenDocService extends EventEmitter {
     }
 
     const record = await this.getHistoryRecord(recordId)
-    if (!record || record.status !== 'cancelled') {
-      throw new Error('只有已取消的录屏整理才能重新分析')
+    if (!record || (record.status !== 'cancelled' && record.status !== 'ready' && record.status !== 'error')) {
+      throw new Error('只有已完成、已取消或失败的录屏整理才能重新分析')
     }
 
     const recordingFileName = record.recordingFileName ?? await this.findArchivedRecordingFileName(recordId)
@@ -1331,7 +1331,7 @@ export class ScreenDocService extends EventEmitter {
       }
     })()
 
-    return [...source].sort((left, right) => right.updatedAt - left.updatedAt)
+    return [...source]
   }
 
   private saveHistoryRecords(records: ScreenDocHistoryRecord[]): void {
@@ -1389,9 +1389,10 @@ export class ScreenDocService extends EventEmitter {
     }
 
     if (index >= 0) {
-      records.splice(index, 1)
+      records.splice(index, 1, nextRecord)
+    } else {
+      records.unshift(nextRecord)
     }
-    records.unshift(nextRecord)
     this.saveHistoryRecords(records)
     await this.pruneHistory()
     return nextRecord

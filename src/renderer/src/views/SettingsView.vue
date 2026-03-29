@@ -105,6 +105,8 @@ watch(activeTab, (val, oldVal) => {
   })
 })
 const saveMessage = ref('')
+const saveMessageTone = ref<'success' | 'error'>('success')
+let saveMessageTimer: ReturnType<typeof setTimeout> | null = null
 
 const tabs = [
   { id: 'general', label: '通用', icon: '⚙️' },
@@ -117,9 +119,33 @@ const tabs = [
   { id: 'about', label: '关于', icon: 'ℹ️' }
 ]
 
-function showSaveMessage(msg: string): void {
+function normalizeToastMessage(msg: string): string {
+  return msg
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim()
+}
+
+function showSaveMessage(msg: string, tone: 'success' | 'error' = 'success'): void {
+  if (saveMessageTimer) {
+    clearTimeout(saveMessageTimer)
+  }
+  saveMessageTone.value = tone
   saveMessage.value = msg
-  setTimeout(() => { saveMessage.value = '' }, 2000)
+  saveMessageTimer = setTimeout(() => {
+    saveMessage.value = ''
+    saveMessageTimer = null
+  }, 2000)
+}
+
+function showErrorMessage(error: unknown, fallback: string): void {
+  const rawMessage = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : fallback
+  const normalized = normalizeToastMessage(rawMessage) || fallback
+  showSaveMessage(normalized, 'error')
 }
 
 // API Keys (separate for ASR and Polish)
@@ -1204,7 +1230,7 @@ async function teardownScreenDocAudio(): Promise<void> {
 
 async function startScreenDocCapture(): Promise<void> {
   if (platform !== 'darwin') {
-    showSaveMessage('录屏整理首版仅支持 macOS')
+    showSaveMessage('录屏整理首版仅支持 macOS', 'error')
     return
   }
   if (screenDocCapturePhase.value !== 'idle') return
@@ -1245,7 +1271,7 @@ async function startScreenDocCapture(): Promise<void> {
     if (nativeStarted) {
       await window.electronAPI.cancelScreenDoc()
     }
-    showSaveMessage(formatScreenDocCaptureError(error))
+    showSaveMessage(normalizeToastMessage(formatScreenDocCaptureError(error)), 'error')
   }
 }
 
@@ -1266,7 +1292,7 @@ async function stopScreenDocCapture(): Promise<void> {
   } catch (error) {
     console.error('Failed to finalize screen doc recording:', error)
     await window.electronAPI.cancelScreenDoc()
-    showSaveMessage(error instanceof Error ? error.message : '录屏整理失败')
+    showErrorMessage(error, '录屏整理失败')
   } finally {
     screenDocCapturePhase.value = 'idle'
     stopScreenDocElapsedTimer()
@@ -1468,13 +1494,16 @@ function screenDocRecordCanCancelAnalysis(record: ScreenDocHistoryRecord): boole
 }
 
 function screenDocRecordCanReanalyze(record: ScreenDocHistoryRecord): boolean {
-  return record.status === 'cancelled' && record.hasRecordingFile === true
+  return (
+    record.hasRecordingFile === true &&
+    (record.status === 'ready' || record.status === 'cancelled' || record.status === 'error')
+  )
 }
 
 async function cancelScreenDocAnalysis(recordId: string): Promise<void> {
   const target = screenDocHistoryRecords.value.find((record) => record.id === recordId)
   if (!target || !screenDocRecordCanCancelAnalysis(target)) {
-    showSaveMessage('当前记录没有可取消的分析任务')
+    showSaveMessage('当前记录没有可取消的分析任务', 'error')
     return
   }
 
@@ -1487,17 +1516,27 @@ async function cancelScreenDocAnalysis(recordId: string): Promise<void> {
     await loadScreenDocHistory()
   } catch (err) {
     console.error('Failed to cancel screen doc analysis:', err)
-    showSaveMessage(err instanceof Error ? err.message : '取消分析失败')
+    showErrorMessage(err, '取消分析失败')
   }
 }
 
 async function reanalyzeScreenDocRecord(recordId: string): Promise<void> {
+  const target = screenDocHistoryRecords.value.find((record) => record.id === recordId)
+  if (!target || !screenDocRecordCanReanalyze(target)) {
+    showSaveMessage('当前记录暂不支持重新分析', 'error')
+    return
+  }
+  const actionLabel = target.status === 'ready' ? '重新分析并覆盖当前整理结果' : '重新分析'
+  if (!window.confirm(`确认要${actionLabel}「${target.title}」吗？`)) {
+    return
+  }
+
   try {
     await window.electronAPI.reanalyzeScreenDocRecord(recordId)
     await loadScreenDocHistory()
   } catch (err) {
     console.error('Failed to reanalyze screen doc record:', err)
-    showSaveMessage(err instanceof Error ? err.message : '重新分析失败')
+    showErrorMessage(err, '重新分析失败')
   }
 }
 
@@ -1509,7 +1548,7 @@ async function openScreenDocRecordFolder(recordId: string): Promise<void> {
     }
   } catch (err) {
     console.error('Failed to open screen doc record folder:', err)
-    showSaveMessage(err instanceof Error ? err.message : '打开目录失败')
+    showErrorMessage(err, '打开目录失败')
   }
 }
 
@@ -1522,7 +1561,7 @@ async function previewScreenDocRecord(recordId: string): Promise<void> {
     }
   } catch (err) {
     console.error('Failed to preview screen doc record:', err)
-    showSaveMessage(err instanceof Error ? err.message : '打开预览失败')
+    showErrorMessage(err, '打开预览失败')
   }
 }
 
@@ -1534,7 +1573,7 @@ async function exportScreenDocRecord(recordId: string): Promise<void> {
     }
   } catch (err) {
     console.error('Failed to export screen doc record:', err)
-    showSaveMessage(err instanceof Error ? err.message : '导出失败')
+    showErrorMessage(err, '导出失败')
   }
 }
 
@@ -1542,7 +1581,7 @@ async function deleteScreenDocRecord(recordId: string): Promise<void> {
   const target = screenDocHistoryRecords.value.find((record) => record.id === recordId)
   if (!target) return
   if (!screenDocRecordCanDelete(target)) {
-    showSaveMessage('处理中记录暂时不能删除')
+    showSaveMessage('处理中记录暂时不能删除', 'error')
     return
   }
   if (!window.confirm(`确认删除「${target.title}」吗？这会同时删除本地录屏和导出文件。`)) {
@@ -1557,7 +1596,7 @@ async function deleteScreenDocRecord(recordId: string): Promise<void> {
     }
   } catch (err) {
     console.error('Failed to delete screen doc record:', err)
-    showSaveMessage(err instanceof Error ? err.message : '删除失败')
+    showErrorMessage(err, '删除失败')
   }
 }
 
@@ -1595,7 +1634,7 @@ async function copyRecord(record: TranscriptionRecord): Promise<void> {
     showSaveMessage('已复制到剪贴板')
   } catch (err) {
     console.error('Failed to copy:', err)
-    showSaveMessage('复制失败')
+    showSaveMessage('复制失败', 'error')
   }
 }
 
@@ -2147,7 +2186,7 @@ function closeMergeDialog(): void {
   <div class="settings-layout">
     <!-- Save toast -->
     <Transition name="toast">
-      <div v-if="saveMessage" class="save-toast">{{ saveMessage }}</div>
+      <div v-if="saveMessage" :class="['save-toast', `is-${saveMessageTone}`]">{{ saveMessage }}</div>
     </Transition>
 
     <!-- macOS title bar drag region -->
@@ -4637,13 +4676,20 @@ function closeMergeDialog(): void {
   top: 48px;
   right: 24px;
   padding: 8px 18px;
-  background: var(--success-color);
   color: #fff;
   border-radius: var(--radius);
   font-size: 13px;
   font-weight: 500;
   z-index: 200;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.save-toast.is-success {
+  background: var(--success-color);
+}
+
+.save-toast.is-error {
+  background: var(--error-color);
 }
 
 .toast-enter-active {

@@ -579,4 +579,124 @@ describe('ScreenDocService', () => {
     expect(savedRecord?.status).toBe('ready')
     expect(savedRecord?.analysis?.title).toBe('重新分析后的结果')
   })
+
+  it('reanalyzes ready records without changing their history order', async () => {
+    const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-reanalyze-ready-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
+    const recordId = 'ready-record'
+    const siblingRecordId = 'sibling-record'
+    const recordDir = join(tmpDir, 'screen-doc-history', 'artifacts', recordId)
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(join(recordDir, 'recording.mp4'), 'archived-video')
+    await writeFile(
+      join(recordDir, 'record.json'),
+      JSON.stringify({
+        id: recordId,
+        createdAt: 100,
+        updatedAt: 200,
+        status: 'ready',
+        title: '旧版整理结果',
+        summary: '旧摘要',
+        stepCount: 1,
+        durationMs: 6000,
+        transcript: '先打开页面，再点击确认按钮',
+        hasRecordingFile: true,
+        recordingFileName: 'recording.mp4',
+        analysis: {
+          title: '旧版整理结果',
+          summary: '旧摘要',
+          notes: [],
+          transcript: '先打开页面，再点击确认按钮',
+          steps: [{
+            title: '旧步骤',
+            description: '旧说明',
+            timestampMs: 1000,
+            screenshotTimestampMs: 1000
+          }]
+        },
+        screenshots: [],
+        markdown: '# 旧版整理结果'
+      }),
+      'utf8'
+    )
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            upload_dir: 'tmp/uploads',
+            oss_access_key_id: 'ak',
+            signature: 'sig',
+            policy: 'policy',
+            x_oss_object_acl: 'private',
+            x_oss_forbid_overwrite: 'true',
+            upload_host: 'https://upload.example.com'
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => ''
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                title: '重新分析后的新版结果',
+                summary: '新版摘要',
+                notes: [],
+                steps: [{
+                  title: '确认提交',
+                  description: '用户点击确认按钮完成提交。',
+                  timestampMs: 2000,
+                  screenshotTimestampMs: 2000
+                }]
+              })
+            }
+          }]
+        })
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const service = new ScreenDocService({
+      overlay: overlay as never,
+      configStore: createConfigStore() as never,
+      screenRecorder: createScreenRecorderStub() as never
+    })
+
+    ;(service as unknown as { historyFallback: ScreenDocHistoryRecord[] }).historyFallback = [
+      {
+        id: siblingRecordId,
+        createdAt: 120,
+        updatedAt: 220,
+        status: 'ready',
+        title: '保持顺序的兄弟记录',
+        summary: '摘要',
+        stepCount: 1,
+        durationMs: 3000
+      },
+      {
+        id: recordId,
+        createdAt: 100,
+        updatedAt: 200,
+        status: 'ready',
+        title: '旧版整理结果',
+        summary: '旧摘要',
+        stepCount: 1,
+        durationMs: 6000,
+        hasRecordingFile: true,
+        recordingFileName: 'recording.mp4'
+      }
+    ]
+
+    const result = await service.reanalyzeRecord(recordId)
+
+    expect(result?.analysis.title).toBe('重新分析后的新版结果')
+    expect((await service.getHistoryList()).map((record) => record.id)).toEqual([siblingRecordId, recordId])
+    expect((await service.getHistoryRecord(recordId))?.analysis?.title).toBe('重新分析后的新版结果')
+  })
 })

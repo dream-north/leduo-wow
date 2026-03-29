@@ -238,7 +238,7 @@ describe('SettingsView screen doc controls', () => {
     await flushPromises()
   })
 
-  it('shows record actions, allows canceling active analysis, and allows reanalyzing cancelled history items', async () => {
+  it('shows record actions, keeps reanalyze available for ready records, and allows canceling active analysis', async () => {
     const readyRecord: ScreenDocHistoryRecord = {
       id: 'record-1',
       createdAt: Date.now(),
@@ -290,7 +290,7 @@ describe('SettingsView screen doc controls', () => {
       exportScreenDocRecord: vi.fn(async () => '/tmp/export'),
       deleteScreenDocRecord: vi.fn(async () => true)
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
 
     const wrapper = mount(SettingsView, {
       global: {
@@ -316,20 +316,74 @@ describe('SettingsView screen doc controls', () => {
 
     const actionRows = wrapper.findAll('.screen-doc-history-item-actions')
     const readyButtons = actionRows[0].findAll('.btn')
-    await readyButtons[0].trigger('click')
-    await readyButtons[1].trigger('click')
-    await readyButtons[2].trigger('click')
+    await readyButtons.find((button) => button.text().includes('重新分析'))!.trigger('click')
+    await readyButtons.find((button) => button.text().includes('预览 HTML'))!.trigger('click')
+    await readyButtons.find((button) => button.text().includes('导出文件'))!.trigger('click')
+    await readyButtons.find((button) => button.text().includes('删除记录'))!.trigger('click')
     const analyzingButtons = actionRows[1].findAll('.btn')
     await analyzingButtons[0].trigger('click')
     const cancelledButtons = actionRows[2].findAll('.btn')
-    await cancelledButtons[0].trigger('click')
+    await cancelledButtons.find((button) => button.text().includes('重新分析'))!.trigger('click')
     await flushPromises()
 
+    expect(confirmSpy).toHaveBeenNthCalledWith(1, '确认要重新分析并覆盖当前整理结果「录屏整理结果」吗？')
+    expect(confirmSpy).toHaveBeenNthCalledWith(3, '确认要重新分析「已取消的录屏整理」吗？')
     expect(window.electronAPI.openScreenDocRecordFolder).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.previewScreenDocRecord).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.exportScreenDocRecord).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.deleteScreenDocRecord).toHaveBeenCalledWith('record-1')
     expect(window.electronAPI.cancelScreenDoc).toHaveBeenCalledTimes(1)
-    expect(window.electronAPI.reanalyzeScreenDocRecord).toHaveBeenCalledWith('record-3')
+    expect(window.electronAPI.reanalyzeScreenDocRecord).toHaveBeenNthCalledWith(1, 'record-1')
+    expect(window.electronAPI.reanalyzeScreenDocRecord).toHaveBeenNthCalledWith(2, 'record-3')
+  })
+
+  it('shows cleaned error text with error styling when screen doc actions fail', async () => {
+    const readyRecord: ScreenDocHistoryRecord = {
+      id: 'record-1',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: 'ready',
+      title: '录屏整理结果',
+      summary: '这是摘要',
+      stepCount: 2,
+      durationMs: 8000,
+      storageBytes: 5 * 1024 * 1024,
+      hasRecordingFile: true,
+      recordingFileName: 'recording.mp4',
+      previewHtmlPath: 'preview.html'
+    }
+
+    window.electronAPI = createElectronApi({
+      getScreenDocHistory: vi.fn(async () => [readyRecord]),
+      getScreenDocHistoryRecord: vi.fn(async () => readyRecord),
+      reanalyzeScreenDocRecord: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'screen-doc:reanalyze': Error: 已有录屏整理任务正在进行")
+      })
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const wrapper = mount(SettingsView, {
+      global: {
+        plugins: [createPinia()]
+      }
+    })
+    await flushPromises()
+
+    const screenDocNavButton = wrapper.findAll('.nav-item').find((item) => item.text().includes('录屏整理'))
+    await screenDocNavButton!.trigger('click')
+    await flushPromises()
+
+    const historyTab = wrapper.findAll('.mode-tab').find((item) => item.text().includes('历史记录'))
+    await historyTab!.trigger('click')
+    await flushPromises()
+
+    const reanalyzeButton = wrapper.findAll('.screen-doc-history-item-actions .btn').find((button) => button.text().includes('重新分析'))
+    await reanalyzeButton!.trigger('click')
+    await flushPromises()
+
+    const toast = wrapper.find('.save-toast')
+    expect(toast.exists()).toBe(true)
+    expect(toast.text()).toBe('已有录屏整理任务正在进行')
+    expect(toast.classes()).toContain('is-error')
   })
 })
