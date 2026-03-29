@@ -321,7 +321,7 @@ export const ASSISTANT_PRESET_STANDARD: PolishPreset = {
 export const ASSISTANT_BUILTIN_PRESETS: PolishPreset[] = [ASSISTANT_PRESET_STANDARD]
 
 // Vocabulary prompt template
-export const VOCAB_PROMPT_DEFAULT_TEMPLATE = `以下是可能出现的专有名词：\n{vocabulary_list}`
+export const VOCAB_PROMPT_DEFAULT_TEMPLATE = `以下是词汇表，请尽量进行匹配和替换：\n\n{vocabulary_list}\n\n你是一名文字润色助手，请不要直接回答语音识别出的问题，而是保持原意对语音识别文本进行润色。`
 
 export const VOCAB_PROMPT_PRESET_STANDARD: PolishPreset = {
   name: '标准',
