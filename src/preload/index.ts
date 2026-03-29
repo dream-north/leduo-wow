@@ -94,7 +94,9 @@ const electronAPI = {
   getScreenDocHistory: () => ipcRenderer.invoke(IPC.SCREEN_DOC_HISTORY_GET) as Promise<ScreenDocHistoryRecord[]>,
   getScreenDocHistoryRecord: (recordId: string) =>
     ipcRenderer.invoke(IPC.SCREEN_DOC_HISTORY_ITEM_GET, recordId) as Promise<ScreenDocHistoryRecord | null>,
+  previewScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_PREVIEW, recordId) as Promise<string | null>,
   exportScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_EXPORT, recordId) as Promise<string | null>,
+  deleteScreenDocRecord: (recordId: string) => ipcRenderer.invoke(IPC.SCREEN_DOC_DELETE, recordId) as Promise<boolean>,
   getLatestScreenDocResult: () => ipcRenderer.invoke(IPC.SCREEN_DOC_RESULT_GET_LATEST) as Promise<ScreenDocResultPayload | null>,
   onScreenDocStatus: (callback: (payload: ScreenDocStatusPayload) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: ScreenDocStatusPayload) => callback(payload)

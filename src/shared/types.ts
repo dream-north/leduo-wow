@@ -89,6 +89,10 @@ export interface ScreenDocHistorySummary {
   stepCount?: number
   durationMs?: number
   error?: string
+  storageBytes?: number
+  hasRecordingFile?: boolean
+  recordingFileName?: string
+  previewHtmlPath?: string
 }
 
 export interface ScreenDocHistoryRecord extends ScreenDocHistorySummary {

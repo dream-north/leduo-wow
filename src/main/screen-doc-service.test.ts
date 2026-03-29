@@ -1,9 +1,10 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, readdir, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ScreenDocHistoryRecord } from '../shared/types'
 import { DEFAULT_CONFIG } from '../shared/types'
 
 const electronMocks = vi.hoisted(() => ({
@@ -193,7 +194,7 @@ describe('ScreenDocService', () => {
         targetDescription: '显示器 1440x900'
       }),
       extractScreenshots: async (filePath: string, timestampsMs: number[]) => {
-        expect(filePath).toBe(recordingPath)
+        expect(filePath).toContain(join('screen-doc-history', 'artifacts'))
         return timestampsMs.map((timestampMs, index) => ({
           timestampMs,
           dataUrl: makePngDataUrl(`shot-${index + 1}`)
@@ -220,10 +221,18 @@ describe('ScreenDocService', () => {
     const savedRecord = await service.getHistoryRecord(result!.artifactId)
     expect(savedRecord?.status).toBe('ready')
     expect(savedRecord?.analysis?.title).toBe('录屏整理标题')
+    expect(savedRecord?.hasRecordingFile).toBe(true)
+    expect(savedRecord?.recordingFileName).toBe('recording.mp4')
+    expect(savedRecord?.storageBytes).toBeGreaterThan(0)
+    expect(savedRecord?.previewHtmlPath).toBe('preview.html')
     const persistedRecord = JSON.parse(
       await readFile(join(tmpDir, 'screen-doc-history', 'artifacts', result!.artifactId, 'record.json'), 'utf8')
     )
     expect(persistedRecord.title).toBe('录屏整理标题')
+    await expect(readFile(join(tmpDir, 'screen-doc-history', 'artifacts', result!.artifactId, 'recording.mp4'), 'utf8'))
+      .resolves.toBe('fake-mp4')
+    await expect(readFile(join(tmpDir, 'screen-doc-history', 'artifacts', result!.artifactId, 'preview.html'), 'utf8'))
+      .resolves.toContain('<!doctype html>')
 
     expect(fetchMock).toHaveBeenCalledTimes(3)
     const analyzeCall = fetchMock.mock.calls[2]
@@ -235,18 +244,20 @@ describe('ScreenDocService', () => {
     expect(analyzeBody.messages[1].content[0]).toEqual(
       expect.objectContaining({
         type: 'video_url',
-        video_url: { url: 'oss://tmp/uploads/demo.mp4' }
+        video_url: { url: 'oss://tmp/uploads/recording.mp4' }
       })
     )
   })
 
-  it('falls back to frame analysis and exports markdown with relative asset paths', async () => {
+  it('falls back to frame analysis and exports markdown and html with relative asset paths', async () => {
     const overlay = createOverlayStub()
     const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-history-'))
     electronMocks.getPath.mockReturnValue(tmpDir)
+    const recordingPath = join(tmpDir, 'demo.webm')
+    await writeFile(recordingPath, 'fake-webm')
     const screenRecorder = createScreenRecorderStub({
       stopRecording: async () => ({
-        filePath: '/tmp/demo.webm',
+        filePath: recordingPath,
         mimeType: 'video/webm',
         durationMs: 5000,
         targetDescription: '窗口 1200x800'
@@ -306,10 +317,13 @@ describe('ScreenDocService', () => {
 
     const assets = await readdir(join(exportDir!, 'assets'))
     const markdown = await readFile(join(exportDir!, 'doc.md'), 'utf8')
+    const html = await readFile(join(exportDir!, 'doc.html'), 'utf8')
 
     expect(assets).toEqual(['step-01.png'])
     expect(markdown).toContain('![点击确认](assets/step-01.png)')
     expect(markdown).toContain('## 语音说明摘录')
+    expect(html).toContain('点击确认')
+    expect(html).toContain('<!doctype html>')
 
     const analyzeBody = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
     expect(analyzeBody.messages[1].content[0].type).toBe('video')
@@ -407,6 +421,70 @@ describe('ScreenDocService', () => {
     expect(screenRecorder.cancelRecording).toHaveBeenCalledOnce()
     expect(service.getStatus()).toBe('idle')
     expect(overlay.hideHud).toHaveBeenCalled()
-    expect(service.getHistoryList()[0]?.status).toBe('cancelled')
+    expect((await service.getHistoryList())[0]?.status).toBe('cancelled')
+  })
+
+  it('backfills storage size for older records and deletes archived files', async () => {
+    const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-backfill-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
+    const recordId = 'legacy-record'
+    const recordDir = join(tmpDir, 'screen-doc-history', 'artifacts', recordId)
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(join(recordDir, 'doc.md'), '# 历史结果\n')
+    await writeFile(join(recordDir, 'preview.html'), '<!doctype html><title>历史结果</title>')
+    await writeFile(join(recordDir, 'recording.mp4'), 'legacy-video')
+    await writeFile(
+      join(recordDir, 'record.json'),
+      JSON.stringify({
+        id: recordId,
+        createdAt: 1,
+        updatedAt: 2,
+        status: 'ready',
+        title: '历史结果',
+        summary: '旧记录',
+        stepCount: 1,
+        durationMs: 3000,
+        analysis: {
+          title: '历史结果',
+          summary: '旧记录',
+          notes: [],
+          transcript: '',
+          steps: [{
+            title: '步骤 1',
+            description: '说明',
+            timestampMs: 1000,
+            screenshotTimestampMs: 1000
+          }]
+        },
+        screenshots: []
+      }),
+      'utf8'
+    )
+
+    const service = new ScreenDocService({
+      overlay: overlay as never,
+      configStore: createConfigStore() as never,
+      screenRecorder: createScreenRecorderStub() as never
+    })
+
+    ;(service as unknown as { historyFallback: ScreenDocHistoryRecord[] }).historyFallback = [{
+      id: recordId,
+      createdAt: 1,
+      updatedAt: 2,
+      status: 'ready',
+      title: '历史结果',
+      summary: '旧记录',
+      stepCount: 1,
+      durationMs: 3000
+    }]
+
+    const history = await service.getHistoryList()
+    expect(history[0]?.storageBytes).toBeGreaterThan(0)
+    expect(history[0]?.hasRecordingFile).toBe(true)
+    expect(history[0]?.recordingFileName).toBe('recording.mp4')
+
+    await expect(service.deleteRecord(recordId)).resolves.toBe(true)
+    await expect(readFile(join(recordDir, 'recording.mp4'), 'utf8')).rejects.toBeTruthy()
   })
 })

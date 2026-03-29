@@ -1,8 +1,8 @@
 import { randomUUID } from 'crypto'
 import { BrowserWindow, app, dialog } from 'electron'
 import { EventEmitter } from 'events'
-import { mkdir, readFile, rm, writeFile } from 'fs/promises'
-import { basename, join } from 'path'
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises'
+import { basename, extname, join } from 'path'
 import {
   ASR_DEFAULT_BASE_URL,
   POLISH_DEFAULT_BASE_URL,
@@ -51,6 +51,11 @@ const SCREEN_DOC_MODEL = 'qwen3.5-plus'
 const DASHSCOPE_UPLOAD_URL = 'https://dashscope.aliyuncs.com/api/v1/uploads'
 const DEFAULT_FRAME_LIMIT = 48
 const SCREEN_DOC_HISTORY_DIRNAME = 'screen-doc-history'
+const PREVIEW_HTML_FILE = 'preview.html'
+const EXPORT_HTML_FILE = 'doc.html'
+const EXPORT_MARKDOWN_FILE = 'doc.md'
+const RECORD_FILE = 'record.json'
+const RECORDING_FILE_BASENAME = 'recording'
 
 function isDashScopeBaseUrl(baseUrl: string): boolean {
   return baseUrl.includes('dashscope.aliyuncs.com')
@@ -245,6 +250,41 @@ function parseDataUrl(dataUrl: string): { mimeType: string; buffer: Buffer } {
   }
 }
 
+function extensionForMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'video/mp4':
+      return '.mp4'
+    case 'video/quicktime':
+      return '.mov'
+    case 'video/x-msvideo':
+      return '.avi'
+    case 'video/x-matroska':
+      return '.mkv'
+    case 'video/webm':
+      return '.webm'
+    default:
+      return ''
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;')
+}
+
+function formatDurationLabel(durationMs?: number): string {
+  if (!durationMs || durationMs <= 0) return '未知'
+  return `${Math.max(1, Math.round(durationMs / 1000))} 秒`
+}
+
+function isProcessingHistoryStatus(status: ScreenDocHistoryStatus): boolean {
+  return status === 'recording' || status === 'finalizing' || status === 'uploading' || status === 'analyzing'
+}
+
 export class ScreenDocService extends EventEmitter {
   private readonly overlay: OverlayBackend
   private readonly configStore: ConfigStore
@@ -307,8 +347,8 @@ export class ScreenDocService extends EventEmitter {
     return this.latestResult
   }
 
-  getHistoryList(): ScreenDocHistoryRecord[] {
-    return this.getHistoryRecords()
+  async getHistoryList(): Promise<ScreenDocHistoryRecord[]> {
+    return await this.enrichHistorySummaries(this.getHistoryRecords())
   }
 
   async start(): Promise<{ ok: boolean; error?: string }> {
@@ -445,12 +485,32 @@ export class ScreenDocService extends EventEmitter {
     })
 
     let recordingArtifact: NativeScreenRecordingArtifact | null = null
+    let archivedRecordingPath: string | null = null
+    let archivedRecordingFileName: string | undefined
     let timelineFrames: ScreenDocFrameInput[] = []
     let frameIntervalMs = 1000
 
     try {
       recordingArtifact = await this.screenRecorder.stopRecording()
       if (this.runId !== currentRunId) return null
+
+      const archivedRecording = await this.archiveRecordingArtifact(recordId, recordingArtifact)
+      archivedRecordingPath = archivedRecording.filePath
+      archivedRecordingFileName = archivedRecording.fileName
+      recordingArtifact = {
+        ...recordingArtifact,
+        filePath: archivedRecording.filePath
+      }
+      const archivedStorageBytes = await this.getRecordStorageBytes(recordId)
+
+      await this.updateHistoryRecord(recordId, {
+        status: 'finalizing',
+        updatedAt: Date.now(),
+        durationMs: recordingArtifact.durationMs,
+        hasRecordingFile: true,
+        recordingFileName: archivedRecording.fileName,
+        storageBytes: archivedStorageBytes
+      })
 
       await this.finishAsrTranscript()
       if (this.runId !== currentRunId) return null
@@ -465,7 +525,10 @@ export class ScreenDocService extends EventEmitter {
         await this.updateHistoryRecord(recordId, {
           status: 'uploading',
           updatedAt: Date.now(),
-          durationMs: recordingArtifact.durationMs
+          durationMs: recordingArtifact.durationMs,
+          hasRecordingFile: true,
+          recordingFileName: archivedRecording.fileName,
+          storageBytes: archivedStorageBytes
         })
         try {
           const bytes = await readFile(recordingArtifact.filePath)
@@ -481,7 +544,10 @@ export class ScreenDocService extends EventEmitter {
           await this.updateHistoryRecord(recordId, {
             status: 'analyzing',
             updatedAt: Date.now(),
-            durationMs: recordingArtifact.durationMs
+            durationMs: recordingArtifact.durationMs,
+            hasRecordingFile: true,
+            recordingFileName: archivedRecording.fileName,
+            storageBytes: archivedStorageBytes
           })
           analysis = await this.analyzeWithVideo(
             llmApiKey,
@@ -507,7 +573,10 @@ export class ScreenDocService extends EventEmitter {
         await this.updateHistoryRecord(recordId, {
           status: 'analyzing',
           updatedAt: Date.now(),
-          durationMs: recordingArtifact.durationMs
+          durationMs: recordingArtifact.durationMs,
+          hasRecordingFile: true,
+          recordingFileName: archivedRecording.fileName,
+          storageBytes: archivedStorageBytes
         })
         const timelineResult = await this.screenRecorder.extractTimelineFrames(
           recordingArtifact.filePath,
@@ -555,6 +624,10 @@ export class ScreenDocService extends EventEmitter {
         summary: analysis.summary,
         stepCount: analysis.steps.length,
         durationMs: recordingArtifact.durationMs,
+        storageBytes: archivedStorageBytes,
+        hasRecordingFile: true,
+        recordingFileName: archivedRecording.fileName,
+        previewHtmlPath: PREVIEW_HTML_FILE,
         analysis,
         screenshots,
         markdown: previewMarkdown,
@@ -573,13 +646,16 @@ export class ScreenDocService extends EventEmitter {
           error: errorMessage,
           updatedAt: Date.now(),
           durationMs: recordingArtifact?.durationMs,
-          title: '录屏整理失败'
+          title: '录屏整理失败',
+          hasRecordingFile: Boolean(archivedRecordingPath),
+          recordingFileName: archivedRecordingFileName,
+          storageBytes: await this.getRecordStorageBytes(recordId)
         })
         this.setStatus('error', errorMessage)
       }
       return null
     } finally {
-      if (recordingArtifact?.filePath) {
+      if (recordingArtifact?.filePath && !archivedRecordingPath) {
         await rm(recordingArtifact.filePath, { force: true }).catch(() => undefined)
       }
       this.asrClient?.abort()
@@ -624,6 +700,15 @@ export class ScreenDocService extends EventEmitter {
     this.screenRecorder.destroy()
   }
 
+  async preparePreview(recordId: string): Promise<string | null> {
+    const record = await this.getHistoryRecord(recordId)
+    if (!record || record.status !== 'ready') {
+      throw new Error('该记录还没有可预览的整理结果')
+    }
+
+    return await this.writePreviewArtifacts(record, { updateIndex: true })
+  }
+
   async exportRecord(recordId?: string): Promise<string | null> {
     const resolvedRecordId = recordId || this.latestResult?.artifactId
     if (!resolvedRecordId) {
@@ -631,7 +716,7 @@ export class ScreenDocService extends EventEmitter {
     }
 
     const record = await this.getHistoryRecord(resolvedRecordId)
-    if (!record || record.status !== 'ready' || !record.analysis || !record.screenshots || !record.markdown) {
+    if (!record || record.status !== 'ready') {
       throw new Error('该记录还没有可导出的整理结果')
     }
 
@@ -646,22 +731,35 @@ export class ScreenDocService extends EventEmitter {
     const baseDir = result.filePaths[0]
     const timeLabel = new Date(record.createdAt).toISOString().replace(/[:.]/g, '-')
     const exportDir = join(baseDir, `${sanitizeTitleSegment(record.title)}-${timeLabel}`)
-    const assetsDir = join(exportDir, 'assets')
-    await mkdir(assetsDir, { recursive: true })
+    const { markdown, html } = await this.buildRecordDocuments(record)
+    await this.writeRecordAssets(record, exportDir)
+    await mkdir(exportDir, { recursive: true })
 
-    const assetPaths = record.screenshots.map((screenshot, index) => {
-      const filename = `step-${String(index + 1).padStart(2, '0')}.png`
-      return { ...screenshot, filename, relativePath: `assets/${filename}` }
-    })
+    await writeFile(join(exportDir, EXPORT_MARKDOWN_FILE), markdown, 'utf8')
+    await writeFile(join(exportDir, EXPORT_HTML_FILE), html, 'utf8')
+    return exportDir
+  }
 
-    for (const asset of assetPaths) {
-      const parsed = parseDataUrl(asset.dataUrl)
-      await writeFile(join(exportDir, asset.relativePath), parsed.buffer)
+  async deleteRecord(recordId: string): Promise<boolean> {
+    const records = this.getHistoryRecords()
+    const record = records.find((item) => item.id === recordId)
+    if (!record) {
+      return false
+    }
+    if (isProcessingHistoryStatus(record.status)) {
+      throw new Error('处理中记录暂时不能删除')
     }
 
-    const markdown = this.buildMarkdown(record.analysis, assetPaths, false)
-    await writeFile(join(exportDir, 'doc.md'), markdown, 'utf8')
-    return exportDir
+    this.saveHistoryRecords(records.filter((item) => item.id !== recordId))
+    await this.removePersistedRecord(recordId)
+
+    if (this.latestResult?.artifactId === recordId) {
+      this.latestResult = null
+    }
+    if (this.currentRecordId === recordId) {
+      this.currentRecordId = null
+    }
+    return true
   }
 
   private emitStatus(): void {
@@ -1024,7 +1122,7 @@ export class ScreenDocService extends EventEmitter {
     }
 
     const persisted = await this.loadPersistedRecord(recordId)
-    return persisted || summary
+    return await this.enrichHistoryRecord(persisted || summary)
   }
 
   async pruneHistory(maxCount = getConfig(this.configStore).screenDocHistoryMaxCount): Promise<void> {
@@ -1096,6 +1194,10 @@ export class ScreenDocService extends EventEmitter {
       summary: updates.summary ?? baseRecord.summary,
       stepCount: updates.stepCount ?? baseRecord.stepCount,
       durationMs: updates.durationMs ?? baseRecord.durationMs,
+      storageBytes: updates.storageBytes ?? baseRecord.storageBytes,
+      hasRecordingFile: updates.hasRecordingFile ?? baseRecord.hasRecordingFile,
+      recordingFileName: updates.recordingFileName ?? baseRecord.recordingFileName,
+      previewHtmlPath: updates.previewHtmlPath ?? baseRecord.previewHtmlPath,
       error: updates.status === 'error'
         ? (updates.error ?? baseRecord.error)
         : updates.error
@@ -1112,7 +1214,7 @@ export class ScreenDocService extends EventEmitter {
 
   private async persistHistoryRecord(record: ScreenDocHistoryRecord): Promise<void> {
     await this.writePersistedRecord(record)
-    await this.updateHistoryRecord(record.id, record)
+    await this.updateHistoryRecord(record.id, (await this.loadPersistedRecord(record.id)) ?? record)
   }
 
   private defaultHistoryTitle(status: ScreenDocHistoryStatus): string {
@@ -1147,39 +1249,37 @@ export class ScreenDocService extends EventEmitter {
   }
 
   private getRecordFilePath(recordId: string): string {
-    return join(this.getRecordDir(recordId), 'record.json')
+    return join(this.getRecordDir(recordId), RECORD_FILE)
+  }
+
+  private getPreviewHtmlPath(recordId: string): string {
+    return join(this.getRecordDir(recordId), PREVIEW_HTML_FILE)
+  }
+
+  private getMarkdownPath(recordId: string): string {
+    return join(this.getRecordDir(recordId), EXPORT_MARKDOWN_FILE)
+  }
+
+  private getRecordingFilePath(recordId: string, fileName: string): string {
+    return join(this.getRecordDir(recordId), fileName)
   }
 
   private async writePersistedRecord(record: ScreenDocHistoryRecord): Promise<void> {
     const recordDir = this.getRecordDir(record.id)
-    const assetsDir = join(recordDir, 'assets')
-    await mkdir(assetsDir, { recursive: true })
-
-    const screenshots = record.screenshots ?? []
-    const assetPaths = screenshots.map((screenshot, index) => {
-      const filename = `step-${String(index + 1).padStart(2, '0')}.png`
-      return { ...screenshot, relativePath: `assets/${filename}` }
-    })
-
-    for (const asset of assetPaths) {
-      const parsed = parseDataUrl(asset.dataUrl)
-      await writeFile(join(recordDir, asset.relativePath), parsed.buffer)
-    }
-
-    const markdown = record.analysis
-      ? this.buildMarkdown(record.analysis, assetPaths, false)
-      : record.markdown
-
-    if (markdown) {
-      await writeFile(join(recordDir, 'doc.md'), markdown, 'utf8')
-    }
+    await mkdir(recordDir, { recursive: true })
+    const previewPath = await this.writePreviewArtifacts(record)
+    const storageBytes = await this.getRecordStorageBytes(record.id)
+    const hasRecordingFile = await this.recordingFileExists(record.id, record.recordingFileName)
 
     await writeFile(
       this.getRecordFilePath(record.id),
       JSON.stringify(
         {
           ...record,
-          markdown: record.markdown ?? markdown
+          markdown: record.markdown ?? await this.readIfExists(this.getMarkdownPath(record.id)),
+          previewHtmlPath: previewPath ? PREVIEW_HTML_FILE : record.previewHtmlPath,
+          storageBytes,
+          hasRecordingFile
         },
         null,
         2
@@ -1194,6 +1294,265 @@ export class ScreenDocService extends EventEmitter {
       return JSON.parse(content) as ScreenDocHistoryRecord
     } catch {
       return null
+    }
+  }
+
+  private async enrichHistorySummaries(records: ScreenDocHistoryRecord[]): Promise<ScreenDocHistoryRecord[]> {
+    const nextRecords = await Promise.all(records.map((record) => this.enrichHistoryRecord(record)))
+    const changed = nextRecords.some((record, index) =>
+      record.storageBytes !== records[index]?.storageBytes ||
+      record.hasRecordingFile !== records[index]?.hasRecordingFile ||
+      record.recordingFileName !== records[index]?.recordingFileName ||
+      record.previewHtmlPath !== records[index]?.previewHtmlPath
+    )
+
+    if (changed) {
+      this.saveHistoryRecords(nextRecords)
+    }
+
+    return nextRecords
+  }
+
+  private async enrichHistoryRecord(record: ScreenDocHistoryRecord): Promise<ScreenDocHistoryRecord> {
+    const previewExists = await this.fileExists(this.getPreviewHtmlPath(record.id))
+    const recordingFileName = record.recordingFileName ?? await this.findArchivedRecordingFileName(record.id)
+    const storageBytes = await this.getRecordStorageBytes(record.id)
+
+    return {
+      ...record,
+      storageBytes,
+      hasRecordingFile: Boolean(recordingFileName),
+      recordingFileName: recordingFileName ?? record.recordingFileName,
+      previewHtmlPath: previewExists ? PREVIEW_HTML_FILE : record.previewHtmlPath
+    }
+  }
+
+  private async archiveRecordingArtifact(
+    recordId: string,
+    artifact: NativeScreenRecordingArtifact
+  ): Promise<{ filePath: string; fileName: string }> {
+    const recordDir = this.getRecordDir(recordId)
+    await mkdir(recordDir, { recursive: true })
+
+    const sourceExt = extname(artifact.filePath)
+    const fileExt = sourceExt || extensionForMimeType(artifact.mimeType)
+    const fileName = `${RECORDING_FILE_BASENAME}${fileExt}`
+    const destination = this.getRecordingFilePath(recordId, fileName)
+
+    if (artifact.filePath !== destination) {
+      try {
+        await rename(artifact.filePath, destination)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code
+        if (code !== 'EXDEV') {
+          throw error
+        }
+        await copyFile(artifact.filePath, destination)
+        await rm(artifact.filePath, { force: true }).catch(() => undefined)
+      }
+    }
+
+    return { filePath: destination, fileName }
+  }
+
+  private async buildRecordDocuments(record: ScreenDocHistoryRecord): Promise<{ markdown: string; html: string }> {
+    if (!record.analysis) {
+      throw new Error('该记录缺少分析结果，无法生成文档')
+    }
+
+    const screenshots = (record.screenshots ?? []).map((screenshot, index) => ({
+      ...screenshot,
+      relativePath: `assets/step-${String(index + 1).padStart(2, '0')}.png`
+    }))
+    const markdown = this.buildMarkdown(record.analysis, screenshots, false)
+    const html = this.buildHtmlDocument(record, screenshots)
+    return { markdown, html }
+  }
+
+  private buildHtmlDocument(
+    record: ScreenDocHistoryRecord,
+    screenshots: Array<ScreenDocScreenshot & { relativePath?: string }>
+  ): string {
+    if (!record.analysis) {
+      throw new Error('该记录缺少分析结果，无法生成 HTML')
+    }
+    const metaItems = [
+      `创建时间：${new Date(record.createdAt).toLocaleString('zh-CN')}`,
+      `状态：${this.defaultHistoryTitle(record.status)}`,
+      record.stepCount ? `步骤数：${record.stepCount}` : '',
+      `录制时长：${formatDurationLabel(record.durationMs)}`,
+      record.hasRecordingFile ? '已保存原始录屏' : '无原始录屏文件'
+    ].filter(Boolean)
+    const notesHtml = record.analysis.notes.length > 0
+      ? `<section><h2>补充说明</h2><ul>${record.analysis.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}</ul></section>`
+      : ''
+    const stepsHtml = record.analysis.steps.map((step, index) => {
+      const screenshot = screenshots[index]
+      const imageRef = screenshot?.relativePath
+      return `<section class="step">
+        <div class="step-header">
+          <h3>${index + 1}. ${escapeHtml(step.title)}</h3>
+          <span class="step-time">${escapeHtml(timestampLabel(step.timestampMs))}</span>
+        </div>
+        ${imageRef ? `<img src="${escapeHtml(imageRef)}" alt="${escapeHtml(step.title)}" />` : ''}
+        <p>${escapeHtml(step.description).replaceAll('\n', '<br />')}</p>
+      </section>`
+    }).join('')
+    const transcriptHtml = record.analysis.transcript.trim()
+      ? `<section><h2>语音说明摘录</h2><div class="transcript">${escapeHtml(record.analysis.transcript.trim()).replaceAll('\n', '<br />')}</div></section>`
+      : ''
+
+    return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(record.title)}</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f7fb; color: #1f2937; }
+      main { max-width: 960px; margin: 0 auto; padding: 40px 24px 64px; }
+      .hero { background: #fff; border-radius: 20px; padding: 28px; box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08); margin-bottom: 24px; }
+      .meta { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 16px; color: #667085; font-size: 14px; }
+      article { background: #fff; border-radius: 20px; padding: 28px; box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08); line-height: 1.75; }
+      section + section { margin-top: 28px; }
+      img { max-width: 100%; border-radius: 14px; border: 1px solid #dbe4f0; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+      h1, h2, h3 { color: #111827; }
+      ul { padding-left: 20px; }
+      .step { padding-top: 8px; }
+      .step-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
+      .step-time { color: #667085; font-size: 14px; white-space: nowrap; }
+      .transcript { white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <h1>${escapeHtml(record.title)}</h1>
+        ${record.summary ? `<p>${escapeHtml(record.summary)}</p>` : ''}
+        <div class="meta">${metaItems.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>
+      </section>
+      <article>
+        ${notesHtml}
+        <section>
+          <h2>操作步骤</h2>
+          ${stepsHtml}
+        </section>
+        ${transcriptHtml}
+      </article>
+    </main>
+  </body>
+</html>`
+  }
+
+  private async writeRecordAssets(record: ScreenDocHistoryRecord, baseDir?: string): Promise<Array<ScreenDocScreenshot & { relativePath: string }>> {
+    const targetDir = baseDir ?? this.getRecordDir(record.id)
+    const assetsDir = join(targetDir, 'assets')
+    await rm(assetsDir, { recursive: true, force: true }).catch(() => undefined)
+    await mkdir(assetsDir, { recursive: true })
+
+    const screenshots = record.screenshots ?? []
+    const assetPaths = screenshots.map((screenshot, index) => ({
+      ...screenshot,
+      relativePath: `assets/step-${String(index + 1).padStart(2, '0')}.png`
+    }))
+
+    for (const asset of assetPaths) {
+      const parsed = parseDataUrl(asset.dataUrl)
+      await writeFile(join(targetDir, asset.relativePath), parsed.buffer)
+    }
+
+    return assetPaths
+  }
+
+  private async writePreviewArtifacts(
+    record: ScreenDocHistoryRecord,
+    options: { updateIndex?: boolean } = {}
+  ): Promise<string | null> {
+    if (record.status !== 'ready' || !record.analysis) {
+      return null
+    }
+
+    const recordDir = this.getRecordDir(record.id)
+    await mkdir(recordDir, { recursive: true })
+    const screenshots = await this.writeRecordAssets(record)
+    const markdown = this.buildMarkdown(record.analysis, screenshots, false)
+    const html = this.buildHtmlDocument(record, screenshots)
+    const previewPath = this.getPreviewHtmlPath(record.id)
+
+    await writeFile(this.getMarkdownPath(record.id), markdown, 'utf8')
+    await writeFile(previewPath, html, 'utf8')
+
+    if (options.updateIndex) {
+      await this.updateHistoryRecord(record.id, {
+        status: record.status,
+        updatedAt: record.updatedAt,
+        title: record.title,
+        summary: record.summary,
+        stepCount: record.stepCount,
+        durationMs: record.durationMs,
+        hasRecordingFile: await this.recordingFileExists(record.id, record.recordingFileName),
+        recordingFileName: record.recordingFileName ?? await this.findArchivedRecordingFileName(record.id),
+        previewHtmlPath: PREVIEW_HTML_FILE,
+        storageBytes: await this.getRecordStorageBytes(record.id)
+      })
+    }
+
+    return previewPath
+  }
+
+  private async getRecordStorageBytes(recordId: string): Promise<number> {
+    return await this.getPathStorageBytes(this.getRecordDir(recordId))
+  }
+
+  private async getPathStorageBytes(targetPath: string): Promise<number> {
+    try {
+      const targetStat = await stat(targetPath)
+      if (!targetStat.isDirectory()) {
+        return targetStat.size
+      }
+
+      const entries = await readdir(targetPath, { withFileTypes: true })
+      let total = 0
+      for (const entry of entries) {
+        total += await this.getPathStorageBytes(join(targetPath, entry.name))
+      }
+      return total
+    } catch {
+      return 0
+    }
+  }
+
+  private async fileExists(targetPath: string): Promise<boolean> {
+    try {
+      await stat(targetPath)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async recordingFileExists(recordId: string, recordingFileName?: string): Promise<boolean> {
+    if (!recordingFileName) {
+      return Boolean(await this.findArchivedRecordingFileName(recordId))
+    }
+    return await this.fileExists(this.getRecordingFilePath(recordId, recordingFileName))
+  }
+
+  private async findArchivedRecordingFileName(recordId: string): Promise<string | undefined> {
+    try {
+      const entries = await readdir(this.getRecordDir(recordId))
+      return entries.find((entry) => entry.startsWith(`${RECORDING_FILE_BASENAME}.`))
+    } catch {
+      return undefined
+    }
+  }
+
+  private async readIfExists(targetPath: string): Promise<string | undefined> {
+    try {
+      return await readFile(targetPath, 'utf8')
+    } catch {
+      return undefined
     }
   }
 

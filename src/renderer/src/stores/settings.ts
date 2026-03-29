@@ -73,7 +73,9 @@ declare global {
       sendScreenDocAudioChunk: (chunk: ArrayBuffer) => void
       getScreenDocHistory: () => Promise<ScreenDocHistoryRecord[]>
       getScreenDocHistoryRecord: (recordId: string) => Promise<ScreenDocHistoryRecord | null>
+      previewScreenDocRecord: (recordId: string) => Promise<string | null>
       exportScreenDocRecord: (recordId: string) => Promise<string | null>
+      deleteScreenDocRecord: (recordId: string) => Promise<boolean>
       onScreenDocHistoryUpdated: (callback: () => void) => () => void
       getLatestScreenDocResult: () => Promise<ScreenDocResultPayload | null>
       onScreenDocStatus: (callback: (payload: ScreenDocStatusPayload) => void) => () => void

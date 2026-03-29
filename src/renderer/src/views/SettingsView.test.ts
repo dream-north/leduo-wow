@@ -99,7 +99,9 @@ function createElectronApi(overrides: Partial<Window['electronAPI']> = {}): Wind
     sendScreenDocAudioChunk: vi.fn(),
     getScreenDocHistory: vi.fn(async () => screenDocHistory),
     getScreenDocHistoryRecord: vi.fn(async () => null),
+    previewScreenDocRecord: vi.fn(async () => null),
     exportScreenDocRecord: vi.fn(async () => null),
+    deleteScreenDocRecord: vi.fn(async () => true),
     onScreenDocHistoryUpdated: vi.fn(() => () => {}),
     getLatestScreenDocResult: vi.fn(async () => null),
     onScreenDocStatus: vi.fn(() => () => {}),
@@ -178,7 +180,7 @@ describe('SettingsView screen doc controls', () => {
 
     const primaryButton = wrapper.find('.screen-doc-actions .btn-primary')
     expect(primaryButton.exists()).toBe(true)
-    expect(primaryButton.text()).toContain('开始录屏整理')
+    expect(primaryButton.text()).toContain('开始录屏')
 
     await primaryButton.trigger('click')
     await flushPromises()
@@ -193,5 +195,59 @@ describe('SettingsView screen doc controls', () => {
 
     expect(window.electronAPI.stopScreenDoc).toHaveBeenCalledTimes(1)
     expect(window.electronAPI.stopScreenDoc).toHaveBeenCalledWith()
+  })
+
+  it('shows history storage info and triggers preview export delete actions', async () => {
+    const historyRecord: ScreenDocHistoryRecord = {
+      id: 'record-1',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: 'ready',
+      title: '录屏整理结果',
+      summary: '这是摘要',
+      stepCount: 2,
+      durationMs: 8000,
+      storageBytes: 5 * 1024 * 1024,
+      hasRecordingFile: true,
+      recordingFileName: 'recording.mp4',
+      previewHtmlPath: 'preview.html'
+    }
+
+    window.electronAPI = createElectronApi({
+      getScreenDocHistory: vi.fn(async () => [historyRecord]),
+      getScreenDocHistoryRecord: vi.fn(async () => historyRecord),
+      previewScreenDocRecord: vi.fn(async () => '/tmp/preview.html'),
+      exportScreenDocRecord: vi.fn(async () => '/tmp/export'),
+      deleteScreenDocRecord: vi.fn(async () => true)
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const wrapper = mount(SettingsView, {
+      global: {
+        plugins: [createPinia()]
+      }
+    })
+    await flushPromises()
+
+    const screenDocNavButton = wrapper.findAll('.nav-item').find((item) => item.text().includes('录屏整理'))
+    await screenDocNavButton!.trigger('click')
+    await flushPromises()
+
+    const historyTab = wrapper.findAll('.mode-tab').find((item) => item.text().includes('历史记录'))
+    await historyTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('5.00 MB')
+    expect(wrapper.text()).toContain('原始录屏：已保存')
+
+    const buttons = wrapper.findAll('.screen-doc-detail-card .btn')
+    await buttons[0].trigger('click')
+    await buttons[1].trigger('click')
+    await buttons[2].trigger('click')
+    await flushPromises()
+
+    expect(window.electronAPI.previewScreenDocRecord).toHaveBeenCalledWith('record-1')
+    expect(window.electronAPI.exportScreenDocRecord).toHaveBeenCalledWith('record-1')
+    expect(window.electronAPI.deleteScreenDocRecord).toHaveBeenCalledWith('record-1')
   })
 })

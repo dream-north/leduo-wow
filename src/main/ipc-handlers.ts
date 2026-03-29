@@ -153,16 +153,33 @@ export function registerIpcHandlers(
     return screenDocService.getLatestResult()
   })
 
-  ipcMain.handle(IPC.SCREEN_DOC_HISTORY_GET, () => {
-    return screenDocService.getHistoryList()
+  ipcMain.handle(IPC.SCREEN_DOC_HISTORY_GET, async () => {
+    return await screenDocService.getHistoryList()
   })
 
   ipcMain.handle(IPC.SCREEN_DOC_HISTORY_ITEM_GET, (_event, recordId: string) => {
     return screenDocService.getHistoryRecord(recordId)
   })
 
+  ipcMain.handle(IPC.SCREEN_DOC_PREVIEW, async (_event, recordId: string) => {
+    const previewPath = await screenDocService.preparePreview(recordId)
+    if (!previewPath) {
+      return null
+    }
+
+    const openError = await shell.openPath(previewPath)
+    if (openError) {
+      throw new Error(openError)
+    }
+    return previewPath
+  })
+
   ipcMain.handle(IPC.SCREEN_DOC_EXPORT, async (_event, artifactId?: string) => {
     return await screenDocService.exportRecord(artifactId)
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_DELETE, async (_event, recordId: string) => {
+    return await screenDocService.deleteRecord(recordId)
   })
 
   // Permissions

@@ -972,7 +972,7 @@ const screenDocEffectiveStatus = computed(() => {
 const screenDocPrimaryActionLabel = computed(() => (
   screenDocCapturePhase.value === 'recording' || screenDocCapturePhase.value === 'starting'
     ? '停止录制'
-    : '开始录屏整理'
+    : '开始录屏'
 ))
 
 const screenDocCanStart = computed(() => (
@@ -1459,15 +1459,76 @@ function screenDocHistoryStatusLabel(status: ScreenDocHistoryRecord['status']): 
   }
 }
 
+function formatStorageBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = bytes
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  const precision = unitIndex === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function screenDocRecordCanPreview(record: ScreenDocHistoryRecord): boolean {
+  return record.status === 'ready'
+}
+
+function screenDocRecordCanExport(record: ScreenDocHistoryRecord): boolean {
+  return record.status === 'ready'
+}
+
+function screenDocRecordCanDelete(record: ScreenDocHistoryRecord): boolean {
+  return record.status === 'ready' || record.status === 'cancelled' || record.status === 'error'
+}
+
+async function previewScreenDocRecord(recordId: string): Promise<void> {
+  try {
+    const previewPath = await window.electronAPI.previewScreenDocRecord(recordId)
+    if (previewPath) {
+      showSaveMessage('已打开 HTML 预览')
+      await loadScreenDocHistory({ keepSelection: true })
+    }
+  } catch (err) {
+    console.error('Failed to preview screen doc record:', err)
+    showSaveMessage(err instanceof Error ? err.message : '打开预览失败')
+  }
+}
+
 async function exportScreenDocRecord(recordId: string): Promise<void> {
   try {
     const exportedPath = await window.electronAPI.exportScreenDocRecord(recordId)
     if (exportedPath) {
-      showSaveMessage('已导出 Markdown')
+      showSaveMessage('已导出 Markdown 和 HTML')
     }
   } catch (err) {
     console.error('Failed to export screen doc record:', err)
     showSaveMessage(err instanceof Error ? err.message : '导出失败')
+  }
+}
+
+async function deleteScreenDocRecord(recordId: string): Promise<void> {
+  const target = screenDocHistoryRecords.value.find((record) => record.id === recordId)
+  if (!target) return
+  if (!screenDocRecordCanDelete(target)) {
+    showSaveMessage('处理中记录暂时不能删除')
+    return
+  }
+  if (!window.confirm(`确认删除「${target.title}」吗？这会同时删除本地录屏和导出文件。`)) {
+    return
+  }
+
+  try {
+    const deleted = await window.electronAPI.deleteScreenDocRecord(recordId)
+    if (deleted) {
+      showSaveMessage('已删除录屏记录')
+      await loadScreenDocHistory()
+    }
+  } catch (err) {
+    console.error('Failed to delete screen doc record:', err)
+    showSaveMessage(err instanceof Error ? err.message : '删除失败')
   }
 }
 
@@ -2992,6 +3053,7 @@ function closeMergeDialog(): void {
                   <span>{{ formatTime(record.createdAt) }}</span>
                   <span v-if="record.stepCount">{{ record.stepCount }} 步</span>
                   <span v-if="record.durationMs">{{ Math.max(1, Math.round(record.durationMs / 1000)) }} 秒</span>
+                  <span>{{ formatStorageBytes(record.storageBytes) }}</span>
                 </div>
                 <p v-if="record.summary" class="screen-doc-history-summary">{{ record.summary }}</p>
                 <p v-else-if="record.error" class="screen-doc-history-summary screen-doc-history-error">{{ record.error }}</p>
@@ -3010,15 +3072,32 @@ function closeMergeDialog(): void {
                     <span>{{ screenDocHistoryStatusLabel(selectedScreenDocRecord.status) }}</span>
                     <span v-if="selectedScreenDocRecord.stepCount">{{ selectedScreenDocRecord.stepCount }} 个步骤</span>
                     <span v-if="selectedScreenDocRecord.durationMs">{{ Math.max(1, Math.round(selectedScreenDocRecord.durationMs / 1000)) }} 秒</span>
+                    <span>{{ formatStorageBytes(selectedScreenDocRecord.storageBytes) }}</span>
                   </div>
                 </div>
-                <button
-                  v-if="selectedScreenDocRecord.status === 'ready'"
-                  class="btn btn-primary"
-                  @click="exportScreenDocRecord(selectedScreenDocRecord.id)"
-                >
-                  导出 Markdown
-                </button>
+                <div class="screen-doc-actions">
+                  <button
+                    v-if="screenDocRecordCanPreview(selectedScreenDocRecord)"
+                    class="btn btn-secondary"
+                    @click="previewScreenDocRecord(selectedScreenDocRecord.id)"
+                  >
+                    预览 HTML
+                  </button>
+                  <button
+                    v-if="screenDocRecordCanExport(selectedScreenDocRecord)"
+                    class="btn btn-primary"
+                    @click="exportScreenDocRecord(selectedScreenDocRecord.id)"
+                  >
+                    导出文件
+                  </button>
+                  <button
+                    v-if="screenDocRecordCanDelete(selectedScreenDocRecord)"
+                    class="btn btn-secondary btn-danger"
+                    @click="deleteScreenDocRecord(selectedScreenDocRecord.id)"
+                  >
+                    删除记录
+                  </button>
+                </div>
               </div>
 
               <p v-if="selectedScreenDocRecord.summary" class="screen-doc-detail-summary">
@@ -3027,49 +3106,15 @@ function closeMergeDialog(): void {
               <p v-else-if="selectedScreenDocRecord.error" class="screen-doc-detail-error">
                 {{ selectedScreenDocRecord.error }}
               </p>
-
-              <template v-if="selectedScreenDocRecord.analysis">
-                <div v-if="selectedScreenDocRecord.analysis.notes.length > 0" class="setting-group">
-                  <label class="setting-label">补充说明</label>
-                  <ul class="screen-doc-note-list">
-                    <li v-for="(note, index) in selectedScreenDocRecord.analysis.notes" :key="`screen-doc-note-${index}`">
-                      {{ note }}
-                    </li>
-                  </ul>
+              <div class="setting-group">
+                <label class="setting-label">归档内容</label>
+                <div class="screen-doc-transcript">
+                  <div>原始录屏：{{ selectedScreenDocRecord.hasRecordingFile ? '已保存' : '无原始录屏文件' }}</div>
+                  <div>本地占用：{{ formatStorageBytes(selectedScreenDocRecord.storageBytes) }}</div>
+                  <div v-if="selectedScreenDocRecord.recordingFileName">录屏文件：{{ selectedScreenDocRecord.recordingFileName }}</div>
+                  <div v-if="selectedScreenDocRecord.status === 'ready'">完整步骤、截图和语音摘录请通过 HTML 预览或导出文件查看。</div>
                 </div>
-
-                <div class="setting-group">
-                  <label class="setting-label">操作步骤</label>
-                  <div class="screen-doc-step-list">
-                    <div
-                      v-for="(step, stepIndex) in selectedScreenDocRecord.analysis.steps"
-                      :key="`${selectedScreenDocRecord.id}-${step.timestampMs}-${step.title}`"
-                      class="screen-doc-step-item"
-                    >
-                      <div class="screen-doc-step-copy">
-                        <div class="screen-doc-step-title-row">
-                          <span class="screen-doc-step-title">{{ step.title }}</span>
-                          <span class="screen-doc-step-time">{{ Math.max(0, Math.round(step.timestampMs / 1000)) }} 秒</span>
-                        </div>
-                        <p class="screen-doc-step-description">{{ step.description }}</p>
-                      </div>
-                      <img
-                        v-if="selectedScreenDocRecord.screenshots?.[stepIndex]?.dataUrl"
-                        :src="selectedScreenDocRecord.screenshots?.[stepIndex]?.dataUrl"
-                        class="screen-doc-step-image"
-                        :alt="step.title"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div v-if="selectedScreenDocRecord.analysis.transcript" class="setting-group">
-                  <label class="setting-label">语音说明摘录</label>
-                  <div class="screen-doc-transcript">
-                    {{ selectedScreenDocRecord.analysis.transcript }}
-                  </div>
-                </div>
-              </template>
+              </div>
             </div>
           </div>
         </div>
