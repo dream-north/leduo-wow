@@ -237,10 +237,11 @@ describe('SettingsView screen doc controls', () => {
     await historyTab!.trigger('click')
     await flushPromises()
 
+    expect(wrapper.find('.screen-doc-detail-card').exists()).toBe(false)
     expect(wrapper.text()).toContain('5.00 MB')
     expect(wrapper.text()).toContain('原始录屏：已保存')
 
-    const buttons = wrapper.findAll('.screen-doc-detail-card .btn')
+    const buttons = wrapper.findAll('.screen-doc-history-item-actions .btn')
     await buttons[0].trigger('click')
     await buttons[1].trigger('click')
     await buttons[2].trigger('click')

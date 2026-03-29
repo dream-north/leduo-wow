@@ -111,7 +111,7 @@ const tabs = [
   { id: 'api', label: 'API', icon: '🔑' },
   { id: 'prompt-transcription', label: '语音识别', icon: '🎤' },
   { id: 'prompt-assistant', label: '语音助手', icon: '🤖' },
-  { id: 'screen-doc', label: '录屏整理', icon: '▣' },
+  { id: 'screen-doc', label: '录屏整理', icon: '🎬' },
   { id: 'memory', label: '记忆', icon: '🧠' },
   { id: 'history', label: '历史', icon: '📜' },
   { id: 'about', label: '关于', icon: 'ℹ️' }
@@ -1401,8 +1401,6 @@ function installUpdate(): void {
 // History
 const historyRecords = ref<TranscriptionRecord[]>([])
 const screenDocHistoryRecords = ref<ScreenDocHistoryRecord[]>([])
-const selectedScreenDocRecordId = ref<string | null>(null)
-const selectedScreenDocRecord = ref<ScreenDocHistoryRecord | null>(null)
 const screenDocHistoryLoading = ref(false)
 let unsubscribeScreenDocHistoryUpdate: (() => void) | null = null
 
@@ -1410,34 +1408,15 @@ async function loadHistory(): Promise<void> {
   historyRecords.value = await window.electronAPI.getHistory()
 }
 
-async function loadScreenDocHistory(options: { keepSelection?: boolean } = {}): Promise<void> {
+async function loadScreenDocHistory(): Promise<void> {
   screenDocHistoryLoading.value = true
   try {
     screenDocHistoryRecords.value = await window.electronAPI.getScreenDocHistory()
-    if (screenDocHistoryRecords.value.length === 0) {
-      selectedScreenDocRecordId.value = null
-      selectedScreenDocRecord.value = null
-      return
-    }
-
-    const preferredId = options.keepSelection ? selectedScreenDocRecordId.value : null
-    const nextId = preferredId && screenDocHistoryRecords.value.some((item) => item.id === preferredId)
-      ? preferredId
-      : screenDocHistoryRecords.value[0]?.id ?? null
-
-    if (nextId) {
-      await selectScreenDocRecord(nextId)
-    }
   } catch (err) {
     console.error('Failed to load screen doc history:', err)
   } finally {
     screenDocHistoryLoading.value = false
   }
-}
-
-async function selectScreenDocRecord(recordId: string): Promise<void> {
-  selectedScreenDocRecordId.value = recordId
-  selectedScreenDocRecord.value = await window.electronAPI.getScreenDocHistoryRecord(recordId)
 }
 
 function screenDocHistoryStatusLabel(status: ScreenDocHistoryRecord['status']): string {
@@ -1489,7 +1468,7 @@ async function previewScreenDocRecord(recordId: string): Promise<void> {
     const previewPath = await window.electronAPI.previewScreenDocRecord(recordId)
     if (previewPath) {
       showSaveMessage('已打开 HTML 预览')
-      await loadScreenDocHistory({ keepSelection: true })
+      await loadScreenDocHistory()
     }
   } catch (err) {
     console.error('Failed to preview screen doc record:', err)
@@ -1537,7 +1516,7 @@ async function updateScreenDocHistoryMaxCount(event: Event): Promise<void> {
   const count = isNaN(val) || val < 5 ? 5 : val > 200 ? 200 : val
   store.screenDocHistoryMaxCount = count
   await store.saveSetting('screenDocHistoryMaxCount', count)
-  await loadScreenDocHistory({ keepSelection: true })
+  await loadScreenDocHistory()
   showSaveMessage('录屏整理历史保留数量已更新')
 }
 
@@ -1608,7 +1587,7 @@ onMounted(async () => {
     })
 
     unsubscribeScreenDocHistoryUpdate = window.electronAPI.onScreenDocHistoryUpdated(() => {
-      void loadScreenDocHistory({ keepSelection: true })
+      void loadScreenDocHistory()
     })
 
     unsubscribeShortcutStatus = window.electronAPI.onShortcutStatusChanged((status) => {
@@ -1635,7 +1614,7 @@ onMounted(async () => {
           screenDocStartedAt = 0
           void teardownScreenDocAudio()
         }
-        void loadScreenDocHistory({ keepSelection: true })
+        void loadScreenDocHistory()
       }
       if (
         payload.status === 'finalizing' ||
@@ -2891,7 +2870,7 @@ function closeMergeDialog(): void {
             <div class="screen-doc-panel">
               <div class="screen-doc-header">
                 <div class="screen-doc-header-main">
-                  <div class="screen-doc-icon">▣</div>
+                  <div class="screen-doc-icon">🎬</div>
                   <div class="screen-doc-copy">
                     <div class="screen-doc-title-row">
                       <span class="screen-doc-title">{{ screenDocStatusTitle }}</span>
@@ -3032,16 +3011,15 @@ function closeMergeDialog(): void {
           <div class="screen-doc-history-sidebar">
             <div class="screen-doc-history-toolbar">
               <span class="screen-doc-history-count">共 {{ screenDocHistoryRecords.length }} 条</span>
-              <button class="btn btn-secondary btn-sm" @click="loadScreenDocHistory({ keepSelection: true })">刷新</button>
+              <button class="btn btn-secondary btn-sm" @click="loadScreenDocHistory()">刷新</button>
             </div>
             <div v-if="screenDocHistoryLoading" class="empty-history">正在加载录屏整理历史...</div>
             <div v-else-if="screenDocHistoryRecords.length === 0" class="empty-history">暂无录屏整理记录</div>
             <div v-else class="screen-doc-history-list">
-              <button
+              <div
                 v-for="record in screenDocHistoryRecords"
                 :key="record.id"
-                :class="['screen-doc-history-item', { active: selectedScreenDocRecordId === record.id }]"
-                @click="selectScreenDocRecord(record.id)"
+                class="screen-doc-history-item"
               >
                 <div class="screen-doc-history-item-top">
                   <span class="screen-doc-history-title">{{ record.title }}</span>
@@ -3057,62 +3035,32 @@ function closeMergeDialog(): void {
                 </div>
                 <p v-if="record.summary" class="screen-doc-history-summary">{{ record.summary }}</p>
                 <p v-else-if="record.error" class="screen-doc-history-summary screen-doc-history-error">{{ record.error }}</p>
-              </button>
-            </div>
-          </div>
-
-          <div class="screen-doc-history-detail">
-            <div v-if="!selectedScreenDocRecord" class="empty-history">选择左侧记录查看详情</div>
-            <div v-else class="screen-doc-detail-card">
-              <div class="screen-doc-detail-header">
-                <div>
-                  <h3 class="screen-doc-detail-title">{{ selectedScreenDocRecord.title }}</h3>
-                  <div class="screen-doc-detail-meta">
-                    <span>{{ formatTime(selectedScreenDocRecord.createdAt) }}</span>
-                    <span>{{ screenDocHistoryStatusLabel(selectedScreenDocRecord.status) }}</span>
-                    <span v-if="selectedScreenDocRecord.stepCount">{{ selectedScreenDocRecord.stepCount }} 个步骤</span>
-                    <span v-if="selectedScreenDocRecord.durationMs">{{ Math.max(1, Math.round(selectedScreenDocRecord.durationMs / 1000)) }} 秒</span>
-                    <span>{{ formatStorageBytes(selectedScreenDocRecord.storageBytes) }}</span>
-                  </div>
+                <div class="screen-doc-history-meta-line">
+                  <span>原始录屏：{{ record.hasRecordingFile ? '已保存' : '无原始录屏文件' }}</span>
+                  <span v-if="record.recordingFileName">文件：{{ record.recordingFileName }}</span>
                 </div>
-                <div class="screen-doc-actions">
+                <div v-if="screenDocRecordCanPreview(record) || screenDocRecordCanExport(record) || screenDocRecordCanDelete(record)" class="screen-doc-history-item-actions">
                   <button
-                    v-if="screenDocRecordCanPreview(selectedScreenDocRecord)"
-                    class="btn btn-secondary"
-                    @click="previewScreenDocRecord(selectedScreenDocRecord.id)"
+                    v-if="screenDocRecordCanPreview(record)"
+                    class="btn btn-secondary btn-sm"
+                    @click="previewScreenDocRecord(record.id)"
                   >
                     预览 HTML
                   </button>
                   <button
-                    v-if="screenDocRecordCanExport(selectedScreenDocRecord)"
-                    class="btn btn-primary"
-                    @click="exportScreenDocRecord(selectedScreenDocRecord.id)"
+                    v-if="screenDocRecordCanExport(record)"
+                    class="btn btn-primary btn-sm"
+                    @click="exportScreenDocRecord(record.id)"
                   >
                     导出文件
                   </button>
                   <button
-                    v-if="screenDocRecordCanDelete(selectedScreenDocRecord)"
-                    class="btn btn-secondary btn-danger"
-                    @click="deleteScreenDocRecord(selectedScreenDocRecord.id)"
+                    v-if="screenDocRecordCanDelete(record)"
+                    class="btn btn-secondary btn-sm btn-danger"
+                    @click="deleteScreenDocRecord(record.id)"
                   >
                     删除记录
                   </button>
-                </div>
-              </div>
-
-              <p v-if="selectedScreenDocRecord.summary" class="screen-doc-detail-summary">
-                {{ selectedScreenDocRecord.summary }}
-              </p>
-              <p v-else-if="selectedScreenDocRecord.error" class="screen-doc-detail-error">
-                {{ selectedScreenDocRecord.error }}
-              </p>
-              <div class="setting-group">
-                <label class="setting-label">归档内容</label>
-                <div class="screen-doc-transcript">
-                  <div>原始录屏：{{ selectedScreenDocRecord.hasRecordingFile ? '已保存' : '无原始录屏文件' }}</div>
-                  <div>本地占用：{{ formatStorageBytes(selectedScreenDocRecord.storageBytes) }}</div>
-                  <div v-if="selectedScreenDocRecord.recordingFileName">录屏文件：{{ selectedScreenDocRecord.recordingFileName }}</div>
-                  <div v-if="selectedScreenDocRecord.status === 'ready'">完整步骤、截图和语音摘录请通过 HTML 预览或导出文件查看。</div>
                 </div>
               </div>
             </div>
@@ -3971,30 +3919,24 @@ function closeMergeDialog(): void {
 }
 
 .screen-doc-history-layout {
-  display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: flex-start;
+  display: block;
 }
 
-.screen-doc-history-sidebar,
-.screen-doc-detail-card {
+.screen-doc-history-sidebar {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   padding: 14px;
 }
 
-.screen-doc-history-toolbar,
-.screen-doc-detail-header {
+.screen-doc-history-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.screen-doc-history-count,
-.screen-doc-detail-meta {
+.screen-doc-history-count {
   font-size: 12px;
   color: var(--text-secondary);
 }
@@ -4016,8 +3958,7 @@ function closeMergeDialog(): void {
   transition: all 0.15s ease;
 }
 
-.screen-doc-history-item:hover,
-.screen-doc-history-item.active {
+.screen-doc-history-item:hover {
   border-color: rgba(0, 113, 227, 0.4);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
@@ -4031,7 +3972,6 @@ function closeMergeDialog(): void {
 }
 
 .screen-doc-history-title,
-.screen-doc-detail-title,
 .screen-doc-step-title {
   font-size: 14px;
   font-weight: 700;
@@ -4048,7 +3988,6 @@ function closeMergeDialog(): void {
 }
 
 .screen-doc-history-summary,
-.screen-doc-detail-summary,
 .screen-doc-step-description,
 .screen-doc-transcript {
   margin: 10px 0 0;
@@ -4062,15 +4001,11 @@ function closeMergeDialog(): void {
   color: #b91c1c;
 }
 
-.screen-doc-detail-header {
-  align-items: flex-start;
-}
-
-.screen-doc-detail-meta {
+.screen-doc-history-item-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 12px;
 }
 
 .screen-doc-note-list {
