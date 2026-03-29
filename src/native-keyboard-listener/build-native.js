@@ -1,11 +1,27 @@
 const { execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+const esbuild = require('esbuild')
 
 const rootDir = __dirname
 
+function bundleMarkdownCore(outfile) {
+  const entryPoint = path.resolve(rootDir, '..', 'shared', 'markdown-core-browser.ts')
+  esbuild.buildSync({
+    entryPoints: [entryPoint],
+    bundle: true,
+    format: 'iife',
+    minify: true,
+    platform: 'browser',
+    outfile
+  })
+  console.log(`[native-keyboard-listener] Bundled markdown core → ${path.basename(outfile)}`)
+}
+
 function buildMacHelper() {
   const swiftDir = path.join(rootDir, 'SwiftKeyboardListener')
+  const bundleOut = path.join(swiftDir, 'Sources', 'markdown-bundle.js')
+  bundleMarkdownCore(bundleOut)
   execFileSync('bash', ['build.sh'], {
     cwd: swiftDir,
     stdio: 'inherit'

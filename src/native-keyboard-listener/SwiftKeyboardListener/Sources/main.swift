@@ -981,7 +981,6 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         var reasoningCollapsed: Bool
         var codeMarkdown: String
         var codeCollapsed: Bool
-        var cachedHTML: String?
     }
 
     private let panel: NSPanel
@@ -1016,7 +1015,6 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
     private var pendingUpdateWorkItem: DispatchWorkItem?
     private var streamingGeneration: UInt64 = 0
     private var renderGeneration: UInt64 = 0
-    private let renderQueue = DispatchQueue(label: "com.leduo.markdown-render", qos: .userInitiated)
 
     // Multi-turn conversation state
     private var turns: [ConversationTurn] = []
@@ -1340,22 +1338,8 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                 if let userMessage, !userMessage.isEmpty {
                     turns[existingIdx].userMessage = userMessage
                 }
-                // Clear cache since content changed
-                turns[existingIdx].cachedHTML = nil
+                // Content changed for existing turn
             } else {
-                // Cache previous turns
-                for i in 0..<turns.count {
-                    if turns[i].cachedHTML == nil {
-                        turns[i].cachedHTML = MarkdownTemplateRenderer.renderBody(
-                            turns[i].markdown,
-                            sources: turns[i].sources,
-                            reasoningMarkdown: turns[i].reasoningMarkdown,
-                            reasoningCollapsed: turns[i].reasoningCollapsed,
-                            codeMarkdown: turns[i].codeMarkdown,
-                            codeCollapsed: turns[i].codeCollapsed
-                        )
-                    }
-                }
                 turns.append(ConversationTurn(
                     turnIndex: turnIndex,
                     userMessage: userMessage ?? "",
@@ -1366,8 +1350,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                     reasoningMarkdown: reasoningMarkdown ?? "",
                     reasoningCollapsed: reasoningCollapsed,
                     codeMarkdown: codeMarkdown ?? "",
-                    codeCollapsed: codeCollapsed,
-                    cachedHTML: nil
+                    codeCollapsed: codeCollapsed
                 ))
             }
             titleLabel.stringValue = turns.count > 1 ? "多轮对话" : "回答结果"
@@ -1503,43 +1486,39 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                 let turnSnapshot = lastTurn
                 let turnCount = self.turns.count
                 let lastTurnDOMCount = self.lastRenderedTurnCount
-                self.renderQueue.async { [weak self] in
-                    guard let self, self.renderGeneration == expectedGen else { return }
-                    let escaped: String = autoreleasepool {
-                        let bodyHTML = MarkdownTemplateRenderer.renderBody(
-                            turnSnapshot.markdown,
-                            sources: turnSnapshot.sources,
-                            reasoningMarkdown: turnSnapshot.reasoningMarkdown,
-                            reasoningCollapsed: turnSnapshot.reasoningCollapsed,
-                            codeMarkdown: turnSnapshot.codeMarkdown,
-                            codeCollapsed: turnSnapshot.codeCollapsed
+
+                // Build JSON data on main thread (lightweight — no markdown parsing)
+                let srcHTML = MarkdownTemplateRenderer.renderSources(turnSnapshot.sources)
+                let statHTML = MarkdownTemplateRenderer.renderStatBadges(turnSnapshot.stats)
+                let json = MarkdownTemplateRenderer.bodyDataJSON(
+                    markdown: turnSnapshot.markdown,
+                    sourcesHTML: srcHTML,
+                    statsHTML: statHTML,
+                    reasoningMarkdown: turnSnapshot.reasoningMarkdown,
+                    reasoningCollapsed: turnSnapshot.reasoningCollapsed,
+                    codeMarkdown: turnSnapshot.codeMarkdown,
+                    codeCollapsed: turnSnapshot.codeCollapsed
+                )
+
+                if turnCount > lastTurnDOMCount {
+                    // New turn added - append to DOM
+                    let userBubble: String
+                    if !turnSnapshot.userMessage.isEmpty {
+                        let escapedUser = MarkdownTemplateRenderer.escapeForJSString(
+                            "<div class=\"user-bubble\">\(MarkdownTemplateRenderer.escapeHTML(turnSnapshot.userMessage))</div>"
                         )
-                        let withStats = MarkdownTemplateRenderer.renderStatBadges(turnSnapshot.stats) + bodyHTML
-                        return MarkdownTemplateRenderer.escapeForJSString(withStats)
+                        userBubble = "'\(escapedUser)'"
+                    } else {
+                        userBubble = "null"
                     }
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, self.renderGeneration == expectedGen else { return }
-                        if turnCount > lastTurnDOMCount {
-                            // New turn added - append to DOM
-                            let userBubble: String
-                            if !turnSnapshot.userMessage.isEmpty {
-                                let escapedUser = MarkdownTemplateRenderer.escapeForJSString(
-                                    "<div class=\"user-bubble\">\(MarkdownTemplateRenderer.escapeHTML(turnSnapshot.userMessage))</div>"
-                                )
-                                userBubble = "'\(escapedUser)'"
-                            } else {
-                                userBubble = "null"
-                            }
-                            self.webView.evaluateJavaScript("__appendTurn(\(userBubble),'\(escaped)')")
-                            self.lastRenderedTurnCount = turnCount
-                        } else {
-                            // Update existing last turn
-                            self.webView.evaluateJavaScript("__updateLastResponse('\(escaped)')")
-                        }
-                    }
+                    self.webView.evaluateJavaScript("__appendTurn(\(userBubble),\(json))")
+                    self.lastRenderedTurnCount = turnCount
+                } else {
+                    // Update existing last turn
+                    self.webView.evaluateJavaScript("__updateLastResponse(\(json))")
                 }
             } else {
-                // Capture snapshot on main thread
+                // Single-mode: pass raw markdown data to JS for rendering
                 let dm = self.currentDisplayMarkdown
                 let src = self.currentSources
                 let rm = self.currentReasoningMarkdown
@@ -1547,21 +1526,14 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                 let cm = self.currentCodeMarkdown
                 let cc = self.currentCodeCollapsed
 
-                self.renderQueue.async { [weak self] in
-                    guard let self, self.renderGeneration == expectedGen else { return }
-                    let escaped: String = autoreleasepool {
-                        let bodyHTML = MarkdownTemplateRenderer.renderBody(
-                            dm, sources: src,
-                            reasoningMarkdown: rm, reasoningCollapsed: rc,
-                            codeMarkdown: cm, codeCollapsed: cc
-                        )
-                        return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
-                    }
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, self.renderGeneration == expectedGen else { return }
-                        self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
-                    }
-                }
+                let srcHTML = MarkdownTemplateRenderer.renderSources(src)
+                let json = MarkdownTemplateRenderer.bodyDataJSON(
+                    markdown: dm,
+                    sourcesHTML: srcHTML,
+                    reasoningMarkdown: rm, reasoningCollapsed: rc,
+                    codeMarkdown: cm, codeCollapsed: cc
+                )
+                self.webView.evaluateJavaScript("__setContent(\(json))")
             }
         }
         pendingUpdateWorkItem = workItem
@@ -1855,13 +1827,334 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 // aligned with this renderer so the Electron fallback and native macOS result window
 // preserve the same assistant result semantics.
 enum MarkdownTemplateRenderer {
-    // Pre-compiled regex patterns to avoid expensive ICU compilation on every call
-    private static let citationRefRegex = try! NSRegularExpression(pattern: #"\[ref_(\d+)\]"#)
-    private static let inlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
-    private static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#)
-    private static let boldRegex = try! NSRegularExpression(pattern: #"\*\*([^*]+)\*\*"#)
-    private static let italicRegex = try! NSRegularExpression(pattern: #"\*([^*]+)\*"#)
+    // Maximum characters for reasoning/code sections before truncation
+    private static let maxSectionRenderLength = 80_000
 
+    // MARK: - JSON encoding helpers
+
+    /// Encode a Swift string as a valid JSON string value (with quotes).
+    private static func jsonString(_ s: String) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: s, options: [.fragmentsAllowed]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        // Fallback: manual escaping
+        var r = "\""
+        for ch in s {
+            switch ch {
+            case "\\": r += "\\\\"
+            case "\"": r += "\\\""
+            case "\n": r += "\\n"
+            case "\r": r += "\\r"
+            case "\t": r += "\\t"
+            default:   r.append(ch)
+            }
+        }
+        r += "\""
+        return r
+    }
+
+    /// Build a JSON object string from the given markdown data, ready for JS consumption.
+    static func bodyDataJSON(
+        markdown: String,
+        sourcesHTML: String = "",
+        statsHTML: String = "",
+        reasoningMarkdown: String = "",
+        reasoningCollapsed: Bool = false,
+        codeMarkdown: String = "",
+        codeCollapsed: Bool = true
+    ) -> String {
+        // Apply truncation to reasoning/code on Swift side
+        let rmd = truncateSection(reasoningMarkdown)
+        let cmd = truncateSection(codeMarkdown)
+
+        return """
+        {\
+        "md":\(jsonString(markdown)),\
+        "rmd":\(jsonString(rmd.text)),\
+        "rTrunc":\(rmd.truncated ? "true" : "false"),\
+        "rc":\(reasoningCollapsed ? "true" : "false"),\
+        "cmd":\(jsonString(cmd.text)),\
+        "cTrunc":\(cmd.truncated ? "true" : "false"),\
+        "cc":\(codeCollapsed ? "true" : "false"),\
+        "srcHTML":\(jsonString(sourcesHTML)),\
+        "statHTML":\(jsonString(statsHTML))\
+        }
+        """
+    }
+
+    private static func truncateSection(_ markdown: String) -> (text: String, truncated: Bool) {
+        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ("", false) }
+        if trimmed.count > maxSectionRenderLength {
+            let startIdx = trimmed.index(trimmed.endIndex, offsetBy: -maxSectionRenderLength)
+            return (String(trimmed[startIdx...]), true)
+        }
+        return (trimmed, false)
+    }
+
+    // MARK: - HTML page generation
+
+    /// The base CSS for the result page.
+    static let baseCSS = """
+    :root {
+      color-scheme: light;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --accent: #0284c7;
+      --quote-bg: rgba(186, 230, 253, 0.28);
+      --code-bg: #0f172a;
+      --inline-code-bg: rgba(148, 163, 184, 0.18);
+      --rule: rgba(148, 163, 184, 0.35);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      font-size: 15px;
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    body {
+      padding: 4px 2px 24px;
+      cursor: text;
+    }
+    .placeholder {
+      margin: 0.2em 0 0;
+      color: var(--muted);
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin: 1.1em 0 0.45em;
+      color: var(--ink);
+      line-height: 1.3;
+    }
+    h1 { font-size: 1.7rem; }
+    h2 { font-size: 1.35rem; }
+    h3 { font-size: 1.12rem; }
+    h4 { font-size: 1rem; }
+    h5 { font-size: 0.92rem; }
+    h6 { font-size: 0.86rem; }
+    p {
+      margin: 0.72em 0;
+    }
+    ul, ol {
+      margin: 0.8em 0;
+      padding-left: 1.45em;
+    }
+    li + li {
+      margin-top: 0.26em;
+    }
+    blockquote {
+      margin: 1em 0;
+      padding: 0.72em 0.9em;
+      border-left: 3px solid var(--accent);
+      background: var(--quote-bg);
+      border-radius: 12px;
+      color: var(--ink);
+    }
+    code {
+      padding: 0.14em 0.38em;
+      border-radius: 7px;
+      background: var(--inline-code-bg);
+      font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      margin: 0.95em 0;
+      padding: 1em 1.1em;
+      border-radius: 16px;
+      background: var(--code-bg);
+      color: #e2e8f0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 0.92em;
+    }
+    hr {
+      margin: 1.2em 0;
+      border: none;
+      border-top: 1px solid var(--rule);
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .citation {
+      margin-left: 0.14em;
+      font-size: 0.72em;
+      vertical-align: super;
+    }
+    .citation a {
+      padding: 0 0.18em;
+      border-radius: 999px;
+      background: rgba(2, 132, 199, 0.10);
+      color: var(--accent);
+    }
+    .reasoning {
+      margin: 0.25em 0 1em;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 16px;
+      background: rgba(248, 250, 252, 0.8);
+      overflow: hidden;
+    }
+    .reasoning summary {
+      padding: 0.72em 0.9em;
+      cursor: pointer;
+      list-style: none;
+      color: var(--accent);
+      font-size: 0.92rem;
+      font-weight: 600;
+      user-select: none;
+    }
+    .reasoning summary::-webkit-details-marker {
+      display: none;
+    }
+    .reasoning-body {
+      padding: 0 0.9em 0.9em;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.62;
+    }
+    .reasoning-body > :first-child {
+      margin-top: 0;
+    }
+    .truncated {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .sources {
+      margin-top: 1.4em;
+      padding-top: 1.1em;
+      border-top: 1px solid var(--rule);
+    }
+    table {
+      width: 100%;
+      margin: 1em 0;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.75);
+    }
+    th, td {
+      padding: 0.72em 0.82em;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: rgba(226, 232, 240, 0.45);
+      font-weight: 700;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    .sources h3 {
+      margin: 0 0 0.7em;
+      font-size: 0.95rem;
+    }
+    .sources ol {
+      margin: 0;
+      padding-left: 1.2em;
+    }
+    .sources li + li {
+      margin-top: 0.45em;
+    }
+    .source-url {
+      display: block;
+      margin-top: 0.14em;
+      color: var(--muted);
+      font-size: 0.86em;
+      word-break: break-all;
+    }
+    strong {
+      font-weight: 700;
+    }
+    em {
+      font-style: italic;
+    }
+    """
+
+    /// JavaScript helper functions that run inside WKWebView.
+    /// Uses bundled markdown-core (marked + sanitize + citations) for markdown→HTML conversion.
+    static let renderJS = """
+    \(_markedBundleSource)
+
+    function __renderSection(md, truncated, collapsed, title) {
+      if (!md || !md.trim()) return '';
+      var notice = truncated ? '<p class="truncated">\\u2026前面的内容已省略\\u2026</p>' : '';
+      var open = collapsed ? '' : ' open';
+      return '<details class="reasoning"' + open + '>' +
+        '<summary>' + title + '</summary>' +
+        '<div class="reasoning-body">' + notice + __md(md) + '</div></details>';
+    }
+
+    function __renderBodyFromData(d) {
+      var html = '';
+      html += __renderSection(d.rmd, d.rTrunc, d.rc, '思考过程');
+      html += __renderSection(d.cmd, d.cTrunc, d.cc, '代码执行');
+      if (d.md && d.md.trim()) {
+        html += __md(d.md);
+      } else if (!html) {
+        html = '<p class="placeholder">正在生成...</p>';
+      }
+      if (d.statHTML) html = d.statHTML + html;
+      if (d.srcHTML) html += d.srcHTML;
+      return html;
+    }
+
+    // Called for single-mode (non-conversation) content updates
+    function __setContent(d) {
+      document.body.innerHTML = __renderBodyFromData(d);
+    }
+
+    // Called to update the last assistant response in conversation mode
+    function __updateLastResponse(d) {
+      var el = document.querySelector('.assistant-response:last-child');
+      if (el) { el.innerHTML = __renderBodyFromData(d); }
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    // Called to append a new turn in conversation mode
+    function __appendTurn(userHtml, d) {
+      var c = document.querySelector('.conversation');
+      if (!c) return;
+      c.insertAdjacentHTML('beforeend', '<hr class="turn-divider">');
+      if (userHtml) { c.insertAdjacentHTML('beforeend', userHtml); }
+      c.insertAdjacentHTML('beforeend', '<div class="assistant-response">' + __renderBodyFromData(d) + '</div>');
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+    """
+
+    /// Generate the full HTML page (used for initial load).
+    static func renderPage(
+        bodyHTML: String = "",
+        extraCSS: String = "",
+        includeConversationHelpers: Bool = false
+    ) -> String {
+        return """
+        <!doctype html>
+        <html lang="zh-CN">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>\(baseCSS)\(extraCSS.isEmpty ? "" : "\n\(extraCSS)")</style>
+          <script>\(renderJS)</script>
+        </head>
+        <body>\(bodyHTML)</body>
+        </html>
+        """
+    }
+
+    /// Generate a single-mode page with initial data rendered by JS.
     static func render(
         _ markdown: String,
         sources: [[String: Any]] = [],
@@ -1870,223 +2163,20 @@ enum MarkdownTemplateRenderer {
         codeMarkdown: String = "",
         codeCollapsed: Bool = true
     ) -> String {
-        let body = renderBody(
-            markdown,
-            sources: sources,
+        let sourcesHTML = renderSources(sources)
+        let json = bodyDataJSON(
+            markdown: markdown,
+            sourcesHTML: sourcesHTML,
             reasoningMarkdown: reasoningMarkdown,
             reasoningCollapsed: reasoningCollapsed,
             codeMarkdown: codeMarkdown,
             codeCollapsed: codeCollapsed
         )
-        return """
-        <!doctype html>
-        <html lang="zh-CN">
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            :root {
-              color-scheme: light;
-              --ink: #0f172a;
-              --muted: #64748b;
-              --accent: #0284c7;
-              --quote-bg: rgba(186, 230, 253, 0.28);
-              --code-bg: #0f172a;
-              --inline-code-bg: rgba(148, 163, 184, 0.18);
-              --rule: rgba(148, 163, 184, 0.35);
-            }
-            * { box-sizing: border-box; }
-            html, body {
-              margin: 0;
-              padding: 0;
-              background: transparent;
-              color: var(--ink);
-              font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-              font-size: 15px;
-              line-height: 1.72;
-              -webkit-font-smoothing: antialiased;
-              -webkit-user-select: text;
-              user-select: text;
-            }
-            body {
-              padding: 4px 2px 24px;
-              cursor: text;
-            }
-            .placeholder {
-              margin: 0.2em 0 0;
-              color: var(--muted);
-            }
-            h1, h2, h3, h4 {
-              margin: 1.1em 0 0.45em;
-              color: var(--ink);
-              line-height: 1.3;
-            }
-            h1 { font-size: 1.7rem; }
-            h2 { font-size: 1.35rem; }
-            h3 { font-size: 1.12rem; }
-            p {
-              margin: 0.72em 0;
-            }
-            ul, ol {
-              margin: 0.8em 0;
-              padding-left: 1.45em;
-            }
-            li + li {
-              margin-top: 0.26em;
-            }
-            blockquote {
-              margin: 1em 0;
-              padding: 0.72em 0.9em;
-              border-left: 3px solid var(--accent);
-              background: var(--quote-bg);
-              border-radius: 12px;
-              color: var(--ink);
-            }
-            code {
-              padding: 0.14em 0.38em;
-              border-radius: 7px;
-              background: var(--inline-code-bg);
-              font-family: "SF Mono", ui-monospace, Menlo, monospace;
-              font-size: 0.92em;
-            }
-            pre {
-              margin: 0.95em 0;
-              padding: 1em 1.1em;
-              border-radius: 16px;
-              background: var(--code-bg);
-              color: #e2e8f0;
-              overflow: auto;
-            }
-            pre code {
-              padding: 0;
-              background: transparent;
-              color: inherit;
-              font-size: 0.92em;
-            }
-            hr {
-              margin: 1.2em 0;
-              border: none;
-              border-top: 1px solid var(--rule);
-            }
-            a {
-              color: var(--accent);
-              text-decoration: none;
-            }
-            .citation {
-              margin-left: 0.14em;
-              font-size: 0.72em;
-              vertical-align: super;
-            }
-            .citation a {
-              padding: 0 0.18em;
-              border-radius: 999px;
-              background: rgba(2, 132, 199, 0.10);
-              color: var(--accent);
-            }
-            .reasoning {
-              margin: 0.25em 0 1em;
-              border: 1px solid rgba(148, 163, 184, 0.28);
-              border-radius: 16px;
-              background: rgba(248, 250, 252, 0.8);
-              overflow: hidden;
-            }
-            .reasoning summary {
-              padding: 0.72em 0.9em;
-              cursor: pointer;
-              list-style: none;
-              color: var(--accent);
-              font-size: 0.92rem;
-              font-weight: 600;
-              user-select: none;
-            }
-            .reasoning summary::-webkit-details-marker {
-              display: none;
-            }
-            .reasoning-body {
-              padding: 0 0.9em 0.9em;
-              color: var(--muted);
-              font-size: 13px;
-              line-height: 1.62;
-            }
-            .reasoning-body > :first-child {
-              margin-top: 0;
-            }
-            .sources {
-              margin-top: 1.4em;
-              padding-top: 1.1em;
-              border-top: 1px solid var(--rule);
-            }
-            table {
-              width: 100%;
-              margin: 1em 0;
-              border-collapse: collapse;
-              overflow: hidden;
-              border: 1px solid rgba(148, 163, 184, 0.25);
-              border-radius: 14px;
-              background: rgba(255, 255, 255, 0.75);
-            }
-            th, td {
-              padding: 0.72em 0.82em;
-              border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-              text-align: left;
-              vertical-align: top;
-            }
-            th {
-              background: rgba(226, 232, 240, 0.45);
-              font-weight: 700;
-            }
-            tr:last-child td {
-              border-bottom: none;
-            }
-            .sources h3 {
-              margin: 0 0 0.7em;
-              font-size: 0.95rem;
-            }
-            .sources ol {
-              margin: 0;
-              padding-left: 1.2em;
-            }
-            .sources li + li {
-              margin-top: 0.45em;
-            }
-            .source-url {
-              display: block;
-              margin-top: 0.14em;
-              color: var(--muted);
-              font-size: 0.86em;
-              word-break: break-all;
-            }
-            strong {
-              font-weight: 700;
-            }
-            em {
-              font-style: italic;
-            }
-          </style>
-        </head>
-        <body>\(body)</body>
-        </html>
-        """
+        let initScript = "<script>__setContent(\(json));</script>"
+        return renderPage(bodyHTML: initScript)
     }
 
-    static func renderBody(
-        _ markdown: String,
-        sources: [[String: Any]] = [],
-        reasoningMarkdown: String = "",
-        reasoningCollapsed: Bool = false,
-        codeMarkdown: String = "",
-        codeCollapsed: Bool = true
-    ) -> String {
-        let trimmedMarkdown = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reasoningSection = renderReasoning(reasoningMarkdown, collapsed: reasoningCollapsed)
-        let codeSection = renderCodeSection(codeMarkdown, collapsed: codeCollapsed)
-        let mainContent = trimmedMarkdown.isEmpty
-            ? (reasoningSection.isEmpty && codeSection.isEmpty ? "<p class=\"placeholder\">正在生成...</p>" : "")
-            : renderBlocks(trimmedMarkdown)
-        return [reasoningSection, codeSection, mainContent, renderSources(sources)]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
-    }
+    // MARK: - Kept utilities (no markdown parsing)
 
     static func escapeForJSString(_ string: String) -> String {
         var result = ""
@@ -2103,283 +2193,6 @@ enum MarkdownTemplateRenderer {
             }
         }
         return result
-    }
-
-    private static let maxSectionRenderLength = 80_000
-
-    private static func renderReasoning(_ markdown: String, collapsed: Bool) -> String {
-        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        let displayText: String
-        let truncatedNotice: String
-        if trimmed.count > maxSectionRenderLength {
-            let startIdx = trimmed.index(trimmed.endIndex, offsetBy: -maxSectionRenderLength)
-            displayText = String(trimmed[startIdx...])
-            truncatedNotice = "<p class=\"truncated\">\u{2026}前面的内容已省略\u{2026}</p>\n"
-        } else {
-            displayText = trimmed
-            truncatedNotice = ""
-        }
-
-        let openAttribute = collapsed ? "" : " open"
-        return """
-        <details class="reasoning"\(openAttribute)>
-          <summary>思考过程</summary>
-          <div class="reasoning-body">\(truncatedNotice)\(renderBlocks(displayText))</div>
-        </details>
-        """
-    }
-
-    private static func renderCodeSection(_ markdown: String, collapsed: Bool) -> String {
-        let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        let displayText: String
-        let truncatedNotice: String
-        if trimmed.count > maxSectionRenderLength {
-            let startIdx = trimmed.index(trimmed.endIndex, offsetBy: -maxSectionRenderLength)
-            displayText = String(trimmed[startIdx...])
-            truncatedNotice = "<p class=\"truncated\">\u{2026}前面的内容已省略\u{2026}</p>\n"
-        } else {
-            displayText = trimmed
-            truncatedNotice = ""
-        }
-
-        let openAttribute = collapsed ? "" : " open"
-        return """
-        <details class="reasoning"\(openAttribute)>
-          <summary>代码执行</summary>
-          <div class="reasoning-body">\(truncatedNotice)\(renderBlocks(displayText))</div>
-        </details>
-        """
-    }
-
-    private static func renderBlocks(_ markdown: String) -> String {
-        let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.components(separatedBy: "\n")
-        var index = 0
-        var html: [String] = []
-
-        while index < lines.count {
-            let rawLine = lines[index]
-            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.isEmpty {
-                index += 1
-                continue
-            }
-
-            if trimmed.hasPrefix("```") {
-                index += 1
-                var codeLines: [String] = []
-                while index < lines.count, !lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                    codeLines.append(lines[index])
-                    index += 1
-                }
-                html.append("<pre><code>\(escapeHTML(codeLines.joined(separator: "\n")))</code></pre>")
-                index += 1
-                continue
-            }
-
-            if trimmed == "---" || trimmed == "***" {
-                html.append("<hr>")
-                index += 1
-                continue
-            }
-
-            if let heading = renderHeading(trimmed) {
-                html.append(heading)
-                index += 1
-                continue
-            }
-
-            if isTableHeader(lines, at: index) {
-                let tableHTML = renderTable(lines: lines, startIndex: &index)
-                if !tableHTML.isEmpty {
-                    html.append(tableHTML)
-                    continue
-                }
-            }
-
-            if trimmed.hasPrefix(">") {
-                var quoteLines: [String] = []
-                while index < lines.count {
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard candidate.hasPrefix(">") else { break }
-                    let stripped = candidate.dropFirst().trimmingCharacters(in: .whitespaces)
-                    quoteLines.append(renderInline(stripped))
-                    index += 1
-                }
-                html.append("<blockquote>\(quoteLines.joined(separator: "<br>"))</blockquote>")
-                continue
-            }
-
-            if isUnorderedList(trimmed) {
-                var items: [String] = []
-                while index < lines.count {
-                    while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-                        index += 1
-                    }
-                    guard index < lines.count else { break }
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard isUnorderedList(candidate) else { break }
-                    items.append("<li>\(renderInline(String(candidate.dropFirst(2))))</li>")
-                    index += 1
-                }
-                html.append("<ul>\(items.joined())</ul>")
-                continue
-            }
-
-            if let firstItem = orderedListItem(trimmed) {
-                var items: [String] = []
-                let startNumber: Int? = firstItem.number
-                items.append("<li>\(renderInline(firstItem.text))</li>")
-                index += 1
-                while index < lines.count {
-                    while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-                        index += 1
-                    }
-                    guard index < lines.count else { break }
-                    let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                    guard let item = orderedListItem(candidate) else { break }
-                    items.append("<li>\(renderInline(item.text))</li>")
-                    index += 1
-                }
-                let startAttribute = startNumber != nil && startNumber != 1 ? " start=\"\(startNumber!)\"" : ""
-                html.append("<ol\(startAttribute)>\(items.joined())</ol>")
-                continue
-            }
-
-            var paragraphLines: [String] = []
-            while index < lines.count {
-                let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-                if candidate.isEmpty || candidate.hasPrefix("#") || candidate.hasPrefix(">") || candidate.hasPrefix("```") || isUnorderedList(candidate) || (candidate.first?.isNumber == true && isOrderedList(candidate)) || candidate == "---" || candidate == "***" {
-                    break
-                }
-                paragraphLines.append(renderInline(candidate))
-                index += 1
-            }
-            html.append("<p>\(paragraphLines.joined(separator: "<br>"))</p>")
-        }
-
-        return html.joined(separator: "\n")
-    }
-
-    private static func renderHeading(_ line: String) -> String? {
-        guard line.first == "#" else { return nil }
-        let hashes = line.prefix { $0 == "#" }
-        guard hashes.count <= 4 else { return nil }
-        let content = line.dropFirst(hashes.count).trimmingCharacters(in: .whitespaces)
-        guard !content.isEmpty else { return nil }
-        return "<h\(hashes.count)>\(renderInline(content))</h\(hashes.count)>"
-    }
-
-    private static func isTableHeader(_ lines: [String], at index: Int) -> Bool {
-        guard index + 1 < lines.count else { return false }
-        let header = lines[index].trimmingCharacters(in: .whitespaces)
-        let separator = lines[index + 1].trimmingCharacters(in: .whitespaces)
-        guard header.contains("|"), separator.contains("|") else { return false }
-        return isTableSeparator(separator)
-    }
-
-    private static func isTableSeparator(_ line: String) -> Bool {
-        let cells = splitTableRow(line)
-        guard !cells.isEmpty else { return false }
-        return cells.allSatisfy { cell in
-            let trimmed = cell.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { return false }
-            return trimmed.allSatisfy { $0 == "-" || $0 == ":" }
-        }
-    }
-
-    private static func splitTableRow(_ line: String) -> [String] {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        let stripped = trimmed
-            .trimmingCharacters(in: CharacterSet(charactersIn: "|"))
-        guard !stripped.isEmpty else { return [] }
-        return stripped.split(separator: "|", omittingEmptySubsequences: false).map {
-            String($0).trimmingCharacters(in: .whitespaces)
-        }
-    }
-
-    private static func renderTable(lines: [String], startIndex index: inout Int) -> String {
-        let headerCells = splitTableRow(lines[index])
-        guard !headerCells.isEmpty else { return "" }
-        index += 2
-
-        var bodyRows: [[String]] = []
-        while index < lines.count {
-            let candidate = lines[index].trimmingCharacters(in: .whitespaces)
-            if candidate.isEmpty {
-                index += 1
-                continue
-            }
-            guard candidate.contains("|"), !isTableSeparator(candidate) else { break }
-            let row = splitTableRow(candidate)
-            guard !row.isEmpty else { break }
-            bodyRows.append(row)
-            index += 1
-        }
-
-        let headerHTML = headerCells.map { "<th>\(renderInline($0))</th>" }.joined()
-        let bodyHTML = bodyRows.map { row in
-            let cells = row.map { "<td>\(renderInline($0))</td>" }.joined()
-            return "<tr>\(cells)</tr>"
-        }.joined()
-
-        return """
-        <table>
-          <thead><tr>\(headerHTML)</tr></thead>
-          <tbody>\(bodyHTML)</tbody>
-        </table>
-        """
-    }
-
-    private static func isUnorderedList(_ line: String) -> Bool {
-        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
-    }
-
-    private static func isOrderedList(_ line: String) -> Bool {
-        orderedListItem(line) != nil
-    }
-
-    private static func orderedListItem(_ line: String) -> (number: Int, text: String)? {
-        // Fast path: first char must be a digit
-        guard let firstChar = line.first, firstChar.isWholeNumber else { return nil }
-        // Find the dot after digits
-        guard let dotIndex = line.firstIndex(of: ".") else { return nil }
-        let prefix = line[line.startIndex..<dotIndex]
-        // All characters before dot must be digits
-        guard !prefix.isEmpty, prefix.allSatisfy({ $0.isWholeNumber }) else { return nil }
-        guard let number = Int(prefix) else { return nil }
-        // Must have at least one space after dot
-        let afterDot = line.index(after: dotIndex)
-        guard afterDot < line.endIndex, line[afterDot] == " " else { return nil }
-        // Extract text after "N. "
-        let textStart = line.index(after: afterDot)
-        guard textStart < line.endIndex else { return nil }
-        return (number: number, text: String(line[textStart...]))
-    }
-
-    private static func renderInline<S: StringProtocol>(_ source: S) -> String {
-        var html = escapeHTML(String(source))
-        html = replaceRegex(citationRefRegex, in: html) { groups in
-            "<sup class=\"citation\"><a href=\"#ref-\(groups[1])\">\(groups[1])</a></sup>"
-        }
-        html = replaceRegex(inlineCodeRegex, in: html) { groups in
-            "<code>\(groups[1])</code>"
-        }
-        html = replaceRegex(linkRegex, in: html) { groups in
-            "<a href=\"\(groups[2])\">\(groups[1])</a>"
-        }
-        html = replaceRegex(boldRegex, in: html) { groups in
-            "<strong>\(groups[1])</strong>"
-        }
-        html = replaceRegex(italicRegex, in: html) { groups in
-            "<em>\(groups[1])</em>"
-        }
-        return html
     }
 
     static func escapeHTML(_ string: String) -> String {
@@ -2399,43 +2212,7 @@ enum MarkdownTemplateRenderer {
         return result
     }
 
-    private static func replaceRegex(
-        _ regex: NSRegularExpression,
-        in source: String,
-        transform: ([String]) -> String
-    ) -> String {
-        let nsRange = NSRange(source.startIndex..<source.endIndex, in: source)
-        let matches = regex.matches(in: source, options: [], range: nsRange)
-        guard !matches.isEmpty else { return source }
-
-        var parts: [String] = []
-        parts.reserveCapacity(matches.count * 2 + 1)
-        var lastEnd = source.startIndex
-
-        for match in matches {
-            guard let fullRange = Range(match.range(at: 0), in: source) else { continue }
-            if lastEnd < fullRange.lowerBound {
-                parts.append(String(source[lastEnd..<fullRange.lowerBound]))
-            }
-            var groups: [String] = []
-            groups.reserveCapacity(match.numberOfRanges)
-            for i in 0..<match.numberOfRanges {
-                if let r = Range(match.range(at: i), in: source) {
-                    groups.append(String(source[r]))
-                } else {
-                    groups.append("")
-                }
-            }
-            parts.append(transform(groups))
-            lastEnd = fullRange.upperBound
-        }
-        if lastEnd < source.endIndex {
-            parts.append(String(source[lastEnd...]))
-        }
-        return parts.joined()
-    }
-
-    private static func renderSources(_ sources: [[String: Any]]) -> String {
+    static func renderSources(_ sources: [[String: Any]]) -> String {
         guard !sources.isEmpty else { return "" }
         let items = sources.compactMap { item -> String? in
             guard let index = item["index"] as? Int,
@@ -2555,47 +2332,51 @@ enum MarkdownTemplateRenderer {
     .stat-value { white-space: nowrap; }
     """
 
+    /// Build initial conversation body HTML.
+    /// Previous turns are rendered via JS in the initial page script.
     static func renderConversation(
-        turns: [AssistantResultPanelController.ConversationTurn],
-        currentMarkdown: String = "",
-        currentSources: [[String: Any]] = [],
-        currentReasoningMarkdown: String = "",
-        currentReasoningCollapsed: Bool = false,
-        currentCodeMarkdown: String = "",
-        currentCodeCollapsed: Bool = true
+        turns: [AssistantResultPanelController.ConversationTurn]
     ) -> String {
-        var html = "<div class=\"conversation\">"
-        for (i, turn) in turns.enumerated() {
-            if i > 0 {
-                html += "<hr class=\"turn-divider\">"
-            }
-
-            // User bubble
-            if !turn.userMessage.isEmpty {
-                let escapedUser = escapeHTML(turn.userMessage)
-                html += "<div class=\"user-bubble\">\(escapedUser)</div>"
-            }
-
-            // Assistant response
-            html += "<div class=\"assistant-response\">"
-            // Per-turn inline stats
-            html += renderStatBadges(turn.stats)
-            if let cached = turn.cachedHTML {
-                html += cached
-            } else {
-                html += renderBody(
-                    turn.markdown,
-                    sources: turn.sources,
-                    reasoningMarkdown: turn.reasoningMarkdown,
-                    reasoningCollapsed: turn.reasoningCollapsed,
-                    codeMarkdown: turn.codeMarkdown,
-                    codeCollapsed: turn.codeCollapsed
-                )
-            }
-            html += "</div>"
+        // Build a JS array of turn data for initial rendering
+        var turnEntries: [String] = []
+        for turn in turns {
+            let srcHTML = renderSources(turn.sources)
+            let statHTML = renderStatBadges(turn.stats)
+            let json = bodyDataJSON(
+                markdown: turn.markdown,
+                sourcesHTML: srcHTML,
+                statsHTML: statHTML,
+                reasoningMarkdown: turn.reasoningMarkdown,
+                reasoningCollapsed: turn.reasoningCollapsed,
+                codeMarkdown: turn.codeMarkdown,
+                codeCollapsed: turn.codeCollapsed
+            )
+            let userJSON = jsonString(turn.userMessage)
+            turnEntries.append("{\"u\":\(userJSON),\"d\":\(json)}")
         }
-        html += "</div>"
-        return html
+
+        // Generate a script that builds the conversation DOM via JS
+        let turnsArray = "[\(turnEntries.joined(separator: ","))]"
+        return """
+        <div class="conversation"></div>
+        <script>
+        (function(){
+          var c = document.querySelector('.conversation');
+          var turns = \(turnsArray);
+          for (var i = 0; i < turns.length; i++) {
+            var t = turns[i];
+            if (i > 0) c.insertAdjacentHTML('beforeend', '<hr class="turn-divider">');
+            if (t.u) {
+              var ue = document.createElement('div');
+              ue.className = 'user-bubble';
+              ue.textContent = t.u;
+              c.appendChild(ue);
+            }
+            c.insertAdjacentHTML('beforeend', '<div class="assistant-response">' + __renderBodyFromData(t.d) + '</div>');
+          }
+        })();
+        </script>
+        """
     }
 
     static func renderStatBadges(_ stats: [[String: String]]) -> String {
@@ -2632,37 +2413,7 @@ enum MarkdownTemplateRenderer {
         turns: [AssistantResultPanelController.ConversationTurn]
     ) -> String {
         let body = renderConversation(turns: turns)
-        // Get the base render to extract the full CSS, then add conversation CSS
-        let baseHTML = render("")
-        let cssEnd = "</style>"
-        if let range = baseHTML.range(of: cssEnd) {
-            var fullHTML = baseHTML
-            fullHTML.insert(contentsOf: "\n\(conversationCSS)", at: range.lowerBound)
-            // Replace the body content and add incremental-update helper script
-            if let bodyStart = fullHTML.range(of: "<body>"),
-               let bodyEnd = fullHTML.range(of: "</body>") {
-                let script = """
-                <script>
-                function __updateLastResponse(html){
-                  var el=document.querySelector('.assistant-response:last-child');
-                  if(el){el.innerHTML=html;}
-                  window.scrollTo(0,document.body.scrollHeight);
-                }
-                function __appendTurn(userHtml,respHtml){
-                  var c=document.querySelector('.conversation');
-                  if(!c)return;
-                  c.insertAdjacentHTML('beforeend','<hr class="turn-divider">');
-                  if(userHtml){c.insertAdjacentHTML('beforeend',userHtml);}
-                  c.insertAdjacentHTML('beforeend','<div class="assistant-response">'+respHtml+'</div>');
-                  window.scrollTo(0,document.body.scrollHeight);
-                }
-                </script>
-                """
-                fullHTML.replaceSubrange(bodyStart.upperBound..<bodyEnd.lowerBound, with: body + script)
-            }
-            return fullHTML
-        }
-        return render(body)
+        return renderPage(bodyHTML: body, extraCSS: conversationCSS)
     }
 }
 

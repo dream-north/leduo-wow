@@ -7,41 +7,41 @@
   {
     "name": "heading inline emphasis link and citation",
     "markdown": "# 标题\n\n支持 **粗体**、*斜体*、`代码`、[链接](https://example.com) 和 [ref_2]",
-    "html": "<h1>标题</h1><p>支持 <strong>粗体</strong>、<em>斜体</em>、<code>代码</code>、<a href=\"https://example.com\" target=\"_blank\" rel=\"noreferrer\">链接</a> 和 <sup class=\"citation\"><a href=\"#ref-2\">2</a></sup></p>"
+    "html": "<h1>标题</h1>\n<p>支持 <strong>粗体</strong>、<em>斜体</em>、<code>代码</code>、<a href=\"https://example.com\" target=\"_blank\" rel=\"noreferrer\">链接</a> 和 <sup class=\"citation\"><a href=\"#ref-2\">2</a></sup></p>\n"
   },
   {
     "name": "unordered list",
     "markdown": "- 第一项\n- 第二项\n- 第三项",
-    "html": "<ul><li>第一项</li><li>第二项</li><li>第三项</li></ul>"
+    "html": "<ul>\n<li>第一项</li>\n<li>第二项</li>\n<li>第三项</li>\n</ul>\n"
   },
   {
     "name": "ordered list keeps starting number",
     "markdown": "3. 第三步\n4. 第四步",
-    "html": "<ol start=\"3\"><li>第三步</li><li>第四步</li></ol>"
+    "html": "<ol start=\"3\">\n<li>第三步</li>\n<li>第四步</li>\n</ol>\n"
   },
   {
     "name": "blockquote joins lines with breaks",
     "markdown": "> 第一行\n> 第二行",
-    "html": "<blockquote>第一行<br>第二行</blockquote>"
+    "html": "<blockquote>\n<p>第一行<br>第二行</p>\n</blockquote>\n"
   },
   {
     "name": "code fence escapes html characters",
     "markdown": "```ts\nconst value = 1 < 2\n```",
-    "html": "<pre><code>const value = 1 &lt; 2</code></pre>"
+    "html": "<pre><code class=\"language-ts\">const value = 1 &lt; 2\n</code></pre>\n"
   },
   {
     "name": "table rendering",
     "markdown": "| 列 1 | 列 2 |\n| --- | --- |\n| A | B |\n| C | D |",
-    "html": "<table><thead><tr><th>列 1</th><th>列 2</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>"
+    "html": "<table>\n<thead>\n<tr>\n<th>列 1</th>\n<th>列 2</th>\n</tr>\n</thead>\n<tbody><tr>\n<td>A</td>\n<td>B</td>\n</tr>\n<tr>\n<td>C</td>\n<td>D</td>\n</tr>\n</tbody></table>\n"
   },
   {
     "name": "paragraph line breaks stay inside one paragraph",
     "markdown": "第一行\n第二行",
-    "html": "<p>第一行<br>第二行</p>"
+    "html": "<p>第一行<br>第二行</p>\n"
   },
   {
     "name": "thematic break",
     "markdown": "---",
-    "html": "<hr>"
+    "html": "<hr>\n"
   }
 ]

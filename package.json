@@ -21,6 +21,7 @@
     "@jitsi/robotjs": "^0.6.21",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.3",
+    "marked": "^17.0.5",
     "openai": "^4.77.0",
     "ws": "^8.18.0"
   },
