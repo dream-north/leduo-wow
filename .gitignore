@@ -18,4 +18,6 @@ config.json
 history.json
 .claude/
 src/native-keyboard-listener/SwiftKeyboardListener/build/
+src/native-keyboard-listener/SwiftKeyboardListener/Sources/MarkedEmbed.swift
+src/native-keyboard-listener/SwiftKeyboardListener/Sources/markdown-bundle.js
 src/native-keyboard-listener/WinKeyServer/build/
