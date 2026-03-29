@@ -12,7 +12,9 @@ import type {
   VocabularyEntry,
   SharedVocabSyncSource,
   VocabMergeItem,
-  VocabMergePreview
+  VocabMergePreview,
+  ScreenDocResultPayload,
+  ScreenDocStatusPayload
 } from '../../../shared/types'
 import {
   BUILTIN_PRESETS,
@@ -61,6 +63,13 @@ declare global {
       installUpdate: () => Promise<void>
       getUpdateStatus: () => Promise<UpdateStatusPayload>
       onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => () => void
+      startScreenDoc: () => Promise<{ ok: boolean; error?: string }>
+      getScreenDocStatus: () => Promise<ScreenDocStatusPayload>
+      stopScreenDoc: () => Promise<ScreenDocResultPayload | null>
+      cancelScreenDoc: () => Promise<boolean>
+      sendScreenDocAudioChunk: (chunk: ArrayBuffer) => void
+      getLatestScreenDocResult: () => Promise<ScreenDocResultPayload | null>
+      onScreenDocStatus: (callback: (payload: ScreenDocStatusPayload) => void) => () => void
       // Vocabulary
       getPersonalVocabulary: () => Promise<VocabularyEntry[]>
       getSharedVocabulary: () => Promise<VocabularyEntry[]>

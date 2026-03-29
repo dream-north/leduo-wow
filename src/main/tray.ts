@@ -1,17 +1,25 @@
 import { Tray, Menu, nativeImage, app } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 import { join } from 'path'
 import { PipelineStatus } from '../shared/types'
+import type { ScreenDocStatus } from '../shared/types'
 
 let tray: Tray | null = null
 let trayMenu: Menu | null = null
 let onShowSettings: (() => void) | null = null
 let onCheckForUpdate: (() => void) | null = null
 let getStatus: (() => PipelineStatus) | null = null
+let getScreenDocStatus: (() => ScreenDocStatus) | null = null
+let onStopScreenDoc: (() => void) | null = null
+let onCancelScreenDoc: (() => void) | null = null
 
 export interface TrayCallbacks {
   showSettings: () => void
   checkForUpdate: () => void
   getStatus: () => PipelineStatus
+  getScreenDocStatus: () => ScreenDocStatus
+  stopScreenDoc: () => void
+  cancelScreenDoc: () => void
 }
 
 export function createTray(callbacks: TrayCallbacks): Tray | null {
@@ -23,6 +31,9 @@ export function createTray(callbacks: TrayCallbacks): Tray | null {
   onShowSettings = callbacks.showSettings
   onCheckForUpdate = callbacks.checkForUpdate
   getStatus = callbacks.getStatus
+  getScreenDocStatus = callbacks.getScreenDocStatus
+  onStopScreenDoc = callbacks.stopScreenDoc
+  onCancelScreenDoc = callbacks.cancelScreenDoc
 
   // Load Border Collie icon — use @2x for crisp retina display
   const iconPath = app.isPackaged
@@ -84,13 +95,52 @@ export function updateTrayMenu(status?: PipelineStatus): void {
   }
 
   const currentStatus = status || getStatus?.() || PipelineStatus.IDLE
+  const currentScreenDocStatus = getScreenDocStatus?.() ?? 'idle'
+  const isScreenDocActive = currentScreenDocStatus !== 'idle'
+
+  const screenDocLabels: Record<ScreenDocStatus, string> = {
+    idle: '就绪',
+    recording: '录屏整理中...',
+    finalizing: '正在整理录制内容...',
+    uploading: '正在上传录屏...',
+    analyzing: '正在分析操作过程...',
+    ready: '录屏整理已完成',
+    error: '录屏整理失败'
+  }
+
+  const screenDocActions: MenuItemConstructorOptions[] = []
+  if (isScreenDocActive) {
+    if (currentScreenDocStatus === 'recording') {
+      screenDocActions.push({
+        label: '停止录屏整理',
+        click: () => onStopScreenDoc?.()
+      })
+    }
+
+    if (
+      currentScreenDocStatus === 'recording' ||
+      currentScreenDocStatus === 'finalizing' ||
+      currentScreenDocStatus === 'uploading' ||
+      currentScreenDocStatus === 'analyzing'
+    ) {
+      screenDocActions.push({
+        label: '取消本次录屏',
+        click: () => onCancelScreenDoc?.()
+      })
+    }
+
+    screenDocActions.push({ type: 'separator' })
+  }
 
   trayMenu = Menu.buildFromTemplate([
     {
-      label: `状态: ${statusLabels[currentStatus]}`,
+      label: isScreenDocActive
+        ? `状态: ${screenDocLabels[currentScreenDocStatus]}`
+        : `状态: ${statusLabels[currentStatus]}`,
       enabled: false
     },
     { type: 'separator' },
+    ...screenDocActions,
     {
       label: '检查更新...',
       click: () => onCheckForUpdate?.()

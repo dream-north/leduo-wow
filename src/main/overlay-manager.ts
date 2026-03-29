@@ -75,6 +75,9 @@ export class OverlayManager implements OverlayBackend {
 
   hideResult(): void {
     this.activeBackend.hideResult()
+    if (this._activeBackend !== this.fallbackBackend) {
+      this.fallbackBackend.hideResult()
+    }
   }
 
   dismissAll(): void {

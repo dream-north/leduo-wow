@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { createTray } from './tray'
+import { createTray, updateTrayMenu } from './tray'
 import { registerIpcHandlers } from './ipc-handlers'
 import { initConfigStore, getConfig } from './config-store'
 import { initVocabularyStore } from './vocabulary-store'
@@ -15,6 +15,8 @@ import type { ConfigStore } from './config-store'
 import { checkPermissions } from './permissions'
 import { keyboardListener } from '../native-keyboard-listener'
 import { initAutoUpdater, checkForUpdatesManual } from './updater'
+import { NativeScreenRecorderClient } from './native-screen-recorder'
+import { ScreenDocService } from './screen-doc-service'
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -23,6 +25,8 @@ let overlayWindow: BrowserWindow | null = null
 let assistantResultWindow: BrowserWindow | null = null
 let overlayManager: OverlayManager | null = null
 let pipeline: Pipeline | null = null
+let screenDocService: ScreenDocService | null = null
+let nativeScreenRecorder: NativeScreenRecorderClient | null = null
 let configStore: ConfigStore | null = null
 let shortcutService: ShortcutService | null = null
 let isQuitting = false
@@ -299,6 +303,19 @@ if (!gotSingleInstanceLock) {
   })
 
   // Initialize pipeline
+  nativeScreenRecorder = new NativeScreenRecorderClient()
+  screenDocService = new ScreenDocService({
+    overlay: overlayManager,
+    configStore,
+    screenRecorder: nativeScreenRecorder,
+    getAssistantResultWindow: () => assistantResultWindow,
+    setAssistantResultWindow: (window) => {
+      if (window && window !== assistantResultWindow) {
+        attachWindowDebugLogging(window, 'assistant-result')
+      }
+      assistantResultWindow = window
+    }
+  })
   pipeline = new Pipeline(overlayManager, configStore, vocabularyStore)
   keyboardListener.onOverlayResultClosed((position, size) => {
     pipeline?.handleAssistantResultWindowClosed(position, size)
@@ -321,13 +338,21 @@ if (!gotSingleInstanceLock) {
   createTray({
     showSettings: () => showSettingsWindow(),
     checkForUpdate: () => checkForUpdatesManual(),
-    getStatus: () => pipeline?.getStatus() || PipelineStatus.IDLE
+    getStatus: () => pipeline?.getStatus() || PipelineStatus.IDLE,
+    getScreenDocStatus: () => screenDocService?.getStatus() || 'idle',
+    stopScreenDoc: () => void screenDocService?.stop(),
+    cancelScreenDoc: () => void screenDocService?.cancel()
+  })
+
+  screenDocService.on('status', () => {
+    updateTrayMenu()
   })
 
   // Register IPC handlers
   registerIpcHandlers(
     configStore,
     pipeline,
+    screenDocService,
     shortcutService,
     overlayWindow,
     () => assistantResultWindow,
@@ -365,6 +390,8 @@ app.on('before-quit', () => {
 
 app.on('will-quit', () => {
   overlayManager?.destroy()
+  screenDocService?.destroy()
+  nativeScreenRecorder = null
   shortcutService?.destroy()
 })
 
@@ -382,5 +409,3 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   // Keep app running even when all windows closed (menubar app)
 })
-
-

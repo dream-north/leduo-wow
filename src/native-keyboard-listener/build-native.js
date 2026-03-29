@@ -26,6 +26,12 @@ function buildMacHelper() {
     cwd: swiftDir,
     stdio: 'inherit'
   })
+
+  const recorderDir = path.join(rootDir, 'SwiftScreenRecorder')
+  execFileSync('bash', ['build.sh'], {
+    cwd: recorderDir,
+    stdio: 'inherit'
+  })
 }
 
 function buildWindowsHelper() {

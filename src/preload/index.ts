@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
+import type { ScreenDocResultPayload, ScreenDocStatusPayload } from '../shared/types'
 
 const electronAPI = {
   platform: process.platform,
@@ -80,6 +81,21 @@ const electronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload)
     ipcRenderer.on(IPC.UPDATE_STATUS, handler)
     return () => ipcRenderer.removeListener(IPC.UPDATE_STATUS, handler)
+  },
+
+  // Screen doc
+  startScreenDoc: () => ipcRenderer.invoke(IPC.SCREEN_DOC_START) as Promise<{ ok: boolean; error?: string }>,
+  getScreenDocStatus: () => ipcRenderer.invoke(IPC.SCREEN_DOC_STATUS_GET) as Promise<ScreenDocStatusPayload>,
+  stopScreenDoc: () => ipcRenderer.invoke(IPC.SCREEN_DOC_STOP) as Promise<ScreenDocResultPayload | null>,
+  cancelScreenDoc: () => ipcRenderer.invoke(IPC.SCREEN_DOC_CANCEL) as Promise<boolean>,
+  sendScreenDocAudioChunk: (chunk: ArrayBuffer) => {
+    ipcRenderer.send(IPC.SCREEN_DOC_AUDIO_CHUNK, chunk)
+  },
+  getLatestScreenDocResult: () => ipcRenderer.invoke(IPC.SCREEN_DOC_RESULT_GET_LATEST) as Promise<ScreenDocResultPayload | null>,
+  onScreenDocStatus: (callback: (payload: ScreenDocStatusPayload) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: ScreenDocStatusPayload) => callback(payload)
+    ipcRenderer.on(IPC.SCREEN_DOC_STATUS, handler)
+    return () => ipcRenderer.removeListener(IPC.SCREEN_DOC_STATUS, handler)
   },
 
   // Vocabulary

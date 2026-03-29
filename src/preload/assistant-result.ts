@@ -4,6 +4,10 @@ import type { OverlayResultStat } from '../shared/types'
 
 interface AssistantResultData {
   text: string
+  resultKind?: 'assistant' | 'screen_doc'
+  title?: string
+  eyebrow?: string
+  exportArtifactId?: string
   detailsMarkdown?: string
   stats?: OverlayResultStat[]
   sources?: Array<{ index: number; title: string; url: string }>
@@ -45,6 +49,10 @@ const assistantResultAPI = {
 
   closeWindow: () => {
     ipcRenderer.send(IPC.ASSISTANT_RESULT_CLOSE)
+  },
+
+  exportScreenDoc: (artifactId: string) => {
+    return ipcRenderer.invoke(IPC.SCREEN_DOC_EXPORT, artifactId) as Promise<string | null>
   },
 
   sendFollowUpText: (text: string) => {

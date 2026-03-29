@@ -11,7 +11,7 @@ export type KeyEventHandler = (info: KeyInfo) => void
 export interface OverlayHudPayload {
   text: string
   mode: 'recording' | 'processing' | 'success' | 'error'
-  voiceMode: 'transcription' | 'assistant'
+  voiceMode: 'transcription' | 'assistant' | 'screen_doc'
   screenshotActive: boolean
 }
 

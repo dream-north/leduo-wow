@@ -2,16 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc-channels'
 
 const overlayAPI = {
-  onUpdate: (callback: (data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant'; screenshotActive?: boolean }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant'; screenshotActive?: boolean }) =>
+  onUpdate: (callback: (data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant' | 'screen_doc'; screenshotActive?: boolean }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant' | 'screen_doc'; screenshotActive?: boolean }) =>
       callback(data)
     ipcRenderer.on(IPC.OVERLAY_UPDATE, handler)
     return () => ipcRenderer.removeListener(IPC.OVERLAY_UPDATE, handler)
   },
 
   // Audio recording control
-  onAudioStart: (callback: (threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant') => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant') => callback(threshold ?? 0, microphoneId ?? '', voiceMode)
+  onAudioStart: (callback: (threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant' | 'screen_doc') => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant' | 'screen_doc') => callback(threshold ?? 0, microphoneId ?? '', voiceMode)
     ipcRenderer.on(IPC.AUDIO_START, handler)
     return () => ipcRenderer.removeListener(IPC.AUDIO_START, handler)
   },

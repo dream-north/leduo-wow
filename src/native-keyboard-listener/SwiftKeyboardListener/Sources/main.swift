@@ -520,6 +520,7 @@ enum OverlayVisualMode: String {
 enum OverlayVoiceMode: String {
     case transcription
     case assistant
+    case screenDoc = "screen_doc"
 }
 
 struct OverlayTheme {
@@ -892,14 +893,27 @@ final class RecordingHUDPanelController {
     }
 
     func update(text: String, mode: OverlayVisualMode, voiceMode: OverlayVoiceMode, screenshotActive: Bool) {
-        captionLabel.stringValue = voiceMode == .assistant ? "语音助手" : "语音识别"
+        switch voiceMode {
+        case .assistant:
+            captionLabel.stringValue = "语音助手"
+        case .screenDoc:
+            captionLabel.stringValue = "录屏整理"
+        case .transcription:
+            captionLabel.stringValue = "语音识别"
+        }
         textLabel.stringValue = text
         badgeLabel.stringValue = screenshotActive ? "截图上下文已启用" : ""
         updatePanelSize(for: text)
-        iconView.image = symbolImage(
-            voiceMode == .assistant ? "sparkles" : "waveform.circle.fill",
-            pointSize: 24
-        )
+        let iconName: String
+        switch voiceMode {
+        case .assistant:
+            iconName = "sparkles"
+        case .screenDoc:
+            iconName = "record.circle"
+        case .transcription:
+            iconName = "waveform.circle.fill"
+        }
+        iconView.image = symbolImage(iconName, pointSize: 24)
 
         let accent: NSColor
         switch mode {
@@ -948,7 +962,12 @@ final class RecordingHUDPanelController {
     }
 
     private func baseAccent(for voiceMode: OverlayVoiceMode) -> NSColor {
-        voiceMode == .assistant ? OverlayTheme.assistantAccent : OverlayTheme.transcriptionAccent
+        switch voiceMode {
+        case .assistant, .screenDoc:
+            return OverlayTheme.assistantAccent
+        case .transcription:
+            return OverlayTheme.transcriptionAccent
+        }
     }
 
     private func applyPulse(duration: CFTimeInterval = 0.85) {

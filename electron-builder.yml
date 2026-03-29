@@ -29,9 +29,11 @@ mac:
   extraResources:
     - from: src/native-keyboard-listener/SwiftKeyboardListener/build/SwiftKeyboardListener
       to: SwiftKeyboardListener
+    - from: src/native-keyboard-listener/SwiftScreenRecorder/build/SwiftScreenRecorder
+      to: SwiftScreenRecorder
   extendInfo:
     NSMicrophoneUsageDescription: "乐多汪汪需要使用麦克风进行语音识别"
-    NSScreenCaptureUsageDescription: "乐多汪汪需要屏幕录制权限来截取屏幕内容，辅助语音识别文本的润色"
+    NSScreenCaptureUsageDescription: "乐多汪汪需要屏幕录制权限来录制操作过程并生成带截图的步骤文档"
   notarize: false
   target:
     - dmg
@@ -52,4 +54,3 @@ nsis:
 dmg:
   artifactName: leduo-wow-${version}.${ext}
   title: "Leduo Wow ${version}"
-

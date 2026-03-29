@@ -24,6 +24,10 @@ const throttleTimerByWindow = new WeakMap<BrowserWindow, ReturnType<typeof setTi
 
 export interface AssistantResultPayload {
   text: string
+  resultKind?: 'assistant' | 'screen_doc'
+  title?: string
+  eyebrow?: string
+  exportArtifactId?: string
   position?: OverlayWindowPosition
   size?: OverlayWindowSize
   detailsMarkdown?: string
@@ -71,7 +75,8 @@ export function createAssistantResultWindow(): BrowserWindow {
   rendererReadyByWindow.set(win, false)
   pendingShowByWindow.set(win, false)
   latestPayloadByWindow.set(win, {
-    text: ''
+    text: '',
+    resultKind: 'assistant'
   })
   win.webContents.setWindowOpenHandler((details) => {
     void shell.openExternal(details.url)

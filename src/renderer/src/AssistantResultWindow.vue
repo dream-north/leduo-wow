@@ -11,6 +11,10 @@ interface AssistantResultSource {
 
 interface AssistantResultPayload {
   text: string
+  resultKind?: 'assistant' | 'screen_doc'
+  title?: string
+  eyebrow?: string
+  exportArtifactId?: string
   detailsMarkdown?: string
   stats?: OverlayResultStat[]
   sources?: AssistantResultSource[]
@@ -49,6 +53,7 @@ declare global {
       onHide: (callback: () => void) => () => void
       copyToClipboard: (text: string) => void
       closeWindow: () => void
+      exportScreenDoc: (artifactId: string) => Promise<string | null>
       sendFollowUpText: (text: string) => void
       requestVoiceFollowUp: () => void
       onPipelineStatus: (callback: (status: string) => void) => () => void
@@ -59,9 +64,14 @@ declare global {
 
 const turns = reactive<ConversationTurn[]>([])
 const isConversation = ref(false)
+const resultKind = ref<'assistant' | 'screen_doc'>('assistant')
+const resultTitle = ref('回答结果')
+const resultEyebrow = ref('语音助手')
+const exportArtifactId = ref('')
 const followUpText = ref('')
 const pipelineStatus = ref('idle')
 const copied = ref(false)
+const exportState = ref<'idle' | 'working' | 'done'>('idle')
 const scrollContainer = ref<HTMLElement | null>(null)
 const hoveredStat = ref<{ turnIndex: number; detail: string } | null>(null)
 let cleanupUpdate: (() => void) | null = null
@@ -78,6 +88,11 @@ const statMeta: Record<OverlayResultStatKind, { label: string }> = {
 }
 
 const copyLabel = computed(() => (copied.value ? '已复制' : '复制'))
+const exportLabel = computed(() => {
+  if (exportState.value === 'working') return '导出中...'
+  if (exportState.value === 'done') return '已导出'
+  return '导出 Markdown'
+})
 const inputDisabled = computed(() => pipelineStatus.value !== 'conversing')
 const isGenerating = computed(() => pipelineStatus.value === 'polishing')
 const inputPlaceholder = computed(() => {
@@ -146,6 +161,11 @@ function applyPayloadToTurn(turn: ConversationTurn, data: AssistantResultPayload
 }
 
 function applyPayload(data: AssistantResultPayload): void {
+  resultKind.value = data.resultKind ?? 'assistant'
+  resultTitle.value = data.title ?? (data.isConversation ? '多轮对话' : '回答结果')
+  resultEyebrow.value = data.eyebrow ?? (resultKind.value === 'screen_doc' ? '录屏整理' : '语音助手')
+  exportArtifactId.value = data.exportArtifactId ?? ''
+  exportState.value = 'idle'
   if (data.isConversation && data.turnIndex !== undefined) {
     isConversation.value = true
     const turn = findOrCreateTurn(data.turnIndex)
@@ -197,6 +217,18 @@ function handleCopy(): void {
 function handleClose(): void {
   if (!window.assistantResultAPI) return
   window.assistantResultAPI.closeWindow()
+}
+
+async function handleExport(): Promise<void> {
+  if (!window.assistantResultAPI || !exportArtifactId.value || exportState.value === 'working') return
+  exportState.value = 'working'
+  try {
+    const exportedPath = await window.assistantResultAPI.exportScreenDoc(exportArtifactId.value)
+    exportState.value = exportedPath ? 'done' : 'idle'
+  } catch (error) {
+    console.error('Failed to export screen doc:', error)
+    exportState.value = 'idle'
+  }
 }
 
 function handleSendText(): void {
@@ -295,6 +327,11 @@ onMounted(() => {
   cleanupHide = window.assistantResultAPI.onHide(() => {
     turns.length = 0
     isConversation.value = false
+    resultKind.value = 'assistant'
+    resultTitle.value = '回答结果'
+    resultEyebrow.value = '语音助手'
+    exportArtifactId.value = ''
+    exportState.value = 'idle'
     followUpText.value = ''
     copied.value = false
     hoveredStat.value = null
@@ -327,12 +364,26 @@ onUnmounted(() => {
     <div class="result-card">
       <header class="result-header">
         <div class="hero-copy">
-          <p class="eyebrow">语音助手</p>
-          <h1>{{ turns.length > 1 ? '多轮对话' : '回答结果' }}</h1>
+          <p class="eyebrow">{{ resultEyebrow }}</p>
+          <h1>{{ resultTitle }}</h1>
         </div>
 
         <div class="actions">
-          <button class="action-btn primary" @click="handleCopy">{{ copyLabel }}</button>
+          <button
+            v-if="resultKind === 'screen_doc'"
+            class="action-btn primary"
+            :disabled="exportState === 'working'"
+            @click="handleExport"
+          >
+            {{ exportLabel }}
+          </button>
+          <button
+            v-else
+            class="action-btn primary"
+            @click="handleCopy"
+          >
+            {{ copyLabel }}
+          </button>
           <button class="action-btn" @click="handleClose">关闭</button>
         </div>
       </header>

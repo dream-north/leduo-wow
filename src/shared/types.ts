@@ -18,6 +18,7 @@ export type InputMethod = 'clipboard' | 'applescript'
 export type AssistantOutputMode = 'input' | 'window'
 export type OverlayVisualMode = 'recording' | 'processing' | 'success' | 'error'
 export type OverlayResultFormat = 'markdown'
+export type OverlayResultKind = 'assistant' | 'screen_doc'
 export interface OverlayWindowPosition {
   x: number
   y: number
@@ -36,17 +37,70 @@ export type OverlayResultStatKind =
 
 // 语音模式：语音识别 / 语音助手
 export type VoiceMode = 'transcription' | 'assistant'
+export type OverlayVoiceMode = VoiceMode | 'screen_doc'
+
+export type ScreenDocStatus =
+  | 'idle'
+  | 'recording'
+  | 'finalizing'
+  | 'uploading'
+  | 'analyzing'
+  | 'ready'
+  | 'error'
+
+export interface ScreenDocStep {
+  title: string
+  description: string
+  timestampMs: number
+  screenshotTimestampMs: number
+}
+
+export interface ScreenDocAnalysis {
+  title: string
+  summary: string
+  steps: ScreenDocStep[]
+  notes: string[]
+  transcript: string
+}
+
+export interface ScreenDocScreenshot {
+  stepIndex: number
+  timestampMs: number
+  dataUrl: string
+}
+
+export interface ScreenDocResultPayload {
+  artifactId: string
+  analysis: ScreenDocAnalysis
+  screenshots: ScreenDocScreenshot[]
+  markdown: string
+  createdAt: number
+}
+
+export interface ScreenDocStatusPayload {
+  status: ScreenDocStatus
+  startedAt?: number
+  error?: string
+  transcript?: string
+  artifactId?: string
+  stepCount?: number
+  captureBackend?: 'native'
+}
 
 export interface OverlayHudPayload {
   text: string
   mode: OverlayVisualMode
-  voiceMode: VoiceMode
+  voiceMode: OverlayVoiceMode
   screenshotActive: boolean
 }
 
 export interface OverlayResultPayload {
   text: string
   format: OverlayResultFormat
+  resultKind?: OverlayResultKind
+  title?: string
+  eyebrow?: string
+  exportArtifactId?: string
   position?: OverlayWindowPosition
   size?: OverlayWindowSize
   detailsMarkdown?: string

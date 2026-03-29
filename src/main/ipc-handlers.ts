@@ -25,10 +25,12 @@ import { updateDockIconVisibility } from './index'
 import type { ShortcutServiceStatus } from '../shared/types'
 import { getLatestAssistantResultPayload, markAssistantResultWindowReady } from './assistant-result-window'
 import { checkForUpdatesManual, downloadUpdate, installUpdate, getUpdateStatus } from './updater'
+import type { ScreenDocService } from './screen-doc-service'
 
 export function registerIpcHandlers(
   configStore: ConfigStore,
   pipeline: Pipeline,
+  screenDocService: ScreenDocService,
   shortcutService: ShortcutService,
   overlayWindow: BrowserWindow | null,
   getAssistantResultWindow: () => BrowserWindow | null,
@@ -109,8 +111,8 @@ export function registerIpcHandlers(
   })
 
   // Pipeline status listener
-  pipeline.on('status', (status) => {
-    updateTrayMenu(status)
+  pipeline.on('status', () => {
+    updateTrayMenu()
   })
 
   // Audio chunk from overlay renderer
@@ -121,6 +123,35 @@ export function registerIpcHandlers(
   // Audio capture error from overlay renderer
   ipcMain.on(IPC.AUDIO_CAPTURE_ERROR, (_event, message: string) => {
     pipeline.handleAudioCaptureError(message)
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_START, async () => {
+    return await screenDocService.start()
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_STATUS_GET, () => {
+    return screenDocService.getStatusPayload()
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_STOP, async () => {
+    return await screenDocService.stop()
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_CANCEL, () => {
+    screenDocService.cancel()
+    return true
+  })
+
+  ipcMain.on(IPC.SCREEN_DOC_AUDIO_CHUNK, (_event, chunk: ArrayBuffer) => {
+    screenDocService.appendAudioChunk(Buffer.from(chunk))
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_RESULT_GET_LATEST, () => {
+    return screenDocService.getLatestResult()
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_EXPORT, async (_event, artifactId?: string) => {
+    return await screenDocService.exportLatestResult(artifactId)
   })
 
   // Permissions
@@ -197,6 +228,13 @@ export function registerIpcHandlers(
 
   ipcMain.on(IPC.ASSISTANT_RESULT_CLOSE, () => {
     const assistantResultWindow = getAssistantResultWindow()
+    const latestPayload = assistantResultWindow && !assistantResultWindow.isDestroyed()
+      ? getLatestAssistantResultPayload(assistantResultWindow)
+      : null
+    if (latestPayload?.resultKind === 'screen_doc') {
+      screenDocService.handleResultWindowClosed()
+      return
+    }
     if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
       const [x, y] = assistantResultWindow.getPosition()
       const [width, height] = assistantResultWindow.getSize()

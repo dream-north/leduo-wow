@@ -18,6 +18,7 @@ import {
 import { getRendererPlatform } from '../utils/platform'
 import type {
   PolishPreset,
+  ScreenDocStatusPayload,
   ShortcutModeStatus,
   ShortcutServiceStatus,
   TranscriptionRecord,
@@ -861,6 +862,360 @@ async function onThresholdChange(event: Event): Promise<void> {
 // Microphone selection
 interface AudioDevice { deviceId: string; label: string }
 const microphoneDevices = ref<AudioDevice[]>([])
+const screenDocStatus = ref<ScreenDocStatusPayload>({ status: 'idle' })
+const screenDocCapturePhase = ref<'idle' | 'starting' | 'recording' | 'finalizing'>('idle')
+const screenDocElapsedMs = ref(0)
+let screenDocMicStream: MediaStream | null = null
+let screenDocAudioContext: AudioContext | null = null
+let screenDocAudioSource: MediaStreamAudioSourceNode | null = null
+let screenDocScriptProcessor: ScriptProcessorNode | null = null
+let screenDocStartedAt = 0
+let screenDocElapsedTimer: ReturnType<typeof setInterval> | null = null
+let unsubscribeScreenDocStatus: (() => void) | null = null
+
+const screenDocEffectiveStatus = computed(() => {
+  if (screenDocCapturePhase.value === 'starting') return 'recording'
+  if (screenDocCapturePhase.value === 'recording') return 'recording'
+  if (screenDocCapturePhase.value === 'finalizing') return 'finalizing'
+  return screenDocStatus.value.status
+})
+
+const screenDocPrimaryActionLabel = computed(() => (
+  screenDocCapturePhase.value === 'recording' || screenDocCapturePhase.value === 'starting'
+    ? '停止录制'
+    : '开始录屏整理'
+))
+
+const screenDocCanStart = computed(() => (
+  screenDocCapturePhase.value === 'idle' &&
+  (screenDocStatus.value.status === 'idle' ||
+    screenDocStatus.value.status === 'ready' ||
+    screenDocStatus.value.status === 'error')
+))
+
+const screenDocCanStop = computed(() => screenDocCapturePhase.value === 'recording')
+
+const screenDocCanCancelProcessing = computed(() => (
+  screenDocEffectiveStatus.value === 'finalizing' ||
+  screenDocEffectiveStatus.value === 'uploading' ||
+  screenDocEffectiveStatus.value === 'analyzing'
+))
+
+const screenDocDurationLabel = computed(() => {
+  const totalSeconds = Math.max(0, Math.floor(screenDocElapsedMs.value / 1000))
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+})
+
+const screenDocStatusTitle = computed(() => {
+  switch (screenDocEffectiveStatus.value) {
+    case 'recording':
+      return '录屏进行中'
+    case 'finalizing':
+      return '正在封装录屏'
+    case 'uploading':
+      return '正在上传录屏'
+    case 'analyzing':
+      return '正在整理步骤文档'
+    case 'ready':
+      return '文档已生成'
+    case 'error':
+      return '录屏整理失败'
+    default:
+      return '准备开始'
+  }
+})
+
+const screenDocStatusText = computed(() => {
+  switch (screenDocEffectiveStatus.value) {
+    case 'recording':
+      return screenDocCapturePhase.value === 'starting'
+        ? '正在启动原生录屏，并准备接入麦克风语音转写。'
+        : '正在通过原生录屏记录屏幕操作，并把麦克风说明实时转成文本。'
+    case 'finalizing':
+      return '正在等待原生录屏结束并整理文件，请稍等。'
+    case 'uploading':
+      return '正在上传录屏到百炼临时存储，用于多模态分析。'
+    case 'analyzing':
+      return 'Qwen 正在结合语音说明和操作画面整理 SOP。'
+    case 'ready':
+      return screenDocStatus.value.stepCount
+        ? `已生成 ${screenDocStatus.value.stepCount} 个步骤，可在结果窗导出 Markdown。`
+        : '整理完成，可在结果窗查看并导出。'
+    case 'error':
+      return screenDocStatus.value.error || '本次录屏整理没有成功完成。'
+    default:
+      return '点击开始后，将录制你的操作过程和语音说明，并自动整理成带截图的步骤文档。'
+  }
+})
+
+function calcRms(buffer: Float32Array): number {
+  let sum = 0
+  for (let index = 0; index < buffer.length; index++) {
+    sum += buffer[index] * buffer[index]
+  }
+  return Math.sqrt(sum / buffer.length) * 100
+}
+
+function resampleTo16k(buffer: Float32Array, inputSampleRate: number): Float32Array {
+  if (inputSampleRate === 16000) {
+    return buffer
+  }
+
+  const ratio = inputSampleRate / 16000
+  const outputLength = Math.max(1, Math.round(buffer.length / ratio))
+  const output = new Float32Array(outputLength)
+
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex++) {
+    const start = Math.min(buffer.length - 1, Math.floor(outputIndex * ratio))
+    const end = Math.min(buffer.length, Math.max(start + 1, Math.floor((outputIndex + 1) * ratio)))
+    let sum = 0
+    for (let inputIndex = start; inputIndex < end; inputIndex++) {
+      sum += buffer[inputIndex]
+    }
+    output[outputIndex] = sum / Math.max(1, end - start)
+  }
+
+  return output
+}
+
+function startScreenDocElapsedTimer(): void {
+  stopScreenDocElapsedTimer()
+  screenDocElapsedMs.value = 0
+  screenDocElapsedTimer = setInterval(() => {
+    if (!screenDocStartedAt) return
+    screenDocElapsedMs.value = Date.now() - screenDocStartedAt
+  }, 250)
+}
+
+function stopScreenDocElapsedTimer(): void {
+  if (screenDocElapsedTimer) {
+    clearInterval(screenDocElapsedTimer)
+    screenDocElapsedTimer = null
+  }
+}
+
+function buildScreenDocAudioConstraints(mode: 'strict' | 'relaxed'): MediaTrackConstraints {
+  const constraints: MediaTrackConstraints = {
+    echoCancellation: true,
+    noiseSuppression: true
+  }
+
+  if (mode === 'strict') {
+    constraints.sampleRate = 16000
+    constraints.channelCount = 1
+  }
+
+  if (store.selectedMicrophoneId) {
+    constraints.deviceId = { exact: store.selectedMicrophoneId }
+  }
+
+  return constraints
+}
+
+async function requestScreenDocMicrophoneStream(): Promise<MediaStream> {
+  const attempts: Array<MediaTrackConstraints | true> = [
+    buildScreenDocAudioConstraints('strict'),
+    buildScreenDocAudioConstraints('relaxed')
+  ]
+
+  if (store.selectedMicrophoneId) {
+    attempts.push(true)
+  }
+
+  let lastError: unknown = null
+  for (const audio of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio })
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('无法访问麦克风')
+}
+
+function createScreenDocAudioContext(): AudioContext {
+  try {
+    return new AudioContext({ sampleRate: 16000 })
+  } catch {
+    return new AudioContext()
+  }
+}
+
+function formatScreenDocCaptureError(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotFoundError') {
+      return '没有找到可用的麦克风设备'
+    }
+    if (error.name === 'NotReadableError') {
+      return '麦克风当前不可用，请关闭占用它的程序后重试'
+    }
+    if (error.name === 'OverconstrainedError') {
+      return '当前麦克风不支持请求的录音参数，已尝试回退但仍失败'
+    }
+    if (error.name === 'NotAllowedError') {
+      return '麦克风权限被拒绝，请先授权后再试'
+    }
+    return error.message || error.name
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return '启动录屏整理失败'
+}
+
+async function setupScreenDocAudioProcessing(stream: MediaStream): Promise<void> {
+  screenDocAudioContext = createScreenDocAudioContext()
+  screenDocAudioSource = screenDocAudioContext.createMediaStreamSource(stream)
+  screenDocScriptProcessor = screenDocAudioContext.createScriptProcessor(4096, 1, 1)
+
+  screenDocScriptProcessor.onaudioprocess = (event) => {
+    if (screenDocCapturePhase.value !== 'recording') return
+    const inputData = event.inputBuffer.getChannelData(0)
+    const rms = calcRms(inputData)
+    if (rms < store.audioThreshold) return
+
+    const normalizedData = resampleTo16k(inputData, screenDocAudioContext?.sampleRate || 16000)
+    const pcmData = new Int16Array(normalizedData.length)
+    for (let index = 0; index < normalizedData.length; index++) {
+      const sample = Math.max(-1, Math.min(1, normalizedData[index]))
+      pcmData[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    }
+
+    window.electronAPI.sendScreenDocAudioChunk(pcmData.buffer)
+  }
+
+  screenDocAudioSource.connect(screenDocScriptProcessor)
+  screenDocScriptProcessor.connect(screenDocAudioContext.destination)
+}
+
+async function teardownScreenDocAudio(): Promise<void> {
+  if (screenDocScriptProcessor) {
+    screenDocScriptProcessor.disconnect()
+    screenDocScriptProcessor = null
+  }
+  if (screenDocAudioSource) {
+    screenDocAudioSource.disconnect()
+    screenDocAudioSource = null
+  }
+  if (screenDocAudioContext) {
+    await screenDocAudioContext.close()
+    screenDocAudioContext = null
+  }
+  if (screenDocMicStream) {
+    screenDocMicStream.getTracks().forEach((track) => track.stop())
+    screenDocMicStream = null
+  }
+}
+
+async function startScreenDocCapture(): Promise<void> {
+  if (platform !== 'darwin') {
+    showSaveMessage('录屏整理首版仅支持 macOS')
+    return
+  }
+  if (screenDocCapturePhase.value !== 'idle') return
+
+  screenDocCapturePhase.value = 'starting'
+  screenDocElapsedMs.value = 0
+  screenDocStatus.value = { status: 'idle' }
+
+  let nativeStarted = false
+  try {
+    const startResult = await window.electronAPI.startScreenDoc()
+    if (!startResult.ok) {
+      throw new Error(startResult.error || '无法启动录屏整理')
+    }
+    nativeStarted = true
+
+    const micStream = await requestScreenDocMicrophoneStream()
+    screenDocMicStream = micStream
+    await setupScreenDocAudioProcessing(micStream)
+
+    screenDocStartedAt = Date.now()
+    screenDocStatus.value = {
+      ...screenDocStatus.value,
+      status: 'recording',
+      startedAt: screenDocStartedAt,
+      captureBackend: 'native',
+      error: undefined
+    }
+    screenDocCapturePhase.value = 'recording'
+    startScreenDocElapsedTimer()
+  } catch (error) {
+    console.error('Failed to start screen doc capture:', error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : error)
+    screenDocCapturePhase.value = 'idle'
+    stopScreenDocElapsedTimer()
+    await teardownScreenDocAudio()
+    if (nativeStarted) {
+      await window.electronAPI.cancelScreenDoc()
+    }
+    showSaveMessage(formatScreenDocCaptureError(error))
+  }
+}
+
+async function stopScreenDocCapture(): Promise<void> {
+  if (screenDocCapturePhase.value !== 'recording') return
+  screenDocCapturePhase.value = 'finalizing'
+  screenDocStatus.value = {
+    ...screenDocStatus.value,
+    status: 'finalizing',
+    captureBackend: 'native',
+    error: undefined
+  }
+  stopScreenDocElapsedTimer()
+
+  try {
+    await teardownScreenDocAudio()
+    await window.electronAPI.stopScreenDoc()
+  } catch (error) {
+    console.error('Failed to finalize screen doc recording:', error)
+    await window.electronAPI.cancelScreenDoc()
+    showSaveMessage(error instanceof Error ? error.message : '录屏整理失败')
+  } finally {
+    screenDocCapturePhase.value = 'idle'
+    stopScreenDocElapsedTimer()
+    screenDocStartedAt = 0
+  }
+}
+
+async function cancelScreenDocCapture(showMessage = false): Promise<void> {
+  const shouldNotify = screenDocCapturePhase.value !== 'idle' || screenDocCanCancelProcessing.value
+  screenDocCapturePhase.value = 'idle'
+  stopScreenDocElapsedTimer()
+  await teardownScreenDocAudio()
+  screenDocStartedAt = 0
+
+  if (shouldNotify) {
+    await window.electronAPI.cancelScreenDoc()
+  }
+  if (showMessage) {
+    showSaveMessage('已取消本次录屏整理')
+  }
+}
+
+async function toggleScreenDocCapture(): Promise<void> {
+  if (screenDocCanStop.value) {
+    await stopScreenDocCapture()
+    return
+  }
+  if (screenDocCanStart.value) {
+    await startScreenDocCapture()
+  }
+}
+
+async function cancelScreenDocProcessing(): Promise<void> {
+  await cancelScreenDocCapture(true)
+}
 
 async function enumerateMicrophones(): Promise<void> {
   try {
@@ -1002,6 +1357,19 @@ onMounted(async () => {
     await enumerateMicrophones()
     await loadHistory()
     shortcutStatus.value = await window.electronAPI.getShortcutStatus()
+    screenDocStatus.value = await window.electronAPI.getScreenDocStatus()
+    if (screenDocStatus.value.status === 'recording') {
+      screenDocCapturePhase.value = 'recording'
+      screenDocStartedAt = screenDocStatus.value.startedAt || Date.now()
+      startScreenDocElapsedTimer()
+    }
+    if (
+      screenDocStatus.value.status === 'finalizing' ||
+      screenDocStatus.value.status === 'uploading' ||
+      screenDocStatus.value.status === 'analyzing'
+    ) {
+      screenDocCapturePhase.value = 'finalizing'
+    }
 
     // Listen for dock update lock state
     unsubscribeDockLock = window.electronAPI.onDockUpdateLock((locked: boolean) => {
@@ -1021,6 +1389,30 @@ onMounted(async () => {
     updateStatus.value = await window.electronAPI.getUpdateStatus()
     unsubscribeUpdateStatus = window.electronAPI.onUpdateStatus((payload) => {
       updateStatus.value = payload as UpdateStatusPayload
+    })
+
+    unsubscribeScreenDocStatus = window.electronAPI.onScreenDocStatus((payload) => {
+      screenDocStatus.value = payload
+      if (payload.status === 'recording' && screenDocCapturePhase.value === 'idle') {
+        screenDocCapturePhase.value = 'recording'
+        screenDocStartedAt = payload.startedAt || Date.now()
+        startScreenDocElapsedTimer()
+      }
+      if (payload.status === 'ready' || payload.status === 'error' || payload.status === 'idle') {
+        stopScreenDocElapsedTimer()
+        if (screenDocCapturePhase.value !== 'idle') {
+          screenDocCapturePhase.value = 'idle'
+          screenDocStartedAt = 0
+          void teardownScreenDocAudio()
+        }
+      }
+      if (
+        payload.status === 'finalizing' ||
+        payload.status === 'uploading' ||
+        payload.status === 'analyzing'
+      ) {
+        screenDocCapturePhase.value = 'finalizing'
+      }
     })
 
     // Load vocabulary and listen for updates
@@ -1049,11 +1441,15 @@ onUnmounted(() => {
   if (unsubscribeUpdateStatus) {
     unsubscribeUpdateStatus()
   }
+  if (unsubscribeScreenDocStatus) {
+    unsubscribeScreenDocStatus()
+  }
   stopShortcutListeners()
   if (shortcutCaptureSuspended) {
     shortcutCaptureSuspended = false
     void window.electronAPI.setShortcutCaptureActive(false)
   }
+  void cancelScreenDocCapture(false)
 })
 
 // ---- Vocabulary (Memory tab) functions ----
@@ -1530,6 +1926,60 @@ function closeMergeDialog(): void {
               <span class="mode-toggle-btn-icon">🤖</span>
               <span>语音助手</span>
             </button>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">录屏整理</label>
+          <p class="setting-description">
+            录制屏幕操作和麦克风说明，录制完成后自动生成带截图的步骤文档，并可在结果窗导出 Markdown。
+          </p>
+          <div class="screen-doc-panel">
+            <div class="screen-doc-header">
+              <div class="screen-doc-header-main">
+                <div class="screen-doc-icon">▣</div>
+                <div class="screen-doc-copy">
+                  <div class="screen-doc-title-row">
+                    <span class="screen-doc-title">{{ screenDocStatusTitle }}</span>
+                    <span :class="['screen-doc-badge', `is-${screenDocEffectiveStatus}`]">
+                      {{ screenDocEffectiveStatus }}
+                    </span>
+                  </div>
+                  <p class="screen-doc-text">{{ screenDocStatusText }}</p>
+                </div>
+              </div>
+              <div class="screen-doc-actions">
+                <button
+                  class="btn btn-primary"
+                  :disabled="!screenDocCanStart && !screenDocCanStop"
+                  @click="toggleScreenDocCapture"
+                >
+                  {{ screenDocPrimaryActionLabel }}
+                </button>
+                <button
+                  v-if="screenDocCanCancelProcessing || screenDocCapturePhase !== 'idle'"
+                  class="btn btn-secondary"
+                  @click="cancelScreenDocProcessing"
+                >
+                  取消本次
+                </button>
+              </div>
+            </div>
+
+            <div class="screen-doc-meta">
+              <div class="screen-doc-meta-item">
+                <span class="screen-doc-meta-label">录制时长</span>
+                <span class="screen-doc-meta-value">{{ screenDocDurationLabel }}</span>
+              </div>
+              <div class="screen-doc-meta-item">
+                <span class="screen-doc-meta-label">当前状态</span>
+                <span class="screen-doc-meta-value">{{ screenDocStatusTitle }}</span>
+              </div>
+              <div class="screen-doc-meta-item">
+                <span class="screen-doc-meta-label">首版限制</span>
+                <span class="screen-doc-meta-value">macOS + 麦克风说明</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2945,6 +3395,139 @@ function closeMergeDialog(): void {
   flex: 1;
 }
 
+.screen-doc-panel {
+  padding: 16px;
+  border: 1px solid rgba(0, 113, 227, 0.16);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(0, 113, 227, 0.12), transparent 35%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 247, 252, 0.96));
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.screen-doc-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.screen-doc-header-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.screen-doc-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(0, 113, 227, 0.12);
+  color: var(--accent-color);
+  font-size: 18px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.screen-doc-copy {
+  min-width: 0;
+}
+
+.screen-doc-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.screen-doc-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.screen-doc-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.screen-doc-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.screen-doc-badge.is-recording {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.screen-doc-badge.is-finalizing,
+.screen-doc-badge.is-uploading,
+.screen-doc-badge.is-analyzing {
+  background: rgba(0, 113, 227, 0.14);
+  color: var(--accent-color);
+}
+
+.screen-doc-badge.is-ready {
+  background: rgba(34, 197, 94, 0.16);
+  color: #15803d;
+}
+
+.screen-doc-badge.is-error {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+}
+
+.screen-doc-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.screen-doc-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.screen-doc-meta-item {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.screen-doc-meta-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.screen-doc-meta-value {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .shortcut-display {
   padding: 6px 14px;
   background: var(--bg-secondary);
@@ -3015,6 +3598,24 @@ function closeMergeDialog(): void {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .screen-doc-header {
+    flex-direction: column;
+  }
+
+  .screen-doc-actions {
+    width: 100%;
+  }
+
+  .screen-doc-actions .btn {
+    flex: 1;
+  }
+
+  .screen-doc-meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 .inline-input-row {

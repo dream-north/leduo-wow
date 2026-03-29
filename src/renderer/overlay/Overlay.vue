@@ -4,8 +4,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 declare global {
   interface Window {
     overlayAPI: {
-      onUpdate: (callback: (data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant'; screenshotActive?: boolean }) => void) => () => void
-      onAudioStart: (callback: (threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant') => void) => () => void
+      onUpdate: (callback: (data: { text: string; mode: string; voiceMode?: 'transcription' | 'assistant' | 'screen_doc'; screenshotActive?: boolean }) => void) => () => void
+      onAudioStart: (callback: (threshold: number, microphoneId: string, voiceMode?: 'transcription' | 'assistant' | 'screen_doc') => void) => () => void
       onAudioStop: (callback: () => void) => () => void
       sendAudioChunk: (chunk: ArrayBuffer) => void
       sendAudioError: (message: string) => void
@@ -16,7 +16,7 @@ declare global {
 
 const text = ref('')
 const mode = ref('')
-const voiceMode = ref<'transcription' | 'assistant'>('transcription')
+const voiceMode = ref<'transcription' | 'assistant' | 'screen_doc'>('transcription')
 const screenshotActive = ref(false)
 
 let mediaStream: MediaStream | null = null
@@ -25,7 +25,11 @@ let scriptProcessor: ScriptProcessorNode | null = null
 let isCapturing = false
 let volumeThreshold = 10
 
-const modeLabel = computed(() => (voiceMode.value === 'assistant' ? '语音助手' : '语音识别'))
+const modeLabel = computed(() => {
+  if (voiceMode.value === 'assistant') return '语音助手'
+  if (voiceMode.value === 'screen_doc') return '录屏整理'
+  return '语音识别'
+})
 const statusTitle = computed(() => {
   if (mode.value === 'recording') {
     return '正在聆听'
@@ -33,7 +37,9 @@ const statusTitle = computed(() => {
   if (mode.value === 'processing') {
     if (text.value.includes('工具')) return '正在调用工具'
     if (text.value.includes('思考')) return '正在思考'
-    return voiceMode.value === 'assistant' ? '正在生成回答' : '正在处理中'
+    if (voiceMode.value === 'assistant') return '正在生成回答'
+    if (voiceMode.value === 'screen_doc') return '正在整理文档'
+    return '正在处理中'
   }
   if (mode.value === 'success') {
     return '已完成'
@@ -48,11 +54,17 @@ const statusText = computed(() => {
     return text.value
   }
   if (mode.value === 'recording') {
+    if (voiceMode.value === 'screen_doc') {
+      return '录屏和语音说明都会被记录，停止后会自动整理成文档。'
+    }
     return voiceMode.value === 'assistant'
       ? '继续说话，松开快捷键后会直接生成回答。'
       : '继续说话，松开快捷键后会开始识别。'
   }
   if (mode.value === 'processing') {
+    if (voiceMode.value === 'screen_doc') {
+      return '正在上传录屏并分析关键操作，稍后会生成带截图的步骤文档。'
+    }
     return voiceMode.value === 'assistant'
       ? '模型正在整理内容，结果会很快出现。'
       : '正在收尾并整理转写结果。'
@@ -261,6 +273,10 @@ body {
   height: 100vh;
   padding: 1px;
   background: transparent;
+}
+
+.overlay-container.screen_doc {
+  --accent: #0f766e;
 }
 
 .overlay-container.transcription {
