@@ -914,7 +914,7 @@ h1 {
 .markdown-body :deep(ul),
 .markdown-body :deep(ol) {
   margin: 0.8em 0;
-  padding-left: 1.45em;
+  padding-left: 2em;
 }
 
 .markdown-body :deep(li + li) {

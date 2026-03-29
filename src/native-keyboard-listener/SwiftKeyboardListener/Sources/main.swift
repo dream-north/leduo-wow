@@ -1944,7 +1944,7 @@ enum MarkdownTemplateRenderer {
     }
     ul, ol {
       margin: 0.8em 0;
-      padding-left: 1.45em;
+      padding-left: 2em;
     }
     li + li {
       margin-top: 0.26em;
