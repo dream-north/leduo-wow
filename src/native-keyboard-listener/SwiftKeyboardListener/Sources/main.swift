@@ -324,7 +324,7 @@ final class KeyboardEventTap {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { proxy, type, event, refcon in
-                guard let refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon else { return Unmanaged.passUnretained(event) }
                 let tap = Unmanaged<KeyboardEventTap>.fromOpaque(refcon).takeUnretainedValue()
                 return tap.handleEvent(proxy: proxy, type: type, event: event)
             },
@@ -380,7 +380,7 @@ final class KeyboardEventTap {
             if let eventTap {
                 CGEvent.tapEnable(tap: eventTap, enable: true)
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -425,7 +425,7 @@ final class KeyboardEventTap {
             break
         }
 
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     private func updateModifierState(keyCode: Int64, eventType: CGEventType) {
@@ -1015,12 +1015,14 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
     private var isInitialPageLoaded = false
     private var pendingUpdateWorkItem: DispatchWorkItem?
     private var streamingGeneration: UInt64 = 0
+    private var renderGeneration: UInt64 = 0
     private let renderQueue = DispatchQueue(label: "com.leduo.markdown-render", qos: .userInitiated)
 
     // Multi-turn conversation state
     private var turns: [ConversationTurn] = []
     private var isConversationMode: Bool = false
     private var currentPipelineStatus: String = "idle"
+    private var lastRenderedTurnCount: Int = 0
 
     // Input bar controls
     private let inputBar = NSView()
@@ -1411,6 +1413,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         } else {
             if isConversationMode {
                 let html = MarkdownTemplateRenderer.renderConversationPage(turns: turns)
+                lastRenderedTurnCount = turns.count
                 webView.loadHTMLString(html, baseURL: nil)
             } else {
                 loadMarkdown(currentDisplayMarkdown)
@@ -1434,6 +1437,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
         // Clear conversation state
         turns.removeAll()
         isConversationMode = false
+        lastRenderedTurnCount = 0
         currentPipelineStatus = "idle"
         inputField.stringValue = ""
         setInputBarVisible(false)
@@ -1487,24 +1491,51 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 
     private func scheduleIncrementalUpdate() {
         pendingUpdateWorkItem?.cancel()
-        let generation = streamingGeneration
+        renderGeneration &+= 1
+        let expectedGen = renderGeneration
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.streamingGeneration == generation else { return }
+            guard let self, self.renderGeneration == expectedGen else { return }
 
             if self.isConversationMode {
-                // Snapshot turns array for background rendering
-                let turnsCopy = self.turns
+                // Only render the last (streaming) turn; previous turns are already in the DOM
+                guard let lastTurn = self.turns.last else { return }
+                let turnSnapshot = lastTurn
+                let turnCount = self.turns.count
+                let lastTurnDOMCount = self.lastRenderedTurnCount
                 self.renderQueue.async { [weak self] in
-                    guard let self, self.streamingGeneration == generation else { return }
+                    guard let self, self.renderGeneration == expectedGen else { return }
                     let escaped: String = autoreleasepool {
-                        let bodyHTML = MarkdownTemplateRenderer.renderConversation(turns: turnsCopy)
-                        return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
+                        let bodyHTML = MarkdownTemplateRenderer.renderBody(
+                            turnSnapshot.markdown,
+                            sources: turnSnapshot.sources,
+                            reasoningMarkdown: turnSnapshot.reasoningMarkdown,
+                            reasoningCollapsed: turnSnapshot.reasoningCollapsed,
+                            codeMarkdown: turnSnapshot.codeMarkdown,
+                            codeCollapsed: turnSnapshot.codeCollapsed
+                        )
+                        let withStats = MarkdownTemplateRenderer.renderStatBadges(turnSnapshot.stats) + bodyHTML
+                        return MarkdownTemplateRenderer.escapeForJSString(withStats)
                     }
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, self.streamingGeneration == generation else { return }
-                        let js = "document.body.innerHTML='\(escaped)';window.scrollTo(0,document.body.scrollHeight)"
-                        self.webView.evaluateJavaScript(js)
+                        guard let self, self.renderGeneration == expectedGen else { return }
+                        if turnCount > lastTurnDOMCount {
+                            // New turn added - append to DOM
+                            let userBubble: String
+                            if !turnSnapshot.userMessage.isEmpty {
+                                let escapedUser = MarkdownTemplateRenderer.escapeForJSString(
+                                    "<div class=\"user-bubble\">\(MarkdownTemplateRenderer.escapeHTML(turnSnapshot.userMessage))</div>"
+                                )
+                                userBubble = "'\(escapedUser)'"
+                            } else {
+                                userBubble = "null"
+                            }
+                            self.webView.evaluateJavaScript("__appendTurn(\(userBubble),'\(escaped)')")
+                            self.lastRenderedTurnCount = turnCount
+                        } else {
+                            // Update existing last turn
+                            self.webView.evaluateJavaScript("__updateLastResponse('\(escaped)')")
+                        }
                     }
                 }
             } else {
@@ -1517,7 +1548,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                 let cc = self.currentCodeCollapsed
 
                 self.renderQueue.async { [weak self] in
-                    guard let self, self.streamingGeneration == generation else { return }
+                    guard let self, self.renderGeneration == expectedGen else { return }
                     let escaped: String = autoreleasepool {
                         let bodyHTML = MarkdownTemplateRenderer.renderBody(
                             dm, sources: src,
@@ -1527,7 +1558,7 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
                         return MarkdownTemplateRenderer.escapeForJSString(bodyHTML)
                     }
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, self.streamingGeneration == generation else { return }
+                        guard let self, self.renderGeneration == expectedGen else { return }
                         self.webView.evaluateJavaScript("document.body.innerHTML='\(escaped)'")
                     }
                 }
@@ -1825,7 +1856,6 @@ final class AssistantResultPanelController: NSObject, WKNavigationDelegate, WKSc
 // preserve the same assistant result semantics.
 enum MarkdownTemplateRenderer {
     // Pre-compiled regex patterns to avoid expensive ICU compilation on every call
-    private static let orderedListRegex = try! NSRegularExpression(pattern: #"^\d+\.\s+(.+)$"#)
     private static let citationRefRegex = try! NSRegularExpression(pattern: #"\[ref_(\d+)\]"#)
     private static let inlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
     private static let linkRegex = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#)
@@ -2237,8 +2267,9 @@ enum MarkdownTemplateRenderer {
     }
 
     private static func renderHeading(_ line: String) -> String? {
+        guard line.first == "#" else { return nil }
         let hashes = line.prefix { $0 == "#" }
-        guard !hashes.isEmpty, hashes.count <= 4 else { return nil }
+        guard hashes.count <= 4 else { return nil }
         let content = line.dropFirst(hashes.count).trimmingCharacters(in: .whitespaces)
         guard !content.isEmpty else { return nil }
         return "<h\(hashes.count)>\(renderInline(content))</h\(hashes.count)>"
@@ -2314,15 +2345,21 @@ enum MarkdownTemplateRenderer {
     }
 
     private static func orderedListItem(_ line: String) -> (number: Int, text: String)? {
-        let range = NSRange(line.startIndex..<line.endIndex, in: line)
-        guard let match = orderedListRegex.firstMatch(in: line, range: range),
-              let fullRange = Range(match.range(at: 0), in: line),
-              let textRange = Range(match.range(at: 1), in: line) else {
-            return nil
-        }
-        let prefix = line[fullRange].split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        // Fast path: first char must be a digit
+        guard let firstChar = line.first, firstChar.isWholeNumber else { return nil }
+        // Find the dot after digits
+        guard let dotIndex = line.firstIndex(of: ".") else { return nil }
+        let prefix = line[line.startIndex..<dotIndex]
+        // All characters before dot must be digits
+        guard !prefix.isEmpty, prefix.allSatisfy({ $0.isWholeNumber }) else { return nil }
         guard let number = Int(prefix) else { return nil }
-        return (number: number, text: String(line[textRange]))
+        // Must have at least one space after dot
+        let afterDot = line.index(after: dotIndex)
+        guard afterDot < line.endIndex, line[afterDot] == " " else { return nil }
+        // Extract text after "N. "
+        let textStart = line.index(after: afterDot)
+        guard textStart < line.endIndex else { return nil }
+        return (number: number, text: String(line[textStart...]))
     }
 
     private static func renderInline<S: StringProtocol>(_ source: S) -> String {
@@ -2345,7 +2382,7 @@ enum MarkdownTemplateRenderer {
         return html
     }
 
-    private static func escapeHTML(_ string: String) -> String {
+    static func escapeHTML(_ string: String) -> String {
         var result = ""
         result.reserveCapacity(string.count + string.count / 8)
         for ch in string {
@@ -2561,7 +2598,7 @@ enum MarkdownTemplateRenderer {
         return html
     }
 
-    private static func renderStatBadges(_ stats: [[String: String]]) -> String {
+    static func renderStatBadges(_ stats: [[String: String]]) -> String {
         let badges = stats.compactMap { stat -> String? in
             guard let kind = stat["kind"],
                   let value = stat["value"],
@@ -2601,10 +2638,27 @@ enum MarkdownTemplateRenderer {
         if let range = baseHTML.range(of: cssEnd) {
             var fullHTML = baseHTML
             fullHTML.insert(contentsOf: "\n\(conversationCSS)", at: range.lowerBound)
-            // Replace the body content
+            // Replace the body content and add incremental-update helper script
             if let bodyStart = fullHTML.range(of: "<body>"),
                let bodyEnd = fullHTML.range(of: "</body>") {
-                fullHTML.replaceSubrange(bodyStart.upperBound..<bodyEnd.lowerBound, with: body)
+                let script = """
+                <script>
+                function __updateLastResponse(html){
+                  var el=document.querySelector('.assistant-response:last-child');
+                  if(el){el.innerHTML=html;}
+                  window.scrollTo(0,document.body.scrollHeight);
+                }
+                function __appendTurn(userHtml,respHtml){
+                  var c=document.querySelector('.conversation');
+                  if(!c)return;
+                  c.insertAdjacentHTML('beforeend','<hr class="turn-divider">');
+                  if(userHtml){c.insertAdjacentHTML('beforeend',userHtml);}
+                  c.insertAdjacentHTML('beforeend','<div class="assistant-response">'+respHtml+'</div>');
+                  window.scrollTo(0,document.body.scrollHeight);
+                }
+                </script>
+                """
+                fullHTML.replaceSubrange(bodyStart.upperBound..<bodyEnd.lowerBound, with: body + script)
             }
             return fullHTML
         }

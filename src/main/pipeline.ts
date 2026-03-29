@@ -241,7 +241,7 @@ export class Pipeline extends EventEmitter {
 
       this.setStatus(PipelineStatus.RECORDING)
       const needScreenshot = mode === 'assistant' ? true : config.polishEnabled
-      this.screenshotActive = !!(config.screenshotEnabled && needScreenshot && !this.isFollowUp)
+      this.screenshotActive = !!(config.screenshotEnabled && needScreenshot)
       this.showHud('正在聆听...', 'recording')
       this.broadcastToWindows(IPC.AUDIO_START, config.audioThreshold ?? 0, config.selectedMicrophoneId ?? '', mode)
 
@@ -422,6 +422,11 @@ export class Pipeline extends EventEmitter {
         this.setStatus(PipelineStatus.POLISHING)
         this.showHud('正在润色...', 'processing')
 
+        console.log(`[Pipeline] === PRE-POLISH START ===`)
+        console.log(`[Pipeline] Pre-polish input: "${outputText}"`)
+        console.log(`[Pipeline] Pre-polish prompt: "${polishPrompt.substring(0, 100)}..."`)
+        console.log(`[Pipeline] Pre-polish model: ${config.polishModel}`)
+        console.log(`[Pipeline] Pre-polish screenshot: ${this.screenshotBase64 ? `yes (${this.screenshotBase64.length} bytes)` : 'no'}`)
         try {
           const polisher = new LLMPolisher(apiKey, config.polishModel, config.polishBaseUrl)
           outputText = await polisher.polishStream(
@@ -437,6 +442,8 @@ export class Pipeline extends EventEmitter {
               signal: llmSignal
             }
           )
+          console.log(`[Pipeline] Pre-polish output: "${outputText}"`)
+          console.log(`[Pipeline] === PRE-POLISH END ===`)
         } catch (err) {
           if (this.isAbortError(err, llmSignal)) {
             this.finishCancelledRun(llmSignal)
@@ -453,6 +460,11 @@ export class Pipeline extends EventEmitter {
       if (!apiKey) {
         console.warn('[Pipeline] Assistant enabled but no polishApiKey configured, skipping')
       } else {
+        console.log(`[Pipeline] === ASSISTANT CALL START ===`)
+        console.log(`[Pipeline] Assistant model: ${config.assistantModel}`)
+        console.log(`[Pipeline] Assistant prompt: "${config.assistantPrompt.substring(0, 100)}..."`)
+        console.log(`[Pipeline] Assistant screenshot: ${this.screenshotBase64 ? `yes (${this.screenshotBase64.length} bytes)` : 'no'}`)
+        console.log(`[Pipeline] Assistant isFollowUp: ${this.isFollowUp}`)
         this.setStatus(PipelineStatus.POLISHING)
         const showsAssistantResultWindow = config.assistantOutputMode === 'window'
         if (showsAssistantResultWindow) {
@@ -477,6 +489,10 @@ export class Pipeline extends EventEmitter {
 
           const historyForLLM = this.conversationHistory.slice(0, -1)
           const currentTurnIndex = this.conversationTurnIndex
+
+          console.log(`[Pipeline] Assistant userPrompt: "${userPrompt.substring(0, 100)}"`)
+          console.log(`[Pipeline] Assistant selectedText: "${selectedText?.substring(0, 50) || ''}"`)
+          console.log(`[Pipeline] Assistant historyLen: ${historyForLLM.length}`)
 
           const polisher = new LLMPolisher(apiKey, config.assistantModel, config.polishBaseUrl)
           const initialAssistantWindowText = config.assistantEnableCodeInterpreter || config.assistantEnableSearch
@@ -898,7 +914,6 @@ export class Pipeline extends EventEmitter {
     console.log('[Pipeline] Starting follow-up voice recording')
     this.isFollowUp = true
     this.isProcessingComplete = false
-    this.screenshotBase64 = ''
     await this.startRecording('assistant')
   }
 
@@ -993,10 +1008,19 @@ export class Pipeline extends EventEmitter {
     }
 
     try {
-      // Follow-up turns don't capture selected text or screenshot:
-      // the result panel is frontmost, so Cmd+C would copy its content
-      // and screenshot would capture the panel itself, not the user's work context.
-      this.screenshotBase64 = ''
+      // Capture screenshot for follow-up context if enabled
+      if (config.screenshotEnabled) {
+        try {
+          this.screenshotBase64 = await this.captureScreen()
+          console.log(`[Pipeline] Follow-up screenshot captured, size=${this.screenshotBase64.length}`)
+        } catch (err) {
+          console.error('[Pipeline] Follow-up screenshot capture failed:', err)
+          this.screenshotBase64 = ''
+        }
+      } else {
+        this.screenshotBase64 = ''
+      }
+
       const userPrompt = text
 
       // Add user message to history
