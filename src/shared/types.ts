@@ -77,6 +77,27 @@ export interface ScreenDocResultPayload {
   createdAt: number
 }
 
+export type ScreenDocHistoryStatus = Exclude<ScreenDocStatus, 'idle'> | 'cancelled'
+
+export interface ScreenDocHistorySummary {
+  id: string
+  createdAt: number
+  updatedAt: number
+  status: ScreenDocHistoryStatus
+  title: string
+  summary?: string
+  stepCount?: number
+  durationMs?: number
+  error?: string
+}
+
+export interface ScreenDocHistoryRecord extends ScreenDocHistorySummary {
+  analysis?: ScreenDocAnalysis
+  screenshots?: ScreenDocScreenshot[]
+  markdown?: string
+  transcript?: string
+}
+
 export interface ScreenDocStatusPayload {
   status: ScreenDocStatus
   startedAt?: number
@@ -280,6 +301,10 @@ export interface AppConfig {
   assistantActivePresetIndex: number
   assistantResultWindowPosition?: OverlayWindowPosition
   assistantResultWindowSize?: OverlayWindowSize
+  screenDocPrompt: string
+  screenDocPresets: PolishPreset[]
+  screenDocActivePresetIndex: number
+  screenDocHistoryMaxCount: number
   // General
   launchAtLogin: boolean
   selectedMicrophoneId: string
@@ -374,6 +399,44 @@ export const ASSISTANT_PRESET_STANDARD: PolishPreset = {
 
 export const ASSISTANT_BUILTIN_PRESETS: PolishPreset[] = [ASSISTANT_PRESET_STANDARD]
 
+export const SCREEN_DOC_DEFAULT_PROMPT = [
+  '请根据这段录屏整理一份步骤式 SOP 文档。',
+  '你会同时看到录屏画面和一份独立的语音转写文本；视频文件中的音轨不要作为理解依据，优先结合画面与转写文本。',
+  '请严格输出 JSON，不要输出 Markdown，不要输出解释。',
+  'JSON 结构如下：',
+  '{',
+  '  "title": "文档标题",',
+  '  "summary": "一句到三句摘要",',
+  '  "notes": ["补充说明，可为空数组"],',
+  '  "steps": [',
+  '    {',
+  '      "title": "步骤标题",',
+  '      "description": "详细说明，包含用户的关键操作与语音说明",',
+  '      "timestampMs": 12000,',
+  '      "screenshotTimestampMs": 12500',
+  '    }',
+  '  ]',
+  '}',
+  '录屏总时长约 {duration_seconds} 秒。',
+  '要求：',
+  '1. 步骤保持 3 到 8 步，覆盖完整操作流程。',
+  '2. timestampMs 和 screenshotTimestampMs 必须使用毫秒整数，并且位于视频时长范围内。',
+  '3. 标题和描述使用中文，描述要明确指出用户点击、输入、切换或确认了什么。',
+  '4. 如果语音转写提供了操作目的或注意事项，请合并到对应步骤描述里。',
+  '5. 如果没有足够证据，不要编造。notes 可以写“未观察到”之类的说明。',
+  '',
+  '以下是独立的语音转写文本：',
+  '{transcript}'
+].join('\n')
+
+export const SCREEN_DOC_PRESET_STANDARD: PolishPreset = {
+  name: '标准整理',
+  builtIn: true,
+  prompt: SCREEN_DOC_DEFAULT_PROMPT
+}
+
+export const SCREEN_DOC_BUILTIN_PRESETS: PolishPreset[] = [SCREEN_DOC_PRESET_STANDARD]
+
 // Vocabulary prompt template
 export const VOCAB_PROMPT_DEFAULT_TEMPLATE = `以下是词汇表，请尽量进行匹配和替换：\n\n{vocabulary_list}\n\n你是一名文字润色助手，请不要直接回答语音识别出的问题，而是保持原意对语音识别文本进行润色。`
 
@@ -437,6 +500,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   assistantActivePresetIndex: 0,
   assistantResultWindowPosition: undefined,
   assistantResultWindowSize: undefined,
+  screenDocPrompt: SCREEN_DOC_DEFAULT_PROMPT,
+  screenDocPresets: [...SCREEN_DOC_BUILTIN_PRESETS],
+  screenDocActivePresetIndex: 0,
+  screenDocHistoryMaxCount: 20,
   // General
   selectedMicrophoneId: '',
   launchAtLogin: false,

@@ -307,14 +307,7 @@ if (!gotSingleInstanceLock) {
   screenDocService = new ScreenDocService({
     overlay: overlayManager,
     configStore,
-    screenRecorder: nativeScreenRecorder,
-    getAssistantResultWindow: () => assistantResultWindow,
-    setAssistantResultWindow: (window) => {
-      if (window && window !== assistantResultWindow) {
-        attachWindowDebugLogging(window, 'assistant-result')
-      }
-      assistantResultWindow = window
-    }
+    screenRecorder: nativeScreenRecorder
   })
   pipeline = new Pipeline(overlayManager, configStore, vocabularyStore)
   keyboardListener.onOverlayResultClosed((position, size) => {

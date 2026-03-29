@@ -96,7 +96,11 @@ export function updateTrayMenu(status?: PipelineStatus): void {
 
   const currentStatus = status || getStatus?.() || PipelineStatus.IDLE
   const currentScreenDocStatus = getScreenDocStatus?.() ?? 'idle'
-  const isScreenDocActive = currentScreenDocStatus !== 'idle'
+  const isScreenDocActive =
+    currentScreenDocStatus === 'recording' ||
+    currentScreenDocStatus === 'finalizing' ||
+    currentScreenDocStatus === 'uploading' ||
+    currentScreenDocStatus === 'analyzing'
 
   const screenDocLabels: Record<ScreenDocStatus, string> = {
     idle: '就绪',

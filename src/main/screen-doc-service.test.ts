@@ -8,23 +8,9 @@ import { DEFAULT_CONFIG } from '../shared/types'
 
 const electronMocks = vi.hoisted(() => ({
   getAllWindows: vi.fn(() => []),
-  showOpenDialog: vi.fn()
+  showOpenDialog: vi.fn(),
+  getPath: vi.fn(() => tmpdir())
 }))
-
-const assistantResultMocks = vi.hoisted(() => {
-  const windowStub = {
-    isDestroyed: vi.fn(() => false),
-    webContents: {}
-  }
-
-  return {
-    windowStub,
-    createAssistantResultWindow: vi.fn(() => windowStub),
-    showAssistantResultWindow: vi.fn(),
-    hideAssistantResultWindow: vi.fn(),
-    getLatestAssistantResultPayload: vi.fn(() => ({ resultKind: 'screen_doc' }))
-  }
-})
 
 const asrMocks = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -39,16 +25,12 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: electronMocks.getAllWindows
   },
+  app: {
+    getPath: electronMocks.getPath
+  },
   dialog: {
     showOpenDialog: electronMocks.showOpenDialog
   }
-}))
-
-vi.mock('./assistant-result-window', () => ({
-  createAssistantResultWindow: assistantResultMocks.createAssistantResultWindow,
-  showAssistantResultWindow: assistantResultMocks.showAssistantResultWindow,
-  hideAssistantResultWindow: assistantResultMocks.hideAssistantResultWindow,
-  getLatestAssistantResultPayload: assistantResultMocks.getLatestAssistantResultPayload
 }))
 
 vi.mock('./asr-client', async () => {
@@ -150,11 +132,13 @@ describe('ScreenDocService', () => {
     asrMocks.instances.length = 0
     electronMocks.getAllWindows.mockReturnValue([])
     electronMocks.showOpenDialog.mockReset()
+    electronMocks.getPath.mockReturnValue(tmpdir())
   })
 
   it('uploads mp4 recordings to DashScope temporary storage and analyzes them as video', async () => {
     const overlay = createOverlayStub()
     const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-recording-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
     const recordingPath = join(tmpDir, 'demo.mp4')
     await writeFile(recordingPath, 'fake-mp4')
     const fetchMock = vi.fn()
@@ -220,9 +204,7 @@ describe('ScreenDocService', () => {
     const service = new ScreenDocService({
       overlay: overlay as never,
       configStore: createConfigStore() as never,
-      screenRecorder: screenRecorder as never,
-      getAssistantResultWindow: () => null,
-      setAssistantResultWindow: vi.fn()
+      screenRecorder: screenRecorder as never
     })
 
     await expect(service.start()).resolves.toEqual({ ok: true })
@@ -235,15 +217,13 @@ describe('ScreenDocService', () => {
     expect(screenRecorder.startRecording).toHaveBeenCalledOnce()
     expect(screenRecorder.stopRecording).toHaveBeenCalledOnce()
     expect(screenRecorder.extractTimelineFrames).not.toHaveBeenCalled()
-    expect(assistantResultMocks.showAssistantResultWindow).toHaveBeenCalledOnce()
-    expect(assistantResultMocks.showAssistantResultWindow).toHaveBeenCalledWith(
-      assistantResultMocks.windowStub,
-      expect.objectContaining({
-        resultKind: 'screen_doc',
-        exportArtifactId: result?.artifactId,
-        title: '录屏整理标题'
-      })
+    const savedRecord = await service.getHistoryRecord(result!.artifactId)
+    expect(savedRecord?.status).toBe('ready')
+    expect(savedRecord?.analysis?.title).toBe('录屏整理标题')
+    const persistedRecord = JSON.parse(
+      await readFile(join(tmpDir, 'screen-doc-history', 'artifacts', result!.artifactId, 'record.json'), 'utf8')
     )
+    expect(persistedRecord.title).toBe('录屏整理标题')
 
     expect(fetchMock).toHaveBeenCalledTimes(3)
     const analyzeCall = fetchMock.mock.calls[2]
@@ -262,6 +242,8 @@ describe('ScreenDocService', () => {
 
   it('falls back to frame analysis and exports markdown with relative asset paths', async () => {
     const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-history-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
     const screenRecorder = createScreenRecorderStub({
       stopRecording: async () => ({
         filePath: '/tmp/demo.webm',
@@ -309,9 +291,7 @@ describe('ScreenDocService', () => {
     const service = new ScreenDocService({
       overlay: overlay as never,
       configStore: createConfigStore() as never,
-      screenRecorder: screenRecorder as never,
-      getAssistantResultWindow: () => null,
-      setAssistantResultWindow: vi.fn()
+      screenRecorder: screenRecorder as never
     })
 
     await service.start()
@@ -321,7 +301,7 @@ describe('ScreenDocService', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(screenRecorder.extractTimelineFrames).toHaveBeenCalledOnce()
 
-    const exportDir = await service.exportLatestResult(result?.artifactId)
+    const exportDir = await service.exportRecord(result?.artifactId)
     expect(exportDir).toBeTruthy()
 
     const assets = await readdir(join(exportDir!, 'assets'))
@@ -335,15 +315,90 @@ describe('ScreenDocService', () => {
     expect(analyzeBody.messages[1].content[0].type).toBe('video')
   })
 
+  it('repairs mildly malformed JSON from video analysis instead of falling back to frames', async () => {
+    const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-repair-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
+    const recordingPath = join(tmpDir, 'repair.mp4')
+    await writeFile(recordingPath, 'fake-mp4')
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            upload_dir: 'tmp/uploads',
+            oss_access_key_id: 'ak',
+            signature: 'sig',
+            policy: 'policy',
+            x_oss_object_acl: 'private',
+            x_oss_forbid_overwrite: 'true',
+            upload_host: 'https://upload.example.com'
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => ''
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: `{
+                "title": "修复后的录屏整理",
+                "summary": "模型返回了轻微坏掉的 JSON。",
+                "notes": [],
+                "steps": [
+                  {
+                    "title": "点击保存",
+                    "description": "用户点击"保存"按钮并确认提交。",
+                    "timestampMs": 1800,
+                    "screenshotTimestampMs": 2000,
+                  }
+                ]
+              }`
+            }
+          }]
+        })
+      })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    const screenRecorder = createScreenRecorderStub({
+      startRecording: async () => ({ filePath: recordingPath, targetDescription: '窗口 1440x900' }),
+      stopRecording: async () => ({
+        filePath: recordingPath,
+        mimeType: 'video/mp4',
+        durationMs: 5000,
+        targetDescription: '窗口 1440x900'
+      })
+    })
+
+    const service = new ScreenDocService({
+      overlay: overlay as never,
+      configStore: createConfigStore() as never,
+      screenRecorder: screenRecorder as never
+    })
+
+    await expect(service.start()).resolves.toEqual({ ok: true })
+    const result = await service.stop()
+
+    expect(result?.analysis.title).toBe('修复后的录屏整理')
+    expect(result?.analysis.steps[0]?.description).toContain('点击"保存"按钮')
+    expect(screenRecorder.extractTimelineFrames).not.toHaveBeenCalled()
+  })
+
   it('cancels the native recording and resets status back to idle', async () => {
     const overlay = createOverlayStub()
+    const tmpDir = await mkdtemp(join(tmpdir(), 'screen-doc-cancel-'))
+    electronMocks.getPath.mockReturnValue(tmpDir)
     const screenRecorder = createScreenRecorderStub()
     const service = new ScreenDocService({
       overlay: overlay as never,
       configStore: createConfigStore() as never,
-      screenRecorder: screenRecorder as never,
-      getAssistantResultWindow: () => null,
-      setAssistantResultWindow: vi.fn()
+      screenRecorder: screenRecorder as never
     })
 
     await service.start()
@@ -352,5 +407,6 @@ describe('ScreenDocService', () => {
     expect(screenRecorder.cancelRecording).toHaveBeenCalledOnce()
     expect(service.getStatus()).toBe('idle')
     expect(overlay.hideHud).toHaveBeenCalled()
+    expect(service.getHistoryList()[0]?.status).toBe('cancelled')
   })
 })

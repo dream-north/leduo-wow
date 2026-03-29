@@ -6,6 +6,7 @@ import {
   ASR_DEFAULT_BASE_URL,
   POLISH_DEFAULT_BASE_URL,
   ASSISTANT_DEFAULT_PROMPT,
+  SCREEN_DOC_BUILTIN_PRESETS,
   ASR_MODEL_PRESETS,
   TEXT_MODEL_PRESETS,
   FLASH_ASR_MODEL_PRESETS,
@@ -18,6 +19,7 @@ import {
 import { getRendererPlatform } from '../utils/platform'
 import type {
   PolishPreset,
+  ScreenDocHistoryRecord,
   ScreenDocStatusPayload,
   ShortcutModeStatus,
   ShortcutServiceStatus,
@@ -38,8 +40,10 @@ const showAppleScriptInputMethod = platform === 'darwin'
 const showDockVisibilityToggle = platform === 'darwin'
 const showAccessibilityPermission = platform === 'darwin'
 const showScreenPermission = platform === 'darwin'
+const isHotReloadSession = Boolean(import.meta.hot)
 const initialTab = sessionStorage.getItem('settings-active-tab')
 const activeTab = ref(initialTab === 'prompt' ? 'prompt-transcription' : (initialTab || 'general'))
+const screenDocSubTab = ref<'settings' | 'history'>('settings')
 const contentRef = ref<HTMLElement | null>(null)
 const tabScrollPositions = new Map<string, number>()
 const dockUpdateLocked = ref(false)
@@ -107,6 +111,7 @@ const tabs = [
   { id: 'api', label: 'API', icon: '🔑' },
   { id: 'prompt-transcription', label: '语音识别', icon: '🎤' },
   { id: 'prompt-assistant', label: '语音助手', icon: '🤖' },
+  { id: 'screen-doc', label: '录屏整理', icon: '▣' },
   { id: 'memory', label: '记忆', icon: '🧠' },
   { id: 'history', label: '历史', icon: '📜' },
   { id: 'about', label: '关于', icon: 'ℹ️' }
@@ -579,6 +584,54 @@ async function addAssistantPreset(): Promise<void> {
   await store.saveSetting('assistantPrompt', '')
 }
 
+async function saveScreenDocPrompt(): Promise<void> {
+  const idx = store.screenDocActivePresetIndex
+  if (idx >= 0 && idx < store.screenDocPresets.length) {
+    store.screenDocPresets[idx].prompt = store.screenDocPrompt
+    await store.saveSetting('screenDocPresets', store.screenDocPresets)
+  }
+  await store.saveSetting('screenDocPrompt', store.screenDocPrompt)
+  showSaveMessage('视频分析提示词已保存')
+}
+
+async function switchScreenDocPreset(index: number): Promise<void> {
+  store.screenDocActivePresetIndex = index
+  store.screenDocPrompt = store.screenDocPresets[index].prompt
+  await store.saveSetting('screenDocActivePresetIndex', index)
+  await store.saveSetting('screenDocPrompt', store.screenDocPrompt)
+  showSaveMessage(`已切换到「${store.screenDocPresets[index].name}」`)
+}
+
+async function addScreenDocPreset(): Promise<void> {
+  const preset: PolishPreset = {
+    name: `自定义分析 ${store.screenDocPresets.filter((p) => !p.builtIn).length + 1}`,
+    prompt: ''
+  }
+  store.screenDocPresets.push(preset)
+  const newIndex = store.screenDocPresets.length - 1
+  store.screenDocActivePresetIndex = newIndex
+  store.screenDocPrompt = preset.prompt
+  await store.saveSetting('screenDocPresets', store.screenDocPresets)
+  await store.saveSetting('screenDocActivePresetIndex', newIndex)
+  await store.saveSetting('screenDocPrompt', '')
+}
+
+async function deleteScreenDocPreset(index: number): Promise<void> {
+  if (store.screenDocPresets[index]?.builtIn) return
+  store.screenDocPresets.splice(index, 1)
+  if (store.screenDocActivePresetIndex >= store.screenDocPresets.length) {
+    store.screenDocActivePresetIndex = store.screenDocPresets.length - 1
+  }
+  if (store.screenDocActivePresetIndex === index || store.screenDocActivePresetIndex >= store.screenDocPresets.length) {
+    store.screenDocActivePresetIndex = 0
+  }
+  store.screenDocPrompt = store.screenDocPresets[store.screenDocActivePresetIndex].prompt
+  await store.saveSetting('screenDocPresets', store.screenDocPresets)
+  await store.saveSetting('screenDocActivePresetIndex', store.screenDocActivePresetIndex)
+  await store.saveSetting('screenDocPrompt', store.screenDocPrompt)
+  showSaveMessage('已删除')
+}
+
 // Preset management
 async function switchPreset(index: number): Promise<void> {
   store.activePresetIndex = index
@@ -621,6 +674,8 @@ async function deletePreset(index: number): Promise<void> {
 
 const editingPresetName = ref(false)
 const editPresetNameValue = ref('')
+const editingScreenDocPresetName = ref(false)
+const editScreenDocPresetNameValue = ref('')
 const showCustomAsrModel = ref(false)
 const showCustomPolishModel = ref(false)
 const showCustomAssistantModel = ref(false)
@@ -642,12 +697,25 @@ function startEditPresetName(index: number): void {
   editPresetNameValue.value = store.polishPresets[index].name
 }
 
+function startEditScreenDocPresetName(index: number): void {
+  editingScreenDocPresetName.value = true
+  editScreenDocPresetNameValue.value = store.screenDocPresets[index].name
+}
+
 async function savePresetName(index: number): Promise<void> {
   if (editPresetNameValue.value.trim()) {
     store.polishPresets[index].name = editPresetNameValue.value.trim()
     await store.saveSetting('polishPresets', store.polishPresets)
   }
   editingPresetName.value = false
+}
+
+async function saveScreenDocPresetName(index: number): Promise<void> {
+  if (editScreenDocPresetNameValue.value.trim()) {
+    store.screenDocPresets[index].name = editScreenDocPresetNameValue.value.trim()
+    await store.saveSetting('screenDocPresets', store.screenDocPresets)
+  }
+  editingScreenDocPresetName.value = false
 }
 
 function isBuiltInModified(index: number): boolean {
@@ -668,6 +736,27 @@ async function resetPreset(index: number): Promise<void> {
     await store.saveSetting('polishPrompt', store.polishPrompt)
   }
   await store.saveSetting('polishPresets', store.polishPresets)
+  showSaveMessage('已重置为默认提示词')
+}
+
+function isScreenDocBuiltInModified(index: number): boolean {
+  const preset = store.screenDocPresets[index]
+  if (!preset?.builtIn) return false
+  const original = SCREEN_DOC_BUILTIN_PRESETS.find((item) => item.name === preset.name)
+  return !!original && preset.prompt !== original.prompt
+}
+
+async function resetScreenDocPreset(index: number): Promise<void> {
+  const preset = store.screenDocPresets[index]
+  if (!preset?.builtIn) return
+  const original = SCREEN_DOC_BUILTIN_PRESETS.find((item) => item.name === preset.name)
+  if (!original) return
+  preset.prompt = original.prompt
+  if (store.screenDocActivePresetIndex === index) {
+    store.screenDocPrompt = original.prompt
+    await store.saveSetting('screenDocPrompt', store.screenDocPrompt)
+  }
+  await store.saveSetting('screenDocPresets', store.screenDocPresets)
   showSaveMessage('已重置为默认提示词')
 }
 
@@ -945,12 +1034,12 @@ const screenDocStatusText = computed(() => {
       return 'Qwen 正在结合语音说明和操作画面整理 SOP。'
     case 'ready':
       return screenDocStatus.value.stepCount
-        ? `已生成 ${screenDocStatus.value.stepCount} 个步骤，可在结果窗导出 Markdown。`
-        : '整理完成，可在结果窗查看并导出。'
+        ? `已生成 ${screenDocStatus.value.stepCount} 个步骤，稍后会归档到历史记录中。`
+        : '整理完成，可在历史记录中查看和导出。'
     case 'error':
       return screenDocStatus.value.error || '本次录屏整理没有成功完成。'
     default:
-      return '点击开始后，将录制你的操作过程和语音说明，并自动整理成带截图的步骤文档。'
+      return '点击开始后，将录制你的操作过程和语音说明，并在后台整理成带截图的步骤文档。'
   }
 })
 
@@ -1311,9 +1400,84 @@ function installUpdate(): void {
 
 // History
 const historyRecords = ref<TranscriptionRecord[]>([])
+const screenDocHistoryRecords = ref<ScreenDocHistoryRecord[]>([])
+const selectedScreenDocRecordId = ref<string | null>(null)
+const selectedScreenDocRecord = ref<ScreenDocHistoryRecord | null>(null)
+const screenDocHistoryLoading = ref(false)
+let unsubscribeScreenDocHistoryUpdate: (() => void) | null = null
 
 async function loadHistory(): Promise<void> {
   historyRecords.value = await window.electronAPI.getHistory()
+}
+
+async function loadScreenDocHistory(options: { keepSelection?: boolean } = {}): Promise<void> {
+  screenDocHistoryLoading.value = true
+  try {
+    screenDocHistoryRecords.value = await window.electronAPI.getScreenDocHistory()
+    if (screenDocHistoryRecords.value.length === 0) {
+      selectedScreenDocRecordId.value = null
+      selectedScreenDocRecord.value = null
+      return
+    }
+
+    const preferredId = options.keepSelection ? selectedScreenDocRecordId.value : null
+    const nextId = preferredId && screenDocHistoryRecords.value.some((item) => item.id === preferredId)
+      ? preferredId
+      : screenDocHistoryRecords.value[0]?.id ?? null
+
+    if (nextId) {
+      await selectScreenDocRecord(nextId)
+    }
+  } catch (err) {
+    console.error('Failed to load screen doc history:', err)
+  } finally {
+    screenDocHistoryLoading.value = false
+  }
+}
+
+async function selectScreenDocRecord(recordId: string): Promise<void> {
+  selectedScreenDocRecordId.value = recordId
+  selectedScreenDocRecord.value = await window.electronAPI.getScreenDocHistoryRecord(recordId)
+}
+
+function screenDocHistoryStatusLabel(status: ScreenDocHistoryRecord['status']): string {
+  switch (status) {
+    case 'recording':
+      return '录制中'
+    case 'finalizing':
+      return '封装中'
+    case 'uploading':
+      return '上传中'
+    case 'analyzing':
+      return '分析中'
+    case 'ready':
+      return '已完成'
+    case 'cancelled':
+      return '已取消'
+    case 'error':
+      return '失败'
+  }
+}
+
+async function exportScreenDocRecord(recordId: string): Promise<void> {
+  try {
+    const exportedPath = await window.electronAPI.exportScreenDocRecord(recordId)
+    if (exportedPath) {
+      showSaveMessage('已导出 Markdown')
+    }
+  } catch (err) {
+    console.error('Failed to export screen doc record:', err)
+    showSaveMessage(err instanceof Error ? err.message : '导出失败')
+  }
+}
+
+async function updateScreenDocHistoryMaxCount(event: Event): Promise<void> {
+  const val = parseInt((event.target as HTMLInputElement).value, 10)
+  const count = isNaN(val) || val < 5 ? 5 : val > 200 ? 200 : val
+  store.screenDocHistoryMaxCount = count
+  await store.saveSetting('screenDocHistoryMaxCount', count)
+  await loadScreenDocHistory({ keepSelection: true })
+  showSaveMessage('录屏整理历史保留数量已更新')
 }
 
 function formatTime(timestamp: number): string {
@@ -1356,6 +1520,7 @@ onMounted(async () => {
     await checkPermissions()
     await enumerateMicrophones()
     await loadHistory()
+    await loadScreenDocHistory()
     shortcutStatus.value = await window.electronAPI.getShortcutStatus()
     screenDocStatus.value = await window.electronAPI.getScreenDocStatus()
     if (screenDocStatus.value.status === 'recording') {
@@ -1379,6 +1544,10 @@ onMounted(async () => {
     // Listen for history updates
     unsubscribeHistoryUpdate = window.electronAPI.onHistoryUpdated(() => {
       loadHistory()
+    })
+
+    unsubscribeScreenDocHistoryUpdate = window.electronAPI.onScreenDocHistoryUpdated(() => {
+      void loadScreenDocHistory({ keepSelection: true })
     })
 
     unsubscribeShortcutStatus = window.electronAPI.onShortcutStatusChanged((status) => {
@@ -1405,6 +1574,7 @@ onMounted(async () => {
           screenDocStartedAt = 0
           void teardownScreenDocAudio()
         }
+        void loadScreenDocHistory({ keepSelection: true })
       }
       if (
         payload.status === 'finalizing' ||
@@ -1435,6 +1605,9 @@ onUnmounted(() => {
   if (unsubscribeVocabularyUpdate) {
     unsubscribeVocabularyUpdate()
   }
+  if (unsubscribeScreenDocHistoryUpdate) {
+    unsubscribeScreenDocHistoryUpdate()
+  }
   if (unsubscribeShortcutStatus) {
     unsubscribeShortcutStatus()
   }
@@ -1448,6 +1621,12 @@ onUnmounted(() => {
   if (shortcutCaptureSuspended) {
     shortcutCaptureSuspended = false
     void window.electronAPI.setShortcutCaptureActive(false)
+  }
+  if (isHotReloadSession) {
+    stopScreenDocElapsedTimer()
+    screenDocStartedAt = 0
+    void teardownScreenDocAudio()
+    return
   }
   void cancelScreenDocCapture(false)
 })
@@ -1929,60 +2108,6 @@ function closeMergeDialog(): void {
           </div>
         </div>
 
-        <div class="setting-group">
-          <label class="setting-label">录屏整理</label>
-          <p class="setting-description">
-            录制屏幕操作和麦克风说明，录制完成后自动生成带截图的步骤文档，并可在结果窗导出 Markdown。
-          </p>
-          <div class="screen-doc-panel">
-            <div class="screen-doc-header">
-              <div class="screen-doc-header-main">
-                <div class="screen-doc-icon">▣</div>
-                <div class="screen-doc-copy">
-                  <div class="screen-doc-title-row">
-                    <span class="screen-doc-title">{{ screenDocStatusTitle }}</span>
-                    <span :class="['screen-doc-badge', `is-${screenDocEffectiveStatus}`]">
-                      {{ screenDocEffectiveStatus }}
-                    </span>
-                  </div>
-                  <p class="screen-doc-text">{{ screenDocStatusText }}</p>
-                </div>
-              </div>
-              <div class="screen-doc-actions">
-                <button
-                  class="btn btn-primary"
-                  :disabled="!screenDocCanStart && !screenDocCanStop"
-                  @click="toggleScreenDocCapture"
-                >
-                  {{ screenDocPrimaryActionLabel }}
-                </button>
-                <button
-                  v-if="screenDocCanCancelProcessing || screenDocCapturePhase !== 'idle'"
-                  class="btn btn-secondary"
-                  @click="cancelScreenDocProcessing"
-                >
-                  取消本次
-                </button>
-              </div>
-            </div>
-
-            <div class="screen-doc-meta">
-              <div class="screen-doc-meta-item">
-                <span class="screen-doc-meta-label">录制时长</span>
-                <span class="screen-doc-meta-value">{{ screenDocDurationLabel }}</span>
-              </div>
-              <div class="screen-doc-meta-item">
-                <span class="screen-doc-meta-label">当前状态</span>
-                <span class="screen-doc-meta-value">{{ screenDocStatusTitle }}</span>
-              </div>
-              <div class="screen-doc-meta-item">
-                <span class="screen-doc-meta-label">首版限制</span>
-                <span class="screen-doc-meta-value">macOS + 麦克风说明</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- Shortcuts -->
         <div class="setting-group">
           <label class="setting-label">全局快捷键</label>
@@ -2419,7 +2544,7 @@ function closeMergeDialog(): void {
 
           <!-- Preset selector -->
           <div class="setting-group">
-            <label class="setting-label">提示词预设</label>
+            <label class="setting-label">视频分析预设</label>
             <div class="preset-list">
               <button
                 v-for="(preset, index) in store.polishPresets"
@@ -2681,6 +2806,273 @@ function closeMergeDialog(): void {
               <button class="btn btn-text" @click="resetAssistantPrompt">重置为默认</button>
             </div>
           </div>
+      </div>
+
+      <div v-if="activeTab === 'screen-doc'" class="tab-content">
+        <h2 class="section-title">录屏整理</h2>
+        <p class="setting-description">把屏幕操作和语音说明录下来，后台整理成可回看的步骤文档，并统一归档到历史记录里。</p>
+
+        <div class="mode-tabs" style="margin-top: 8px;">
+          <button :class="['mode-tab', { active: screenDocSubTab === 'settings' }]" @click="screenDocSubTab = 'settings'">
+            开始与设置
+          </button>
+          <button :class="['mode-tab', { active: screenDocSubTab === 'history' }]" @click="screenDocSubTab = 'history'">
+            历史记录 ({{ screenDocHistoryRecords.length }})
+          </button>
+        </div>
+
+        <div v-if="screenDocSubTab === 'settings'">
+          <div class="setting-group">
+            <label class="setting-label">开始录制</label>
+            <p class="setting-description">
+              点击开始后会拉起系统原生录屏选择器。录制过程中只采集屏幕画面和麦克风说明，不弹出结果悬浮窗。
+            </p>
+            <div class="screen-doc-panel">
+              <div class="screen-doc-header">
+                <div class="screen-doc-header-main">
+                  <div class="screen-doc-icon">▣</div>
+                  <div class="screen-doc-copy">
+                    <div class="screen-doc-title-row">
+                      <span class="screen-doc-title">{{ screenDocStatusTitle }}</span>
+                      <span :class="['screen-doc-badge', `is-${screenDocEffectiveStatus}`]">
+                        {{ screenDocEffectiveStatus }}
+                      </span>
+                    </div>
+                    <p class="screen-doc-text">{{ screenDocStatusText }}</p>
+                  </div>
+                </div>
+                <div class="screen-doc-actions">
+                  <button
+                    class="btn btn-primary"
+                    :disabled="!screenDocCanStart && !screenDocCanStop"
+                    @click="toggleScreenDocCapture"
+                  >
+                    {{ screenDocPrimaryActionLabel }}
+                  </button>
+                  <button
+                    v-if="screenDocCanCancelProcessing || screenDocCapturePhase !== 'idle'"
+                    class="btn btn-secondary"
+                    @click="cancelScreenDocProcessing"
+                  >
+                    取消本次
+                  </button>
+                </div>
+              </div>
+
+              <div class="screen-doc-meta">
+                <div class="screen-doc-meta-item">
+                  <span class="screen-doc-meta-label">录制时长</span>
+                  <span class="screen-doc-meta-value">{{ screenDocDurationLabel }}</span>
+                </div>
+                <div class="screen-doc-meta-item">
+                  <span class="screen-doc-meta-label">当前状态</span>
+                  <span class="screen-doc-meta-value">{{ screenDocStatusTitle }}</span>
+                </div>
+                <div class="screen-doc-meta-item">
+                  <span class="screen-doc-meta-label">查看方式</span>
+                  <span class="screen-doc-meta-value">历史记录中查看与导出</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">历史保留数量</label>
+            <p class="setting-description">最多保留多少条录屏整理记录，超出后会自动删除旧记录和对应产物。</p>
+            <div class="setting-row">
+              <input
+                class="input-field"
+                type="number"
+                min="5"
+                max="200"
+                :value="store.screenDocHistoryMaxCount"
+                style="max-width: 100px; text-align: center"
+                @change="updateScreenDocHistoryMaxCount($event)"
+              />
+              <span style="font-size: 13px; color: var(--text-secondary)">条</span>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label class="setting-label">提示词预设</label>
+            <div class="preset-list">
+              <button
+                v-for="(preset, index) in store.screenDocPresets"
+                :key="`screen-doc-preset-${index}`"
+                :class="['preset-chip', { active: store.screenDocActivePresetIndex === index }]"
+                @click="switchScreenDocPreset(index)"
+              >
+                {{ preset.name }}
+                <span v-if="preset.builtIn" class="preset-badge">内置</span>
+              </button>
+              <button class="preset-chip preset-add" @click="addScreenDocPreset">+ 新建</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <div class="preset-header">
+              <template v-if="editingScreenDocPresetName">
+                <input
+                  v-model="editScreenDocPresetNameValue"
+                  class="input-field preset-name-input"
+                  @keyup.enter="saveScreenDocPresetName(store.screenDocActivePresetIndex)"
+                />
+                <button class="btn btn-primary btn-sm" @click="saveScreenDocPresetName(store.screenDocActivePresetIndex)">确定</button>
+              </template>
+              <template v-else>
+                <label class="setting-label" style="margin-bottom:0">
+                  {{ store.screenDocPresets[store.screenDocActivePresetIndex]?.name }}
+                </label>
+                <button
+                  v-if="!store.screenDocPresets[store.screenDocActivePresetIndex]?.builtIn"
+                  class="btn btn-secondary btn-sm"
+                  @click="startEditScreenDocPresetName(store.screenDocActivePresetIndex)"
+                >重命名</button>
+                <button
+                  v-if="!store.screenDocPresets[store.screenDocActivePresetIndex]?.builtIn"
+                  class="btn btn-secondary btn-sm btn-danger"
+                  @click="deleteScreenDocPreset(store.screenDocActivePresetIndex)"
+                >删除</button>
+                <button
+                  v-if="isScreenDocBuiltInModified(store.screenDocActivePresetIndex)"
+                  class="btn btn-secondary btn-sm"
+                  @click="resetScreenDocPreset(store.screenDocActivePresetIndex)"
+                >重置</button>
+              </template>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <p class="setting-description">
+              这里只配置发给 Qwen 视频模型的“第一阶段分析提示词”。
+              后续步骤文档的 Markdown 组装仍然由本地模板完成，目前没有单独的“文档整理提示词”。
+            </p>
+            <p class="setting-description">
+              可用占位符：
+              <code>{duration_seconds}</code>、
+              <code>{duration_ms}</code>、
+              <code>{transcript}</code>、
+              <code>{target_description}</code>。
+            </p>
+            <textarea
+              v-model="store.screenDocPrompt"
+              class="input-field"
+              rows="14"
+              placeholder="请根据这段录屏整理一份步骤式 SOP 文档..."
+            ></textarea>
+            <div class="prompt-actions">
+              <button class="btn btn-primary" @click="saveScreenDocPrompt">保存分析提示词</button>
+              <button class="btn btn-text" @click="resetScreenDocPreset(store.screenDocActivePresetIndex)">重置当前分析预设</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="screen-doc-history-layout">
+          <div class="screen-doc-history-sidebar">
+            <div class="screen-doc-history-toolbar">
+              <span class="screen-doc-history-count">共 {{ screenDocHistoryRecords.length }} 条</span>
+              <button class="btn btn-secondary btn-sm" @click="loadScreenDocHistory({ keepSelection: true })">刷新</button>
+            </div>
+            <div v-if="screenDocHistoryLoading" class="empty-history">正在加载录屏整理历史...</div>
+            <div v-else-if="screenDocHistoryRecords.length === 0" class="empty-history">暂无录屏整理记录</div>
+            <div v-else class="screen-doc-history-list">
+              <button
+                v-for="record in screenDocHistoryRecords"
+                :key="record.id"
+                :class="['screen-doc-history-item', { active: selectedScreenDocRecordId === record.id }]"
+                @click="selectScreenDocRecord(record.id)"
+              >
+                <div class="screen-doc-history-item-top">
+                  <span class="screen-doc-history-title">{{ record.title }}</span>
+                  <span :class="['screen-doc-badge', `is-${record.status}`]">
+                    {{ screenDocHistoryStatusLabel(record.status) }}
+                  </span>
+                </div>
+                <div class="screen-doc-history-meta-line">
+                  <span>{{ formatTime(record.createdAt) }}</span>
+                  <span v-if="record.stepCount">{{ record.stepCount }} 步</span>
+                  <span v-if="record.durationMs">{{ Math.max(1, Math.round(record.durationMs / 1000)) }} 秒</span>
+                </div>
+                <p v-if="record.summary" class="screen-doc-history-summary">{{ record.summary }}</p>
+                <p v-else-if="record.error" class="screen-doc-history-summary screen-doc-history-error">{{ record.error }}</p>
+              </button>
+            </div>
+          </div>
+
+          <div class="screen-doc-history-detail">
+            <div v-if="!selectedScreenDocRecord" class="empty-history">选择左侧记录查看详情</div>
+            <div v-else class="screen-doc-detail-card">
+              <div class="screen-doc-detail-header">
+                <div>
+                  <h3 class="screen-doc-detail-title">{{ selectedScreenDocRecord.title }}</h3>
+                  <div class="screen-doc-detail-meta">
+                    <span>{{ formatTime(selectedScreenDocRecord.createdAt) }}</span>
+                    <span>{{ screenDocHistoryStatusLabel(selectedScreenDocRecord.status) }}</span>
+                    <span v-if="selectedScreenDocRecord.stepCount">{{ selectedScreenDocRecord.stepCount }} 个步骤</span>
+                    <span v-if="selectedScreenDocRecord.durationMs">{{ Math.max(1, Math.round(selectedScreenDocRecord.durationMs / 1000)) }} 秒</span>
+                  </div>
+                </div>
+                <button
+                  v-if="selectedScreenDocRecord.status === 'ready'"
+                  class="btn btn-primary"
+                  @click="exportScreenDocRecord(selectedScreenDocRecord.id)"
+                >
+                  导出 Markdown
+                </button>
+              </div>
+
+              <p v-if="selectedScreenDocRecord.summary" class="screen-doc-detail-summary">
+                {{ selectedScreenDocRecord.summary }}
+              </p>
+              <p v-else-if="selectedScreenDocRecord.error" class="screen-doc-detail-error">
+                {{ selectedScreenDocRecord.error }}
+              </p>
+
+              <template v-if="selectedScreenDocRecord.analysis">
+                <div v-if="selectedScreenDocRecord.analysis.notes.length > 0" class="setting-group">
+                  <label class="setting-label">补充说明</label>
+                  <ul class="screen-doc-note-list">
+                    <li v-for="(note, index) in selectedScreenDocRecord.analysis.notes" :key="`screen-doc-note-${index}`">
+                      {{ note }}
+                    </li>
+                  </ul>
+                </div>
+
+                <div class="setting-group">
+                  <label class="setting-label">操作步骤</label>
+                  <div class="screen-doc-step-list">
+                    <div
+                      v-for="(step, stepIndex) in selectedScreenDocRecord.analysis.steps"
+                      :key="`${selectedScreenDocRecord.id}-${step.timestampMs}-${step.title}`"
+                      class="screen-doc-step-item"
+                    >
+                      <div class="screen-doc-step-copy">
+                        <div class="screen-doc-step-title-row">
+                          <span class="screen-doc-step-title">{{ step.title }}</span>
+                          <span class="screen-doc-step-time">{{ Math.max(0, Math.round(step.timestampMs / 1000)) }} 秒</span>
+                        </div>
+                        <p class="screen-doc-step-description">{{ step.description }}</p>
+                      </div>
+                      <img
+                        v-if="selectedScreenDocRecord.screenshots?.[stepIndex]?.dataUrl"
+                        :src="selectedScreenDocRecord.screenshots?.[stepIndex]?.dataUrl"
+                        class="screen-doc-step-image"
+                        :alt="step.title"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="selectedScreenDocRecord.analysis.transcript" class="setting-group">
+                  <label class="setting-label">语音说明摘录</label>
+                  <div class="screen-doc-transcript">
+                    {{ selectedScreenDocRecord.analysis.transcript }}
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
       </div>
 
 
@@ -3488,6 +3880,11 @@ function closeMergeDialog(): void {
   color: #15803d;
 }
 
+.screen-doc-badge.is-cancelled {
+  background: rgba(148, 163, 184, 0.16);
+  color: #475569;
+}
+
 .screen-doc-badge.is-error {
   background: rgba(239, 68, 68, 0.14);
   color: #b91c1c;
@@ -3526,6 +3923,158 @@ function closeMergeDialog(): void {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.screen-doc-history-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.screen-doc-history-sidebar,
+.screen-doc-detail-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.screen-doc-history-toolbar,
+.screen-doc-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.screen-doc-history-count,
+.screen-doc-detail-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.screen-doc-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.screen-doc-history-item {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 12px;
+  transition: all 0.15s ease;
+}
+
+.screen-doc-history-item:hover,
+.screen-doc-history-item.active {
+  border-color: rgba(0, 113, 227, 0.4);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.screen-doc-history-item-top,
+.screen-doc-step-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.screen-doc-history-title,
+.screen-doc-detail-title,
+.screen-doc-step-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.screen-doc-history-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.screen-doc-history-summary,
+.screen-doc-detail-summary,
+.screen-doc-step-description,
+.screen-doc-transcript {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.screen-doc-history-error,
+.screen-doc-detail-error {
+  color: #b91c1c;
+}
+
+.screen-doc-detail-header {
+  align-items: flex-start;
+}
+
+.screen-doc-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.screen-doc-note-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-primary);
+}
+
+.screen-doc-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.screen-doc-step-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.screen-doc-step-copy {
+  min-width: 0;
+}
+
+.screen-doc-step-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.screen-doc-step-image {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  object-fit: cover;
+  background: #fff;
+}
+
+.screen-doc-transcript {
+  white-space: pre-wrap;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 8px;
 }
 
 .shortcut-display {
@@ -3614,6 +4163,14 @@ function closeMergeDialog(): void {
   }
 
   .screen-doc-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .screen-doc-history-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .screen-doc-step-item {
     grid-template-columns: 1fr;
   }
 }

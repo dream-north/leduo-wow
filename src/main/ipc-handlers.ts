@@ -89,6 +89,9 @@ export function registerIpcHandlers(
         })
       }
     }
+    if (key === 'screenDocHistoryMaxCount') {
+      void screenDocService.pruneHistory(value as number)
+    }
 
     return true
   })
@@ -150,8 +153,16 @@ export function registerIpcHandlers(
     return screenDocService.getLatestResult()
   })
 
+  ipcMain.handle(IPC.SCREEN_DOC_HISTORY_GET, () => {
+    return screenDocService.getHistoryList()
+  })
+
+  ipcMain.handle(IPC.SCREEN_DOC_HISTORY_ITEM_GET, (_event, recordId: string) => {
+    return screenDocService.getHistoryRecord(recordId)
+  })
+
   ipcMain.handle(IPC.SCREEN_DOC_EXPORT, async (_event, artifactId?: string) => {
-    return await screenDocService.exportLatestResult(artifactId)
+    return await screenDocService.exportRecord(artifactId)
   })
 
   // Permissions
@@ -228,13 +239,6 @@ export function registerIpcHandlers(
 
   ipcMain.on(IPC.ASSISTANT_RESULT_CLOSE, () => {
     const assistantResultWindow = getAssistantResultWindow()
-    const latestPayload = assistantResultWindow && !assistantResultWindow.isDestroyed()
-      ? getLatestAssistantResultPayload(assistantResultWindow)
-      : null
-    if (latestPayload?.resultKind === 'screen_doc') {
-      screenDocService.handleResultWindowClosed()
-      return
-    }
     if (assistantResultWindow && !assistantResultWindow.isDestroyed()) {
       const [x, y] = assistantResultWindow.getPosition()
       const [width, height] = assistantResultWindow.getSize()

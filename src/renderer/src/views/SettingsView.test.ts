@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ScreenDocStatusPayload, ShortcutServiceStatus, UpdateStatusPayload } from '../../../shared/types'
+import type { ScreenDocHistoryRecord, ScreenDocStatusPayload, ShortcutServiceStatus, UpdateStatusPayload } from '../../../shared/types'
 import { DEFAULT_CONFIG } from '../../../shared/types'
 import SettingsView from './SettingsView.vue'
 
@@ -54,6 +54,7 @@ function createElectronApi(overrides: Partial<Window['electronAPI']> = {}): Wind
     status: 'idle',
     captureBackend: 'native'
   }
+  const screenDocHistory: ScreenDocHistoryRecord[] = []
 
   return {
     platform: 'darwin',
@@ -96,6 +97,10 @@ function createElectronApi(overrides: Partial<Window['electronAPI']> = {}): Wind
     stopScreenDoc: vi.fn(async () => null),
     cancelScreenDoc: vi.fn(async () => true),
     sendScreenDocAudioChunk: vi.fn(),
+    getScreenDocHistory: vi.fn(async () => screenDocHistory),
+    getScreenDocHistoryRecord: vi.fn(async () => null),
+    exportScreenDocRecord: vi.fn(async () => null),
+    onScreenDocHistoryUpdated: vi.fn(() => () => {}),
     getLatestScreenDocResult: vi.fn(async () => null),
     onScreenDocStatus: vi.fn(() => () => {}),
     getPersonalVocabulary: vi.fn(async () => []),
@@ -164,6 +169,11 @@ describe('SettingsView screen doc controls', () => {
         plugins: [createPinia()]
       }
     })
+    await flushPromises()
+
+    const screenDocNavButton = wrapper.findAll('.nav-item').find((item) => item.text().includes('录屏整理'))
+    expect(screenDocNavButton).toBeTruthy()
+    await screenDocNavButton!.trigger('click')
     await flushPromises()
 
     const primaryButton = wrapper.find('.screen-doc-actions .btn-primary')

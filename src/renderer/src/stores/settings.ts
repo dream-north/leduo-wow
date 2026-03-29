@@ -13,12 +13,15 @@ import type {
   SharedVocabSyncSource,
   VocabMergeItem,
   VocabMergePreview,
+  ScreenDocHistoryRecord,
   ScreenDocResultPayload,
   ScreenDocStatusPayload
 } from '../../../shared/types'
 import {
   BUILTIN_PRESETS,
   ASSISTANT_BUILTIN_PRESETS,
+  SCREEN_DOC_BUILTIN_PRESETS,
+  SCREEN_DOC_DEFAULT_PROMPT,
   VOCAB_PROMPT_BUILTIN_PRESETS,
   VOCAB_PROMPT_DEFAULT_TEMPLATE,
   ASR_DEFAULT_BASE_URL,
@@ -68,6 +71,10 @@ declare global {
       stopScreenDoc: () => Promise<ScreenDocResultPayload | null>
       cancelScreenDoc: () => Promise<boolean>
       sendScreenDocAudioChunk: (chunk: ArrayBuffer) => void
+      getScreenDocHistory: () => Promise<ScreenDocHistoryRecord[]>
+      getScreenDocHistoryRecord: (recordId: string) => Promise<ScreenDocHistoryRecord | null>
+      exportScreenDocRecord: (recordId: string) => Promise<string | null>
+      onScreenDocHistoryUpdated: (callback: () => void) => () => void
       getLatestScreenDocResult: () => Promise<ScreenDocResultPayload | null>
       onScreenDocStatus: (callback: (payload: ScreenDocStatusPayload) => void) => () => void
       // Vocabulary
@@ -178,6 +185,10 @@ export const useSettingsStore = defineStore('settings', () => {
   const assistantPrompt = ref('')
   const assistantPresets = ref<PolishPreset[]>([...ASSISTANT_BUILTIN_PRESETS])
   const assistantActivePresetIndex = ref(0)
+  const screenDocPrompt = ref(SCREEN_DOC_DEFAULT_PROMPT)
+  const screenDocPresets = ref<PolishPreset[]>([...SCREEN_DOC_BUILTIN_PRESETS])
+  const screenDocActivePresetIndex = ref(0)
+  const screenDocHistoryMaxCount = ref(20)
   // Vocabulary enhancement
   const vocabularyEnabled = ref(true)
   const vocabularyModel = ref('qwen3-asr-flash')
@@ -238,6 +249,10 @@ export const useSettingsStore = defineStore('settings', () => {
       assistantPrompt.value = config.assistantPrompt ?? ''
       assistantPresets.value = config.assistantPresets ?? [...ASSISTANT_BUILTIN_PRESETS]
       assistantActivePresetIndex.value = config.assistantActivePresetIndex ?? 0
+      screenDocPrompt.value = config.screenDocPrompt ?? SCREEN_DOC_DEFAULT_PROMPT
+      screenDocPresets.value = config.screenDocPresets ?? [...SCREEN_DOC_BUILTIN_PRESETS]
+      screenDocActivePresetIndex.value = config.screenDocActivePresetIndex ?? 0
+      screenDocHistoryMaxCount.value = config.screenDocHistoryMaxCount ?? 20
       // Custom models (guard against old string[] format)
       const cm = config.customModels as unknown
       customModels.value = (cm && typeof cm === 'object' && !Array.isArray(cm) && 'asr' in (cm as Record<string, unknown>))
@@ -315,6 +330,10 @@ export const useSettingsStore = defineStore('settings', () => {
     assistantPrompt,
     assistantPresets,
     assistantActivePresetIndex,
+    screenDocPrompt,
+    screenDocPresets,
+    screenDocActivePresetIndex,
+    screenDocHistoryMaxCount,
     // Vocabulary enhancement
     vocabularyEnabled,
     vocabularyModel,

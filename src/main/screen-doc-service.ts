@@ -1,15 +1,15 @@
 import { randomUUID } from 'crypto'
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow, app, dialog } from 'electron'
 import { EventEmitter } from 'events'
 import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { basename, join } from 'path'
 import {
   ASR_DEFAULT_BASE_URL,
   POLISH_DEFAULT_BASE_URL,
-  type OverlayHudPayload,
-  type OverlayWindowPosition,
-  type OverlayWindowSize,
+  SCREEN_DOC_DEFAULT_PROMPT,
   type ScreenDocAnalysis,
+  type ScreenDocHistoryRecord,
+  type ScreenDocHistoryStatus,
   type ScreenDocResultPayload,
   type ScreenDocScreenshot,
   type ScreenDocStatus,
@@ -18,9 +18,8 @@ import {
 } from '../shared/types'
 import { IPC } from '../shared/ipc-channels'
 import { ASRClient } from './asr-client'
-import { createAssistantResultWindow, getLatestAssistantResultPayload, hideAssistantResultWindow, showAssistantResultWindow } from './assistant-result-window'
 import type { ConfigStore } from './config-store'
-import { getConfig } from './config-store'
+import { getConfig, getScreenDocHistory, setScreenDocHistory } from './config-store'
 import type {
   NativeScreenRecorderLike,
   NativeScreenRecordingArtifact
@@ -36,8 +35,6 @@ interface ScreenDocServiceOptions {
   overlay: OverlayBackend
   configStore: ConfigStore
   screenRecorder: NativeScreenRecorderLike
-  getAssistantResultWindow: () => BrowserWindow | null
-  setAssistantResultWindow: (window: BrowserWindow | null) => void
 }
 
 interface DashScopeUploadPolicy {
@@ -53,6 +50,7 @@ interface DashScopeUploadPolicy {
 const SCREEN_DOC_MODEL = 'qwen3.5-plus'
 const DASHSCOPE_UPLOAD_URL = 'https://dashscope.aliyuncs.com/api/v1/uploads'
 const DEFAULT_FRAME_LIMIT = 48
+const SCREEN_DOC_HISTORY_DIRNAME = 'screen-doc-history'
 
 function isDashScopeBaseUrl(baseUrl: string): boolean {
   return baseUrl.includes('dashscope.aliyuncs.com')
@@ -109,6 +107,108 @@ function extractJsonObject(text: string): string {
   return text.trim()
 }
 
+function nextSignificantChar(text: string, startIndex: number): string {
+  for (let index = startIndex; index < text.length; index++) {
+    const char = text[index]
+    if (!/\s/.test(char)) {
+      return char
+    }
+  }
+  return ''
+}
+
+function stripTrailingCommas(text: string): string {
+  return text.replace(/,\s*([}\]])/g, '$1')
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError'
+}
+
+function repairJsonLikeText(text: string): string {
+  let repaired = ''
+  let inString = false
+  let quoteChar = '"'
+  let escaped = false
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+
+    if (inString) {
+      if (escaped) {
+        repaired += char
+        escaped = false
+        continue
+      }
+
+      if (char === '\\') {
+        repaired += char
+        escaped = true
+        continue
+      }
+
+      if (char === '\n' || char === '\r') {
+        repaired += '\\n'
+        continue
+      }
+
+      if (char === quoteChar) {
+        const next = nextSignificantChar(text, index + 1)
+        const canClose = next === '' || next === ',' || next === '}' || next === ']' || next === ':'
+        if (canClose) {
+          repaired += '"'
+          inString = false
+        } else {
+          repaired += '\\"'
+        }
+        continue
+      }
+
+      repaired += char
+      continue
+    }
+
+    if (char === '"' || char === '\'') {
+      inString = true
+      quoteChar = char
+      repaired += '"'
+      continue
+    }
+
+    if (char === '}' || char === ']') {
+      repaired = repaired.replace(/,\s*$/, '')
+      repaired += char
+      continue
+    }
+
+    repaired += char
+  }
+
+  return stripTrailingCommas(repaired)
+}
+
+function parseJsonWithRepair(rawText: string): unknown {
+  const candidate = extractJsonObject(rawText)
+  const attempts = [
+    candidate,
+    stripTrailingCommas(candidate),
+    repairJsonLikeText(candidate)
+  ]
+
+  let lastError: unknown = null
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('无法解析模型返回的 JSON')
+}
+
 function sampleFrames(frames: ScreenDocFrameInput[], maxFrames: number): ScreenDocFrameInput[] {
   if (frames.length <= maxFrames) return frames
 
@@ -149,14 +249,14 @@ export class ScreenDocService extends EventEmitter {
   private readonly overlay: OverlayBackend
   private readonly configStore: ConfigStore
   private readonly screenRecorder: NativeScreenRecorderLike
-  private readonly getAssistantResultWindow: () => BrowserWindow | null
-  private readonly setAssistantResultWindow: (window: BrowserWindow | null) => void
   private status: ScreenDocStatus = 'idle'
   private startedAt: number | undefined
   private error: string | undefined
   private partialTranscript = ''
   private finalTranscript = ''
   private latestResult: ScreenDocResultPayload | null = null
+  private currentRecordId: string | null = null
+  private historyFallback: ScreenDocHistoryRecord[] = []
   private asrClient: ASRClient | null = null
   private abortController: AbortController | null = null
   private runId = 0
@@ -166,9 +266,8 @@ export class ScreenDocService extends EventEmitter {
     this.overlay = options.overlay
     this.configStore = options.configStore
     this.screenRecorder = options.screenRecorder
-    this.getAssistantResultWindow = options.getAssistantResultWindow
-    this.setAssistantResultWindow = options.setAssistantResultWindow
     this.screenRecorder.on('recording-error', (payload) => {
+      const activeRecordId = this.currentRecordId
       if (this.status === 'recording') {
         this.runId += 1
         this.asrClient?.abort()
@@ -177,6 +276,13 @@ export class ScreenDocService extends EventEmitter {
         this.abortController = null
         this.setStatus('error', payload.error || '原生录屏意外中断')
         this.overlay.hideHud()
+        if (activeRecordId) {
+          void this.updateHistoryRecord(activeRecordId, {
+            status: 'error',
+            error: payload.error || '原生录屏意外中断',
+            title: '录屏整理失败'
+          })
+        }
       }
     })
   }
@@ -191,14 +297,18 @@ export class ScreenDocService extends EventEmitter {
       startedAt: this.startedAt,
       error: this.error,
       transcript: this.finalTranscript || this.partialTranscript,
-      artifactId: this.latestResult?.artifactId,
-      stepCount: this.latestResult?.analysis.steps.length,
+      artifactId: this.currentRecordId || this.latestResult?.artifactId,
+      stepCount: this.status === 'ready' ? this.latestResult?.analysis.steps.length : undefined,
       captureBackend: 'native'
     }
   }
 
   getLatestResult(): ScreenDocResultPayload | null {
     return this.latestResult
+  }
+
+  getHistoryList(): ScreenDocHistoryRecord[] {
+    return this.getHistoryRecords()
   }
 
   async start(): Promise<{ ok: boolean; error?: string }> {
@@ -226,8 +336,9 @@ export class ScreenDocService extends EventEmitter {
     this.finalTranscript = ''
     this.error = undefined
     this.latestResult = null
+    this.currentRecordId = null
     this.startedAt = undefined
-    this.overlay.hideResult()
+    this.overlay.hideHud()
 
     try {
       this.asrClient = new ASRClient(
@@ -254,9 +365,16 @@ export class ScreenDocService extends EventEmitter {
 
       await this.asrClient.start()
       await this.screenRecorder.startRecording()
+      this.currentRecordId = randomUUID()
       this.startedAt = Date.now()
+      await this.updateHistoryRecord(this.currentRecordId, {
+        id: this.currentRecordId,
+        createdAt: this.startedAt,
+        updatedAt: this.startedAt,
+        status: 'recording',
+        title: '录屏整理中'
+      })
       this.setStatus('recording')
-      this.showHud('正在录屏并同步语音说明...', 'recording')
       return { ok: true }
     } catch (error) {
       console.error('[ScreenDoc] Failed to start:', error)
@@ -284,7 +402,12 @@ export class ScreenDocService extends EventEmitter {
   }
 
   requestCancelCapture(): void {
-    if (this.status !== 'recording' && this.status !== 'finalizing') {
+    if (
+      this.status !== 'recording' &&
+      this.status !== 'finalizing' &&
+      this.status !== 'uploading' &&
+      this.status !== 'analyzing'
+    ) {
       return
     }
     void this.cancel()
@@ -301,15 +424,25 @@ export class ScreenDocService extends EventEmitter {
     }
 
     const currentRunId = this.runId
+    const recordId = this.currentRecordId ?? randomUUID()
+    this.currentRecordId = recordId
     const config = getConfig(this.configStore)
     const llmApiKey = config.polishApiKey || config.asrApiKey
     if (!llmApiKey) {
+      await this.updateHistoryRecord(recordId, {
+        status: 'error',
+        error: '未找到可用的百炼 API Key',
+        title: '录屏整理失败'
+      })
       this.setStatus('error', '未找到可用的百炼 API Key')
       return null
     }
 
     this.setStatus('finalizing')
-    this.showHud('正在整理录屏和语音转写...', 'processing')
+    await this.updateHistoryRecord(recordId, {
+      status: 'finalizing',
+      updatedAt: Date.now()
+    })
 
     let recordingArtifact: NativeScreenRecordingArtifact | null = null
     let timelineFrames: ScreenDocFrameInput[] = []
@@ -329,7 +462,11 @@ export class ScreenDocService extends EventEmitter {
 
       if (canUploadVideo) {
         this.setStatus('uploading')
-        this.showHud('正在上传录屏文件...', 'processing')
+        await this.updateHistoryRecord(recordId, {
+          status: 'uploading',
+          updatedAt: Date.now(),
+          durationMs: recordingArtifact.durationMs
+        })
         try {
           const bytes = await readFile(recordingArtifact.filePath)
           const ossUrl = await this.uploadTemporaryFile(
@@ -341,22 +478,37 @@ export class ScreenDocService extends EventEmitter {
           )
           if (this.runId !== currentRunId) return null
           this.setStatus('analyzing')
-          this.showHud('Qwen 正在分析操作过程...', 'processing')
+          await this.updateHistoryRecord(recordId, {
+            status: 'analyzing',
+            updatedAt: Date.now(),
+            durationMs: recordingArtifact.durationMs
+          })
           analysis = await this.analyzeWithVideo(
             llmApiKey,
             config.polishBaseUrl || POLISH_DEFAULT_BASE_URL,
             ossUrl,
             transcript,
-            recordingArtifact.durationMs
+            recordingArtifact.durationMs,
+            recordingArtifact.targetDescription,
+            config.screenDocPrompt
           )
         } catch (error) {
+          if (this.runId !== currentRunId || isAbortError(error)) {
+            throw error
+          }
           console.warn('[ScreenDoc] Video upload or analysis failed, falling back to frames:', error)
         }
       }
 
+      if (this.runId !== currentRunId) return null
+
       if (!analysis) {
         this.setStatus('analyzing')
-        this.showHud('正在回退为关键帧分析...', 'processing')
+        await this.updateHistoryRecord(recordId, {
+          status: 'analyzing',
+          updatedAt: Date.now(),
+          durationMs: recordingArtifact.durationMs
+        })
         const timelineResult = await this.screenRecorder.extractTimelineFrames(
           recordingArtifact.filePath,
           1000,
@@ -370,7 +522,9 @@ export class ScreenDocService extends EventEmitter {
           timelineFrames,
           frameIntervalMs,
           transcript,
-          recordingArtifact.durationMs
+          recordingArtifact.durationMs,
+          recordingArtifact.targetDescription,
+          config.screenDocPrompt
         )
       }
 
@@ -381,7 +535,7 @@ export class ScreenDocService extends EventEmitter {
         analysis.steps,
         timelineFrames
       )
-      const artifactId = randomUUID()
+      const artifactId = recordId
       const previewMarkdown = this.buildMarkdown(analysis, screenshots, true)
       const result: ScreenDocResultPayload = {
         artifactId,
@@ -392,7 +546,20 @@ export class ScreenDocService extends EventEmitter {
       }
 
       this.latestResult = result
-      this.showResult(result)
+      await this.persistHistoryRecord({
+        id: recordId,
+        createdAt: this.startedAt ?? result.createdAt,
+        updatedAt: result.createdAt,
+        status: 'ready',
+        title: analysis.title,
+        summary: analysis.summary,
+        stepCount: analysis.steps.length,
+        durationMs: recordingArtifact.durationMs,
+        analysis,
+        screenshots,
+        markdown: previewMarkdown,
+        transcript: analysis.transcript
+      })
       this.overlay.hideHud()
       this.setStatus('ready')
       return result
@@ -400,7 +567,15 @@ export class ScreenDocService extends EventEmitter {
       console.error('[ScreenDoc] Failed to finalize recording:', error)
       if (this.runId === currentRunId) {
         this.overlay.hideHud()
-        this.setStatus('error', error instanceof Error ? error.message : '录屏整理失败')
+        const errorMessage = error instanceof Error ? error.message : '录屏整理失败'
+        await this.updateHistoryRecord(recordId, {
+          status: 'error',
+          error: errorMessage,
+          updatedAt: Date.now(),
+          durationMs: recordingArtifact?.durationMs,
+          title: '录屏整理失败'
+        })
+        this.setStatus('error', errorMessage)
       }
       return null
     } finally {
@@ -414,6 +589,12 @@ export class ScreenDocService extends EventEmitter {
   }
 
   async cancel(): Promise<void> {
+    const shouldMarkCancelled =
+      this.status === 'recording' ||
+      this.status === 'finalizing' ||
+      this.status === 'uploading' ||
+      this.status === 'analyzing'
+    const recordId = shouldMarkCancelled ? this.currentRecordId : null
     this.runId += 1
     this.abortController?.abort()
     this.abortController = null
@@ -428,6 +609,13 @@ export class ScreenDocService extends EventEmitter {
     this.finalTranscript = ''
     this.error = undefined
     this.overlay.hideHud()
+    if (recordId) {
+      await this.updateHistoryRecord(recordId, {
+        status: 'cancelled',
+        updatedAt: Date.now(),
+        title: '已取消的录屏整理'
+      })
+    }
     this.setStatus('idle')
   }
 
@@ -436,12 +624,15 @@ export class ScreenDocService extends EventEmitter {
     this.screenRecorder.destroy()
   }
 
-  async exportLatestResult(artifactId?: string): Promise<string | null> {
-    if (!this.latestResult) {
+  async exportRecord(recordId?: string): Promise<string | null> {
+    const resolvedRecordId = recordId || this.latestResult?.artifactId
+    if (!resolvedRecordId) {
       return null
     }
-    if (artifactId && this.latestResult.artifactId !== artifactId) {
-      throw new Error('结果已过期，请重新生成后再导出')
+
+    const record = await this.getHistoryRecord(resolvedRecordId)
+    if (!record || record.status !== 'ready' || !record.analysis || !record.screenshots || !record.markdown) {
+      throw new Error('该记录还没有可导出的整理结果')
     }
 
     const result = await dialog.showOpenDialog({
@@ -453,12 +644,12 @@ export class ScreenDocService extends EventEmitter {
     }
 
     const baseDir = result.filePaths[0]
-    const timeLabel = new Date(this.latestResult.createdAt).toISOString().replace(/[:.]/g, '-')
-    const exportDir = join(baseDir, `${sanitizeTitleSegment(this.latestResult.analysis.title)}-${timeLabel}`)
+    const timeLabel = new Date(record.createdAt).toISOString().replace(/[:.]/g, '-')
+    const exportDir = join(baseDir, `${sanitizeTitleSegment(record.title)}-${timeLabel}`)
     const assetsDir = join(exportDir, 'assets')
     await mkdir(assetsDir, { recursive: true })
 
-    const assetPaths = this.latestResult.screenshots.map((screenshot, index) => {
+    const assetPaths = record.screenshots.map((screenshot, index) => {
       const filename = `step-${String(index + 1).padStart(2, '0')}.png`
       return { ...screenshot, filename, relativePath: `assets/${filename}` }
     })
@@ -468,7 +659,7 @@ export class ScreenDocService extends EventEmitter {
       await writeFile(join(exportDir, asset.relativePath), parsed.buffer)
     }
 
-    const markdown = this.buildMarkdown(this.latestResult.analysis, assetPaths, false)
+    const markdown = this.buildMarkdown(record.analysis, assetPaths, false)
     await writeFile(join(exportDir, 'doc.md'), markdown, 'utf8')
     return exportDir
   }
@@ -490,15 +681,6 @@ export class ScreenDocService extends EventEmitter {
       this.startedAt = undefined
     }
     this.emitStatus()
-  }
-
-  private showHud(text: string, mode: OverlayHudPayload['mode']): void {
-    this.overlay.updateHud({
-      text,
-      mode,
-      voiceMode: 'screen_doc',
-      screenshotActive: false
-    })
   }
 
   private async finishAsrTranscript(): Promise<void> {
@@ -572,7 +754,9 @@ export class ScreenDocService extends EventEmitter {
     baseUrl: string,
     ossUrl: string,
     transcript: string,
-    durationMs: number
+    durationMs: number,
+    targetDescription: string | undefined,
+    promptTemplate: string
   ): Promise<ScreenDocAnalysis> {
     const resolvedBaseUrl = isDashScopeBaseUrl(baseUrl) ? baseUrl : POLISH_DEFAULT_BASE_URL
     return await this.analyzeMultimodal(
@@ -586,7 +770,7 @@ export class ScreenDocService extends EventEmitter {
         },
         {
           type: 'text',
-          text: this.buildUserPrompt(transcript, durationMs)
+          text: this.buildUserPrompt(promptTemplate, transcript, durationMs, targetDescription)
         }
       ],
       true,
@@ -600,7 +784,9 @@ export class ScreenDocService extends EventEmitter {
     frames: ScreenDocFrameInput[],
     frameIntervalMs: number,
     transcript: string,
-    durationMs: number
+    durationMs: number,
+    targetDescription: string | undefined,
+    promptTemplate: string
   ): Promise<ScreenDocAnalysis> {
     if (frames.length === 0) {
       throw new Error('缺少关键帧，无法回退到图像列表分析')
@@ -619,7 +805,7 @@ export class ScreenDocService extends EventEmitter {
         },
         {
           type: 'text',
-          text: this.buildUserPrompt(transcript, durationMs)
+          text: this.buildUserPrompt(promptTemplate, transcript, durationMs, targetDescription)
         }
       ],
       false,
@@ -627,36 +813,19 @@ export class ScreenDocService extends EventEmitter {
     )
   }
 
-  private buildUserPrompt(transcript: string, durationMs: number): string {
-    return [
-      '请根据这段录屏整理一份步骤式 SOP 文档。',
-      '你会同时看到录屏画面和一份独立的语音转写文本；视频文件中的音轨不要作为理解依据，优先结合画面与转写文本。',
-      '请严格输出 JSON，不要输出 Markdown，不要输出解释。',
-      'JSON 结构如下：',
-      '{',
-      '  "title": "文档标题",',
-      '  "summary": "一句到三句摘要",',
-      '  "notes": ["补充说明，可为空数组"],',
-      '  "steps": [',
-      '    {',
-      '      "title": "步骤标题",',
-      '      "description": "详细说明，包含用户的关键操作与语音说明",',
-      '      "timestampMs": 12000,',
-      '      "screenshotTimestampMs": 12500',
-      '    }',
-      '  ]',
-      '}',
-      `录屏总时长约 ${Math.max(1, Math.round(durationMs / 1000))} 秒。`,
-      '要求：',
-      '1. 步骤保持 3 到 8 步，覆盖完整操作流程。',
-      '2. timestampMs 和 screenshotTimestampMs 必须使用毫秒整数，并且位于视频时长范围内。',
-      '3. 标题和描述使用中文，描述要明确指出用户点击、输入、切换或确认了什么。',
-      '4. 如果语音转写提供了操作目的或注意事项，请合并到对应步骤描述里。',
-      '5. 如果没有足够证据，不要编造。notes 可以写“未观察到”之类的说明。',
-      '',
-      '以下是独立的语音转写文本：',
-      transcript.trim() || '（本次没有识别到清晰的语音说明）'
-    ].join('\n')
+  private buildUserPrompt(
+    promptTemplate: string,
+    transcript: string,
+    durationMs: number,
+    targetDescription?: string
+  ): string {
+    const safeTranscript = transcript.trim() || '（本次没有识别到清晰的语音说明）'
+    const template = promptTemplate.trim() || SCREEN_DOC_DEFAULT_PROMPT
+    return template
+      .replaceAll('{duration_seconds}', String(Math.max(1, Math.round(durationMs / 1000))))
+      .replaceAll('{duration_ms}', String(Math.max(0, Math.round(durationMs))))
+      .replaceAll('{transcript}', safeTranscript)
+      .replaceAll('{target_description}', targetDescription?.trim() || '未提供录屏对象描述')
   }
 
   private async analyzeMultimodal(
@@ -714,7 +883,7 @@ export class ScreenDocService extends EventEmitter {
   }
 
   private normalizeAnalysis(rawText: string, durationMs: number): ScreenDocAnalysis {
-    const parsed = JSON.parse(extractJsonObject(rawText)) as Partial<ScreenDocAnalysis> & {
+    const parsed = parseJsonWithRepair(rawText) as Partial<ScreenDocAnalysis> & {
       steps?: Array<Partial<ScreenDocStep>>
       notes?: unknown
     }
@@ -848,44 +1017,187 @@ export class ScreenDocService extends EventEmitter {
     return lines.join('\n').trim()
   }
 
-  private showResult(result: ScreenDocResultPayload): void {
-    const resultWindow = this.getOrCreateResultWindow()
-    if (!resultWindow || resultWindow.isDestroyed()) return
+  async getHistoryRecord(recordId: string): Promise<ScreenDocHistoryRecord | null> {
+    const summary = this.getHistoryRecords().find((record) => record.id === recordId) || null
+    if (!summary) {
+      return null
+    }
 
-    showAssistantResultWindow(resultWindow, {
-      text: result.markdown,
-      resultKind: 'screen_doc',
-      title: result.analysis.title,
-      eyebrow: '录屏整理',
-      exportArtifactId: result.artifactId
+    const persisted = await this.loadPersistedRecord(recordId)
+    return persisted || summary
+  }
+
+  async pruneHistory(maxCount = getConfig(this.configStore).screenDocHistoryMaxCount): Promise<void> {
+    const records = this.getHistoryRecords()
+    if (records.length <= maxCount) {
+      return
+    }
+
+    const keep = records.slice(0, maxCount)
+    const remove = records.slice(maxCount)
+    this.saveHistoryRecords(keep)
+    await Promise.all(remove.map((record) => this.removePersistedRecord(record.id)))
+  }
+
+  private getHistoryRecords(): ScreenDocHistoryRecord[] {
+    const source = (() => {
+      try {
+        return getScreenDocHistory(this.configStore)
+      } catch {
+        return this.historyFallback
+      }
+    })()
+
+    return [...source].sort((left, right) => right.updatedAt - left.updatedAt)
+  }
+
+  private saveHistoryRecords(records: ScreenDocHistoryRecord[]): void {
+    this.historyFallback = [...records]
+    try {
+      setScreenDocHistory(this.configStore, records)
+    } catch {
+      // The electron-store singleton is initialized in the real app. Tests and
+      // early boot paths can fall back to the in-memory index safely.
+    }
+    this.emitHistoryUpdated()
+  }
+
+  private emitHistoryUpdated(): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(IPC.SCREEN_DOC_HISTORY_UPDATED)
+      }
+    }
+  }
+
+  private async updateHistoryRecord(
+    recordId: string,
+    updates: Partial<ScreenDocHistoryRecord> & Pick<ScreenDocHistoryRecord, 'status'>
+  ): Promise<ScreenDocHistoryRecord> {
+    const records = this.getHistoryRecords()
+    const index = records.findIndex((record) => record.id === recordId)
+    const now = updates.updatedAt ?? Date.now()
+    const baseRecord: ScreenDocHistoryRecord = index >= 0
+      ? records[index]
+      : {
+          id: recordId,
+          createdAt: this.startedAt ?? now,
+          updatedAt: now,
+          status: updates.status,
+          title: this.defaultHistoryTitle(updates.status)
+        }
+
+    const nextRecord: ScreenDocHistoryRecord = {
+      id: recordId,
+      createdAt: updates.createdAt ?? baseRecord.createdAt,
+      updatedAt: now,
+      status: updates.status,
+      title: updates.title?.trim() || baseRecord.title || this.defaultHistoryTitle(updates.status),
+      summary: updates.summary ?? baseRecord.summary,
+      stepCount: updates.stepCount ?? baseRecord.stepCount,
+      durationMs: updates.durationMs ?? baseRecord.durationMs,
+      error: updates.status === 'error'
+        ? (updates.error ?? baseRecord.error)
+        : updates.error
+    }
+
+    if (index >= 0) {
+      records.splice(index, 1)
+    }
+    records.unshift(nextRecord)
+    this.saveHistoryRecords(records)
+    await this.pruneHistory()
+    return nextRecord
+  }
+
+  private async persistHistoryRecord(record: ScreenDocHistoryRecord): Promise<void> {
+    await this.writePersistedRecord(record)
+    await this.updateHistoryRecord(record.id, record)
+  }
+
+  private defaultHistoryTitle(status: ScreenDocHistoryStatus): string {
+    switch (status) {
+      case 'recording':
+        return '录屏整理中'
+      case 'finalizing':
+        return '正在封装录屏'
+      case 'uploading':
+        return '正在上传录屏'
+      case 'analyzing':
+        return '正在整理步骤文档'
+      case 'ready':
+        return '录屏整理结果'
+      case 'cancelled':
+        return '已取消的录屏整理'
+      case 'error':
+        return '录屏整理失败'
+    }
+  }
+
+  private getHistoryRootDir(): string {
+    return join(app.getPath('userData'), SCREEN_DOC_HISTORY_DIRNAME)
+  }
+
+  private getHistoryArtifactsDir(): string {
+    return join(this.getHistoryRootDir(), 'artifacts')
+  }
+
+  private getRecordDir(recordId: string): string {
+    return join(this.getHistoryArtifactsDir(), recordId)
+  }
+
+  private getRecordFilePath(recordId: string): string {
+    return join(this.getRecordDir(recordId), 'record.json')
+  }
+
+  private async writePersistedRecord(record: ScreenDocHistoryRecord): Promise<void> {
+    const recordDir = this.getRecordDir(record.id)
+    const assetsDir = join(recordDir, 'assets')
+    await mkdir(assetsDir, { recursive: true })
+
+    const screenshots = record.screenshots ?? []
+    const assetPaths = screenshots.map((screenshot, index) => {
+      const filename = `step-${String(index + 1).padStart(2, '0')}.png`
+      return { ...screenshot, relativePath: `assets/${filename}` }
     })
+
+    for (const asset of assetPaths) {
+      const parsed = parseDataUrl(asset.dataUrl)
+      await writeFile(join(recordDir, asset.relativePath), parsed.buffer)
+    }
+
+    const markdown = record.analysis
+      ? this.buildMarkdown(record.analysis, assetPaths, false)
+      : record.markdown
+
+    if (markdown) {
+      await writeFile(join(recordDir, 'doc.md'), markdown, 'utf8')
+    }
+
+    await writeFile(
+      this.getRecordFilePath(record.id),
+      JSON.stringify(
+        {
+          ...record,
+          markdown: record.markdown ?? markdown
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
   }
 
-  private getOrCreateResultWindow(): BrowserWindow | null {
-    const existing = this.getAssistantResultWindow()
-    if (existing && !existing.isDestroyed()) {
-      return existing
+  private async loadPersistedRecord(recordId: string): Promise<ScreenDocHistoryRecord | null> {
+    try {
+      const content = await readFile(this.getRecordFilePath(recordId), 'utf8')
+      return JSON.parse(content) as ScreenDocHistoryRecord
+    } catch {
+      return null
     }
-
-    const created = createAssistantResultWindow()
-    this.setAssistantResultWindow(created)
-    return created
   }
 
-  handleResultWindowClosed(position?: OverlayWindowPosition, size?: OverlayWindowSize): void {
-    const resultWindow = this.getAssistantResultWindow()
-    if (!resultWindow || resultWindow.isDestroyed()) {
-      return
-    }
-
-    const payload = getLatestAssistantResultPayload(resultWindow)
-    if (payload?.resultKind === 'screen_doc') {
-      hideAssistantResultWindow(resultWindow)
-      return
-    }
-
-    if (position || size) {
-      this.emit('result-window-closed', { position, size })
-    }
+  private async removePersistedRecord(recordId: string): Promise<void> {
+    await rm(this.getRecordDir(recordId), { recursive: true, force: true }).catch(() => undefined)
   }
 }

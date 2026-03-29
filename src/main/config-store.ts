@@ -9,6 +9,7 @@ import {
   AssistantOutputMode,
   OverlayWindowPosition,
   OverlayWindowSize,
+  ScreenDocHistoryRecord,
   getDefaultAssistantShortcut,
   getDefaultTranscriptionShortcut
 } from '../shared/types'
@@ -50,6 +51,10 @@ interface StoreSchema {
   assistantActivePresetIndex: number
   assistantResultWindowPosition?: OverlayWindowPosition
   assistantResultWindowSize?: OverlayWindowSize
+  screenDocPrompt: string
+  screenDocPresets: PolishPreset[]
+  screenDocActivePresetIndex: number
+  screenDocHistoryMaxCount: number
   // General
   shortcut: string
   inputMethod: 'clipboard' | 'applescript'
@@ -86,8 +91,13 @@ interface HistorySchema {
   }>
 }
 
+interface ScreenDocHistorySchema {
+  records: ScreenDocHistoryRecord[]
+}
+
 let store: Store<StoreSchema>
 let historyStore: Store<HistorySchema>
+let screenDocHistoryStore: Store<ScreenDocHistorySchema>
 
 function normalizeInputMethod(
   method: StoreSchema['inputMethod'] | undefined,
@@ -142,6 +152,10 @@ export function initConfigStore(): Store<StoreSchema> {
       assistantActivePresetIndex: DEFAULT_CONFIG.assistantActivePresetIndex,
       assistantResultWindowPosition: DEFAULT_CONFIG.assistantResultWindowPosition,
       assistantResultWindowSize: DEFAULT_CONFIG.assistantResultWindowSize,
+      screenDocPrompt: DEFAULT_CONFIG.screenDocPrompt,
+      screenDocPresets: DEFAULT_CONFIG.screenDocPresets,
+      screenDocActivePresetIndex: DEFAULT_CONFIG.screenDocActivePresetIndex,
+      screenDocHistoryMaxCount: DEFAULT_CONFIG.screenDocHistoryMaxCount,
       // General
       shortcut: transcriptionShortcutDefault,
       inputMethod: DEFAULT_CONFIG.inputMethod,
@@ -171,6 +185,13 @@ export function initConfigStore(): Store<StoreSchema> {
 
   historyStore = new Store<HistorySchema>({
     name: 'history',
+    defaults: {
+      records: []
+    }
+  })
+
+  screenDocHistoryStore = new Store<ScreenDocHistorySchema>({
+    name: 'screen-doc-history',
     defaults: {
       records: []
     }
@@ -259,6 +280,10 @@ export function getConfig(s: Store<StoreSchema>): AppConfig {
     assistantActivePresetIndex: s.get('assistantActivePresetIndex') ?? DEFAULT_CONFIG.assistantActivePresetIndex,
     assistantResultWindowPosition: s.get('assistantResultWindowPosition') ?? DEFAULT_CONFIG.assistantResultWindowPosition,
     assistantResultWindowSize: s.get('assistantResultWindowSize') ?? DEFAULT_CONFIG.assistantResultWindowSize,
+    screenDocPrompt: s.get('screenDocPrompt') ?? DEFAULT_CONFIG.screenDocPrompt,
+    screenDocPresets: s.get('screenDocPresets') ?? DEFAULT_CONFIG.screenDocPresets,
+    screenDocActivePresetIndex: s.get('screenDocActivePresetIndex') ?? DEFAULT_CONFIG.screenDocActivePresetIndex,
+    screenDocHistoryMaxCount: s.get('screenDocHistoryMaxCount') ?? DEFAULT_CONFIG.screenDocHistoryMaxCount,
     // General
     selectedMicrophoneId: s.get('selectedMicrophoneId') ?? '',
     launchAtLogin: s.get('launchAtLogin'),
@@ -338,6 +363,14 @@ export function addHistory(
   BrowserWindow.getAllWindows().forEach((win) => {
     win.webContents.send(IPC.HISTORY_UPDATED)
   })
+}
+
+export function getScreenDocHistory(_s: Store<StoreSchema>): ScreenDocHistoryRecord[] {
+  return screenDocHistoryStore.get('records') || []
+}
+
+export function setScreenDocHistory(_s: Store<StoreSchema>, records: ScreenDocHistoryRecord[]): void {
+  screenDocHistoryStore.set('records', records)
 }
 
 export type ConfigStore = Store<StoreSchema>
